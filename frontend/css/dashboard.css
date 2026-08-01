@@ -1,0 +1,178 @@
+/* ============================================================
+   dashboard.css
+   Sectioned by page. Add new page blocks at the bottom as new
+   pages/*.html fragments are built out.
+   ============================================================ */
+
+/* ---------------------------------------------------------
+   COMMON (shared across dashboard pages)
+   --------------------------------------------------------- */
+.page-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+.page-header h1 { font-size: 18px; margin: 0; }
+.page-header p { margin: 2px 0 0; color: var(--ink-soft); font-size: 13px; }
+
+.grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; }
+@media (max-width: 1100px) {
+  .grid-2, .grid-3 { grid-template-columns: 1fr; }
+}
+
+table.data-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+table.data-table th {
+  text-align: left;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  color: var(--ink-faint);
+  border-bottom: 1px solid var(--line);
+  padding: 8px 10px;
+}
+table.data-table td {
+  padding: 9px 10px;
+  border-bottom: 1px solid var(--line-soft);
+  vertical-align: middle;
+}
+table.data-table tr:last-child td { border-bottom: none; }
+
+.avatar-sm {
+  width: 28px; height: 28px; border-radius: 50%;
+  object-fit: cover; background: var(--line-soft);
+}
+
+.tag {
+  display: inline-block;
+  font-size: 11px; font-weight: 700;
+  padding: 2px 8px; border-radius: 999px;
+}
+.tag.pending  { background: var(--warn-soft); color: #8a6a13; }
+.tag.approved { background: var(--ok-soft);   color: #14663a; }
+.tag.rejected { background: var(--err-soft);  color: #93230f; }
+.tag.admin    { background: var(--accent-soft); color: var(--accent-strong); }
+.tag.user     { background: var(--line-soft); color: var(--ink-soft); }
+
+/* ---------------------------------------------------------
+   FOR EQUIPMENT PAGE  (pages/equipment.html + js/equipment.js)
+   --------------------------------------------------------- */
+.eq-conn-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.eq-conn-row .field { margin-bottom: 0; flex: 0 0 auto; }
+.eq-conn-row .field input { width: 150px; }
+.eq-conn-row .field.ip input { width: 170px; }
+.eq-conn-row .status-pill { margin-left: auto; }
+
+/* -- job queue -- */
+.eq-jobs-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 10px; }
+.eq-job-btn {
+  padding: 14px 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: #fbfbfc;
+  font-weight: 700;
+  font-family: var(--font-mono);
+  text-align: center;
+}
+.eq-job-btn:hover { border-color: var(--accent); color: var(--accent-strong); }
+
+.eq-custom-row { display: flex; gap: 8px; align-items: center; margin-top: 4px; }
+.eq-custom-row input { width: 90px; }
+
+.eq-queue-list { list-style: none; margin: 10px 0 0; padding: 0; max-height: 220px; overflow-y: auto; }
+.eq-queue-list li {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 8px 10px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm);
+  margin-bottom: 6px;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+}
+.eq-queue-list li .job-status { font-family: var(--font-ui); font-weight: 700; font-size: 11px; }
+.eq-queue-list li.pending    { color: var(--ink-soft); }
+.eq-queue-list li.processing { border-color: var(--warn); background: var(--warn-soft); }
+.eq-queue-list li.failed     { border-color: var(--err);  background: var(--err-soft); }
+.eq-queue-empty { color: var(--ink-faint); font-size: 12px; text-align: center; padding: 14px 0; }
+
+/* -- raw command tester -- */
+.eq-raw-row { display: flex; gap: 8px; }
+.eq-raw-row input { flex: 1; font-family: var(--font-mono); }
+
+/* -- command browser -- */
+.eq-browser-top { display: flex; gap: 14px; flex-wrap: wrap; margin-bottom: 10px; }
+.eq-browser-top .field { margin-bottom: 0; min-width: 200px; }
+
+.eq-mode-switch { display: flex; gap: 4px; background: var(--line-soft); padding: 3px; border-radius: 999px; width: fit-content; margin-bottom: 10px; }
+.eq-mode-switch button {
+  border: none; background: transparent; padding: 5px 14px;
+  border-radius: 999px; font-size: 12px; font-weight: 700; color: var(--ink-soft);
+}
+.eq-mode-switch button.active { background: var(--bg-sidebar); color: #fff; }
+.eq-mode-switch button:disabled { opacity: .4; cursor: not-allowed; }
+
+.eq-cmd-desc { font-size: 12px; color: var(--ink-faint); font-style: italic; margin-bottom: 10px; }
+
+.eq-param-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px 14px; margin-bottom: 12px; }
+.eq-param-grid .field { margin-bottom: 0; }
+.eq-param-grid .field label { text-transform: none; font-weight: 600; }
+.eq-param-empty { color: var(--ink-faint); font-size: 12px; grid-column: 1 / -1; }
+
+.eq-preview-row { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+.eq-preview-row .mono-box {
+  flex: 1;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  padding: 9px 10px;
+  background: #12151a;
+  color: #b7f0c9;
+  border-radius: var(--radius-sm);
+  overflow-x: auto;
+  white-space: nowrap;
+}
+.eq-preview-row .mono-box.invalid { color: #ffb199; }
+
+/* -- log console -- */
+.eq-log {
+  background: #0e1117;
+  color: #cfd8e3;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.6;
+  border-radius: var(--radius-sm);
+  padding: 12px;
+  height: 260px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.eq-log .line-ok   { color: #8be3a6; }
+.eq-log .line-err  { color: #ff9d80; }
+.eq-log .line-warn { color: #f0c96b; }
+
+/* ---------------------------------------------------------
+   FOR USER MANAGEMENT PAGE  (pages/user.html)
+   --------------------------------------------------------- */
+.user-filter-bar { display: flex; gap: 8px; margin-bottom: 14px; }
+.user-filter-bar button {
+  padding: 6px 12px; border-radius: 999px; border: 1px solid var(--line);
+  background: #fff; font-size: 12px; font-weight: 700; color: var(--ink-soft);
+}
+.user-filter-bar button.active { background: var(--bg-sidebar); color: #fff; border-color: var(--bg-sidebar); }
+
+/* ---------------------------------------------------------
+   FOR PROFILE PAGE  (pages/profile.html)
+   --------------------------------------------------------- */
+.profile-header { display: flex; align-items: center; gap: 16px; margin-bottom: 20px; }
+.profile-header img {
+  width: 72px; height: 72px; border-radius: 50%;
+  object-fit: cover; background: var(--line-soft); border: 1px solid var(--line);
+}
+.profile-header h2 { margin: 0 0 2px; font-size: 17px; }
+.profile-header .eid { font-family: var(--font-mono); color: var(--ink-faint); font-size: 12px; }

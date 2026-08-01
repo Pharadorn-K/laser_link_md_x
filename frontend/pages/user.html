@@ -1,0 +1,36 @@
+<!-- ============================================================
+     user.html — admin only. loaded into #content by dashboard.js
+     Logic lives in dashboard.js, section "FOR USER PAGE"
+     ============================================================ -->
+<div class="page-header">
+  <div>
+    <h1>Users</h1>
+    <p>Approve new sign-ups and manage roles.</p>
+  </div>
+</div>
+
+<div class="user-filter-bar">
+  <button data-filter="pending" class="active">Pending</button>
+  <button data-filter="approved">Approved</button>
+  <button data-filter="rejected">Rejected</button>
+  <button data-filter="">All</button>
+</div>
+
+<div class="card">
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th></th>
+        <th>Name</th>
+        <th>Employee ID</th>
+        <th>Role</th>
+        <th>Status</th>
+        <th>Requested</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody id="user-table-body">
+      <tr><td colspan="7" class="eq-queue-empty">Loading…</td></tr>
+    </tbody>
+  </table>
+</div>

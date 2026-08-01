@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>New Laser Marking — Sign in</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="css/base.css" />
+    <link rel="stylesheet" href="css/login.css" />
+    <link rel="icon" type="image/x-icon" href="/images/favicon.ico">
+    <link rel="stylesheet" href="/css/fontawesome/all.min.css">
+  </head>
+
+  <body>
+    <div class="login-wrap">
+
+      <!-- ---- left: brand panel ---- -->
+      <div class="login-brand">
+        <div class="beam-line"></div>
+        <div class="login-brand-mark"><span class="beam"></span> NEW LASER MARKING</div>
+        <h1>Job queueing and full command control for the MD‑X2520A.</h1>
+        <p>Queue marking jobs, run any command from the full protocol reference, and keep a live log
+          of everything sent to the marker — from one browser tab.</p>
+        <div class="login-brand-meta">
+          <div><div class="k">Protocol</div><div class="v">ASCII / \r delimited</div></div>
+          <div><div class="k">Marker</div><div class="v">MD-X2000 / 2500 series</div></div>
+          <div><div class="k">Access</div><div class="v">Admin-approved accounts</div></div>
+        </div>
+      </div>
+
+      <!-- ---- right: form panel ---- -->
+      <div class="login-form-panel">
+        <div class="login-box">
+
+          <div class="login-tabs">
+            <button class="login-tab active" data-tab="signin" type="button">Sign in</button>
+            <button class="login-tab" data-tab="signup" type="button">Sign up</button>
+          </div>
+
+          <div id="alert-box"></div>
+
+          <!-- ================= SIGN IN ================= -->
+          <form class="login-form active" id="signin-form" data-tab="signin">
+            <div class="field">
+              <label for="si-employee-id">Employee ID</label>
+              <input type="text" id="si-employee-id" name="employee_id" autocomplete="username" required />
+            </div>
+            <div class="field">
+              <label for="si-password">Password</label>
+              <input type="password" id="si-password" name="password" autocomplete="current-password" required />
+            </div>
+            <button type="submit" class="btn btn-primary btn-block">Sign in</button>
+            <p class="login-submit-note">Only approved accounts can sign in. New accounts need admin approval first.</p>
+          </form>
+
+          <!-- ================= SIGN UP ================= -->
+          <form class="login-form" id="signup-form" data-tab="signup">
+            <div class="login-photo-row">
+              <img id="su-photo-preview" class="login-photo-preview" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3C/svg%3E" alt="" />
+              <div class="field" style="margin-bottom:0; flex:1;">
+                <label for="su-photo">Photo (optional)</label>
+                <input type="file" id="su-photo" name="photo" accept="image/png,image/jpeg,image/webp" />
+              </div>
+            </div>
+            <div class="field">
+              <label for="su-name">Full name</label>
+              <input type="text" id="su-name" name="name" required />
+            </div>
+            <div class="field">
+              <label for="su-employee-id">Employee ID</label>
+              <input type="text" id="su-employee-id" name="employee_id" required />
+            </div>
+            <div class="field">
+              <label for="su-password">Password</label>
+              <input type="password" id="su-password" name="password" autocomplete="new-password" required minlength="6" />
+            </div>
+            <div class="field">
+              <label for="su-password2">Confirm password</label>
+              <input type="password" id="su-password2" name="password2" autocomplete="new-password" required minlength="6" />
+            </div>
+            <button type="submit" class="btn btn-primary btn-block">Create account</button>
+            <p class="login-submit-note">An admin must approve your account before you can sign in.</p>
+          </form>
+
+        </div>
+      </div>
+    </div>
+
+    <script src="js/login.js"></script>
+  </body>
+</html>

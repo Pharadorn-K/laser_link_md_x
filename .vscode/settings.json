@@ -1,0 +1,9 @@
+{
+  "files.exclude": {
+    "**/node_modules": true,
+    "**/__pycache__": true,
+    "**/.venv": true
+  },
+  "editor.formatOnSave": true,
+  "python.defaultInterpreterPath": "${workspaceFolder}/backend/python/.venv/bin/python"
+}
