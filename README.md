@@ -1,4 +1,4 @@
-# new-laser-marking
+# laser_link_md_x
 
 Single-page app for controlling the KEYENCE MD-X2520A laser marker (TCP/IP).
 Include Other device such as button start /stop, light bulb, ... (I/O).
@@ -14,7 +14,7 @@ IPC/
 ## project structure
 
 ```
-new-laser-marking/
+laser_link_md_x/
 ├── .vscode/
 │   └── settings.json
 ├── backend/
@@ -74,7 +74,7 @@ new-laser-marking/
 mysql -u root -p < backend/node/db/schema.sql
 ```
 
-This creates the `new_laser_marking` database, the `users` table, and a
+This creates the `laser_link_md_x` database, the `users` table, and a
 bootstrap admin account:
 
 - Employee ID: `admin`
