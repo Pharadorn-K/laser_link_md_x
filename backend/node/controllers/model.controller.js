@@ -1,7 +1,7 @@
 // backend/node/controllers/model.controller.js
 // ============================================================
 // Model Set controller
-//   Model Set page: per (model, job_no, station) marking
+//   Model Set page: per (model, job_no, pallet) marking
 //   condition, used to build the base laser command for a job.
 //   Conditions are stored in the child table model_condition_item
 //   (one row per condition) instead of fixed c1/b1..c3/b3 columns,
@@ -25,8 +25,8 @@ function validateBody(body) {
   if (!Number.isInteger(jobNo) || jobNo < 0 || jobNo > 1999) {
     return 'job_no must be an integer between 0 and 1999.';
   }
-  if (!['Station1', 'Station2'].includes(body.station_no)) {
-    return "station_no must be 'Station1' or 'Station2'.";
+  if (!['Pallet1', 'Pallet2'].includes(body.pallet_no)) {
+    return "pallet_no must be 'Pallet1' or 'Pallet2'.";
   }
 
   const conditions = Array.isArray(body.conditions) ? body.conditions : [];
@@ -51,7 +51,7 @@ function buildFieldsFromBody(body) {
   return {
     model: String(body.model).trim(),
     job_no: Number(body.job_no),
-    station_no: body.station_no,
+    pallet_no: body.pallet_no,
     check_read2dcode: toBool(body.check_read2dcode),
     check_grade2dcode: toBool(body.check_grade2dcode),
     control_grade: body.control_grade ? String(body.control_grade).trim() : null,
@@ -88,14 +88,14 @@ async function getFullModel(id) {
   return { ...rows[0], conditions: items };
 }
 
-// ---------------- List (optionally filtered by station) ----------------
+// ---------------- List (optionally filtered by pallet) ----------------
 async function listModels(req, res) {
-  const { station } = req.query; // optional: ?station=Station1
+  const { pallet } = req.query; // optional: ?pallet=Pallet1
   let sql = 'SELECT * FROM model_condition';
   const params = [];
-  if (station) {
-    sql += ' WHERE station_no = ?';
-    params.push(station);
+  if (pallet) {
+    sql += ' WHERE pallet_no = ?';
+    params.push(pallet);
   }
   sql += ' ORDER BY model ASC, job_no ASC';
   const [rows] = await pool.query(sql, params);
@@ -148,7 +148,7 @@ async function createModel(req, res) {
   } catch (e) {
     await conn.rollback();
     if (e.code === 'ER_DUP_ENTRY') {
-      return res.status(409).json({ error: 'That Job No. is already used on this station.' });
+      return res.status(409).json({ error: 'That Job No. is already used on this pallet.' });
     }
     console.error(e);
     return res.status(500).json({ error: 'Server error creating model condition.' });
@@ -188,7 +188,7 @@ async function updateModel(req, res) {
   } catch (e) {
     await conn.rollback();
     if (e.code === 'ER_DUP_ENTRY') {
-      return res.status(409).json({ error: 'That Job No. is already used on this station.' });
+      return res.status(409).json({ error: 'That Job No. is already used on this pallet.' });
     }
     console.error(e);
     return res.status(500).json({ error: 'Server error updating model condition.' });

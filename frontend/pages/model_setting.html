@@ -6,7 +6,7 @@
 <div class="page-header">
   <div>
     <!-- <h1>Model Setting</h1> -->
-    <p>Create and edit marking conditions per Job No., grouped by station.</p>
+    <p>Create and edit marking conditions per Job No., grouped by pallet.</p>
   </div>
   <button class="btn btn-primary" id="ms-add-model-btn">+ Add Model</button>
 </div>
@@ -14,30 +14,30 @@
 <div id="ms-alert-box"></div>
 
 <div class="grid-2">
-  <!-- ---- Station 1 ---- -->
+  <!-- ---- Pallet 1 ---- -->
   <div class="card">
-    <div class="card-title">Station 1</div>
+    <div class="card-title">Pallet 1</div>
     <div class="field">
-      <label for="ms-select-Station1">Current job</label>
-      <select class="ms-station-select" id="ms-select-Station1" data-station="Station1">
+      <label for="ms-select-Pallet1">Current job</label>
+      <select class="ms-pallet-select" id="ms-select-Pallet1" data-pallet="Pallet1">
         <option value="">— select —</option>
       </select>
     </div>
-    <div class="ms-detail" id="ms-detail-Station1">
+    <div class="ms-detail" id="ms-detail-Pallet1">
       <div class="ms-empty">Select a job to see its condition.</div>
     </div>
   </div>
 
-  <!-- ---- Station 2 ---- -->
+  <!-- ---- Pallet 2 ---- -->
   <div class="card">
-    <div class="card-title">Station 2</div>
+    <div class="card-title">Pallet 2</div>
     <div class="field">
-      <label for="ms-select-Station2">Current job</label>
-      <select class="ms-station-select" id="ms-select-Station2" data-station="Station2">
+      <label for="ms-select-Pallet2">Current job</label>
+      <select class="ms-pallet-select" id="ms-select-Pallet2" data-pallet="Pallet2">
         <option value="">— select —</option>
       </select>
     </div>
-    <div class="ms-detail" id="ms-detail-Station2">
+    <div class="ms-detail" id="ms-detail-Pallet2">
       <div class="ms-empty">Select a job to see its condition.</div>
     </div>
   </div>
@@ -64,10 +64,10 @@
       </div>
 
       <div class="field">
-        <label for="ms-f-station">Station</label>
-        <select id="ms-f-station">
-          <option value="Station1">Station1</option>
-          <option value="Station2">Station2</option>
+        <label for="ms-f-pallet">Pallet</label>
+        <select id="ms-f-pallet">
+          <option value="Pallet1">Pallet1</option>
+          <option value="Pallet2">Pallet2</option>
         </select>
       </div>
 

@@ -119,10 +119,10 @@ async function bootstrap() {
 document.addEventListener("DOMContentLoaded", bootstrap);
 
 /* ============================================================
-   SHARED STATE — currently selected job/condition per station.
+  SHARED STATE — currently selected job/condition per pallet.
    Set from the Model Setting page, read by any other page (e.g.
    Equipment) that needs to know "what command runs right now
-   for Station1 / Station2". Persisted to localStorage so it
+  for Pallet1 / Pallet2". Persisted to localStorage so it
    survives page navigation and reloads.
    ============================================================ */
 
@@ -197,7 +197,7 @@ PAGE_INIT.alarm_center = function () {};
 const MS_MAX_CONDITIONS = 20; // mirrors MAX_CONDITIONS in model.controller.js
 
 const MS = {
-  data: { Station1: [], Station2: [] }, // rows per station, keyed by id
+  data: { Pallet1: [], Pallet2: [] }, // rows per pallet, keyed by id
   editingId: null,
   conditions: [], // working array of {condition_name, condition_value, block_no} while modal is open
   conditionNameChoices: [], // for the datalist autocomplete
@@ -230,30 +230,30 @@ async function msLoadConditionNames() {
   }
 }
 
-async function msLoadStation(station) {
-  const res = await apiFetch(`/api/models?station=${station}`);
+async function msLoadPallet(pallet) {
+  const res = await apiFetch(`/api/models?pallet=${pallet}`);
   const rows = await res.json();
-  MS.data[station] = rows;
+  MS.data[pallet] = rows;
 
-  const select = document.getElementById(`ms-select-${station}`);
+  const select = document.getElementById(`ms-select-${pallet}`);
   select.innerHTML =
     `<option value="">— select —</option>` +
     rows.map((r) => `<option value="${r.id}">${r.model} · Job ${padJob(r.job_no)}</option>`).join("");
 
-  const saved = getSelectedJob(station);
+  const saved = getSelectedJob(pallet);
   const stillExists = saved && rows.find((r) => r.id === saved.id);
   if (stillExists) {
     select.value = saved.id;
-    msRenderDetail(station, stillExists);
-    setSelectedJob(station, stillExists); // refresh with latest data
+    msRenderDetail(pallet, stillExists);
+    setSelectedJob(pallet, stillExists); // refresh with latest data
   } else {
-    setSelectedJob(station, null);
-    msRenderDetail(station, null);
+    setSelectedJob(pallet, null);
+    msRenderDetail(pallet, null);
   }
 }
 
-function msRenderDetail(station, condition) {
-  const wrap = document.getElementById(`ms-detail-${station}`);
+function msRenderDetail(pallet, condition) {
+  const wrap = document.getElementById(`ms-detail-${pallet}`);
   if (!condition) {
     wrap.innerHTML = `<div class="ms-empty">Select a job to see its condition.</div>`;
     return;
@@ -354,7 +354,7 @@ function msOpenModal(condition) {
   document.getElementById("ms-f-id").value = condition ? condition.id : "";
   document.getElementById("ms-f-model").value = condition ? condition.model : "";
   document.getElementById("ms-f-jobno").value = condition ? condition.job_no : "";
-  document.getElementById("ms-f-station").value = condition ? condition.station_no : "Station1";
+  document.getElementById("ms-f-pallet").value = condition ? condition.pallet_no : "Pallet1";
   document.getElementById("ms-f-read2d").checked = condition ? !!condition.check_read2dcode : true;
   document.getElementById("ms-f-grade2d").checked = condition ? !!condition.check_grade2dcode : true;
   document.getElementById("ms-f-camera").checked = condition ? !!condition.check_camera : true;
@@ -378,7 +378,7 @@ function msCollectFormPayload() {
   return {
     model: document.getElementById("ms-f-model").value.trim(),
     job_no: document.getElementById("ms-f-jobno").value,
-    station_no: document.getElementById("ms-f-station").value,
+    pallet_no: document.getElementById("ms-f-pallet").value,
     check_read2dcode: document.getElementById("ms-f-read2d").checked,
     check_grade2dcode: document.getElementById("ms-f-grade2d").checked,
     check_camera: document.getElementById("ms-f-camera").checked,
@@ -387,22 +387,22 @@ function msCollectFormPayload() {
   };
 }
 
-async function msRefreshBothStations() {
-  await Promise.all([msLoadStation("Station1"), msLoadStation("Station2")]);
+async function msRefreshBothPallets() {
+  await Promise.all([msLoadPallet("Pallet1"), msLoadPallet("Pallet2")]);
 }
 
 PAGE_INIT.model_setting = function () {
   msClearAlert();
   msLoadConditionNames();
-  msRefreshBothStations();
+  msRefreshBothPallets();
 
-  document.querySelectorAll(".ms-station-select").forEach((select) => {
+  document.querySelectorAll(".ms-pallet-select").forEach((select) => {
     select.addEventListener("change", () => {
-      const station = select.dataset.station;
+      const pallet = select.dataset.pallet;
       const id = select.value;
-      const condition = MS.data[station].find((r) => String(r.id) === id) || null;
-      setSelectedJob(station, condition);
-      msRenderDetail(station, condition);
+      const condition = MS.data[pallet].find((r) => String(r.id) === id) || null;
+      setSelectedJob(pallet, condition);
+      msRenderDetail(pallet, condition);
     });
   });
 
@@ -430,7 +430,7 @@ PAGE_INIT.model_setting = function () {
         return;
       }
       msCloseModal();
-      await msRefreshBothStations();
+      await msRefreshBothPallets();
     } catch (err) {
       msModalAlert("Could not reach the server.");
     }
@@ -451,7 +451,7 @@ PAGE_INIT.model_setting = function () {
         return;
       }
       msCloseModal();
-      await msRefreshBothStations();
+      await msRefreshBothPallets();
       await msLoadConditionNames(); // pick up any newly-typed condition name
       msShowAlert("Model condition saved.", "success");
     } catch (err) {

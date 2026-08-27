@@ -38,7 +38,7 @@ WHERE NOT EXISTS (SELECT 1 FROM users WHERE employee_id = 'admin');
 -- ------------------------------------------------------------
 -- model_condition
 --   Backs the Model Set page. One row = one (model, job_no,
---   station) marking condition. c1/b1, c2/b2, c3/b3 are three
+--   pallet) marking condition. c1/b1, c2/b2, c3/b3 are three
 --   fixed "CharacterString @ BLK" slots — the Model Set UI's
 --   "Add Condition" button reveals them one at a time. Extending
 --   past 3 slots requires an ALTER TABLE + matching UI change.
@@ -51,14 +51,14 @@ CREATE TABLE IF NOT EXISTS model_condition (
     id                 INT AUTO_INCREMENT PRIMARY KEY,
     model              VARCHAR(255) NOT NULL,
     job_no             SMALLINT NOT NULL,
-    station_no         ENUM('Station1', 'Station2') NOT NULL DEFAULT 'Station1',
+    pallet_no         ENUM('Pallet1', 'Pallet2') NOT NULL DEFAULT 'Pallet1',
     check_read2dcode   BOOLEAN NOT NULL DEFAULT TRUE,
     check_grade2dcode  BOOLEAN NOT NULL DEFAULT TRUE,
     control_grade      VARCHAR(100) NULL DEFAULT NULL,
     check_camera       BOOLEAN NOT NULL DEFAULT TRUE,
     created_at         TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at         TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    UNIQUE KEY uq_job_station (job_no, station_no)
+    UNIQUE KEY uq_job_pallet (job_no, pallet_no)
 ) ENGINE=InnoDB;
 
 -- ------------------------------------------------------------

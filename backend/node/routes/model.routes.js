@@ -1,6 +1,6 @@
 // ============================================================
 // /api/models/* routes
-//   Reads: any authenticated user (Station boxes are visible to
+//   Reads: any authenticated user (Pallet boxes are visible to
 //          everyone on the Model Set page).
 //   Writes: admin only, same pattern as /api/users.
 // ============================================================
