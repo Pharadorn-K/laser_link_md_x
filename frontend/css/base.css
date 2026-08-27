@@ -1,3 +1,4 @@
+/* frontend/css/base.css */
 /* ============================================================
    base.css — shared across every page
    Design: industrial HMI. Dark slate chrome, amber (laser-caution)
@@ -225,7 +226,7 @@ input, select, textarea {
    ============================================================ */
 .app-shell {
   display: grid;
-  grid-template-columns: 240px 1fr;
+  grid-template-columns: 260px 1fr;
   grid-template-rows: 56px 1fr;
   grid-template-areas:
     "sidebar topbar"

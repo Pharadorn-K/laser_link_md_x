@@ -1,6 +1,17 @@
 # new-laser-marking
 
-Single-page app for controlling the KEYENCE MD-X2520A laser marker.
+Single-page app for controlling the KEYENCE MD-X2520A laser marker (TCP/IP).
+Include Other device such as button start /stop, light bulb, ... (I/O).
+This app will run on IPC.
+
+```
+IPC/
+└── Modbus (ETH-MODBUS-IO16R)
+    ├── laser marker (MD-X2520A) (TCP/IP)
+    └── Button start /stop, light bulb, elec linear EC-GS4 (I/O)
+```
+
+## project structure
 
 ```
 new-laser-marking/
@@ -36,6 +47,8 @@ new-laser-marking/
 │   ├── login.html              sign in / sign up (tabbed)
 │   ├── index.html              SPA shell: side bar + top bar + #content
 │   ├── css/
+│   │   ├── fontawesome/
+│   │   ├── webfonts/
 │   │   ├── base.css
 │   │   ├── login.css
 │   │   └── dashboard.css
@@ -43,13 +56,13 @@ new-laser-marking/
 │   │   ├── login.js
 │   │   └── dashboard.js
 │   └── pages/                  fragments injected into #content by dashboard.js
-│       ├── home.html
-│       ├── model_set.html
-│       ├── manual.html
 │       ├── alarm_center.html
+│       └── equipment.html				# requireAuth : admin
+│       ├── home.html
+│       ├── manual.html
+│       ├── model_set.html
 │       ├── profile.html
-│       ├── user.html					# requireAuth : admin
-│       └── equipments.html				# requireAuth : admin
+│       └── user.html					# requireAuth : admin
 ├── test/
 ├── .gitignore
 └── README.md

@@ -1,3 +1,4 @@
+# backend/python/laser_core.py
 """
 Laser Marker Queue App - MD-X2520A
 -----------------------------------
@@ -118,6 +119,11 @@ COMMAND_GROUPS = {
          "wx": {"template": "WX,GuideLaser={p0}",
                 "params": [_pp("Type 1-5", "1", 4, "")]}},
 
+        # The manual calls this "Stop the guide laser", but it deliberately
+        # uses the same StopMarking command as cancellation of normal marking.
+        {"name": "Stop Guide Laser", "desc": "Cancel guide-laser marking (WX,StopMarking)",
+         "wx": {"template": "WX,StopMarking", "params": []}},
+
         {"name": "Distance Pointer", "desc": "Turn distance pointer on/off",
          "wx": {"template": "WX,DistancePointer={p0}",
                 "params": [_pp("0=OFF 1=ON", "1", 4, "")]},
@@ -167,19 +173,27 @@ COMMAND_GROUPS = {
                            _pp("Count (01-99)", "01", 4, "02d"),
                            _pp("Cycle", "0", 4, "")]}},
 
-        {"name": "XY Tracking (run)", "desc": "Execute XY tracking No.",
+        {"name": "XY Tracking", "desc": "Execute XY tracking or request its previous result",
          "wx": {"template": "WX,XYTracking={p0}",
-                "params": [_pp("TRK No (00-99)", "00", 4, "02d")]}},
-        {"name": "Z Tracking (run)", "desc": "Execute Z tracking No.",
+                "params": [_pp("TRK No (00-63)", "00", 4, "02d")]},
+         "rx": {"template": "RX,XYTracking={p0}",
+                "params": [_pp("TRK No (00-63)", "00", 4, "02d")]}},
+        {"name": "Z Tracking", "desc": "Execute Z tracking or request its previous result",
          "wx": {"template": "WX,ZTracking={p0}",
-                "params": [_pp("TRK No (000-999)", "000", 6, "03d")]}},
+                "params": [_pp("TRK No (000-255)", "000", 6, "03d")]},
+         "rx": {"template": "RX,ZTracking={p0}",
+                "params": [_pp("TRK No (000-255)", "000", 6, "03d")]}},
 
-        {"name": "Z Tracking Matrix Cell", "desc": "Select Z tracking matrix cell by row/col",
+        {"name": "Z Tracking Matrix Cell", "desc": "Execute or request Z tracking for a row/column cell",
          "wx": {"template": "WX,ZTrackingMatrixCell={p0},{p1}",
-                "params": [_pp("Row", "000", 6, "03d"), _pp("Col", "000", 6, "03d")]}},
-        {"name": "Z Tracking Matrix Cell No.", "desc": "Select Z tracking matrix cell by index",
+                "params": [_pp("Row (000-255)", "000", 6, "03d"), _pp("Col (000-255)", "000", 6, "03d")]},
+         "rx": {"template": "RX,ZTrackingMatrixCell={p0},{p1}",
+                "params": [_pp("Row (000-255)", "000", 6, "03d"), _pp("Col (000-255)", "000", 6, "03d")]}},
+        {"name": "Z Tracking Matrix Cell No.", "desc": "Execute or request Z tracking for a cell number",
          "wx": {"template": "WX,ZTrackingMatrixCellNo={p0}",
-                "params": [_pp("Cell No (00001-65025)", "00001", 8, "05d")]}},
+                "params": [_pp("Cell No (00000-65025)", "00000", 8, "05d")]},
+         "rx": {"template": "RX,ZTrackingMatrixCellNo={p0}",
+                "params": [_pp("Cell No (00000-65025)", "00000", 8, "05d")]}},
 
         {"name": "3-Axis Tracking (run)", "desc": "Execute 3-axis tracking",
          "wx": {"template": "WX,3AxisTracking", "params": []}},
@@ -1266,5 +1280,3 @@ def format_param(raw_text, fmt):
         return format(raw_text, fmt)
     except (ValueError, TypeError):
         return raw_text
-
-

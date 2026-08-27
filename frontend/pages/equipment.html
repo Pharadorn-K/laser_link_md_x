@@ -1,25 +1,19 @@
+<!-- frontend/pages/equipment.html -->
 <!-- ============================================================
      equipment.html — loaded into #content by dashboard.js
      Logic lives in dashboard.js, section "FOR EQUIPMENT PAGE"
      ============================================================ -->
-<div class="page-header">
-  <div>
-    <h1>Equipment</h1>
-    <p>Connection test, job queue and full command browser for the MD‑X2520A.</p>
-  </div>
-</div>
-
 <!-- ---- Connection ---- -->
 <div class="card" style="margin-bottom:16px;">
   <div class="card-title">Connection</div>
   <div class="eq-conn-row">
     <div class="field ip">
       <label for="eq-ip">IP address</label>
-      <input type="text" id="eq-ip" value="10.207.1.123" />
+      <input type="text" id="eq-ip" value="10.207.1.254" />
     </div>
     <div class="field">
       <label for="eq-port">Port</label>
-      <input type="text" id="eq-port" value="9999" />
+      <input type="text" id="eq-port" value="50002" />
     </div>
     <button class="btn btn-primary" id="eq-connect-btn">Test connection</button>
     <span class="status-pill offline" id="eq-status-pill"><span class="dot"></span> Offline</span>

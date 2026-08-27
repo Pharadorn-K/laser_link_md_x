@@ -1,3 +1,4 @@
+// backend/node/routes/equipment.routes.js
 // ============================================================
 // /api/equipment/* routes  (admin only)
 // Thin proxy: every call is forwarded 1:1 to the Python service.

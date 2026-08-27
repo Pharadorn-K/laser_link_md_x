@@ -1,3 +1,4 @@
+// backend/node/routes/users.routes.js
 // ============================================================
 // /api/users/* routes  (admin only — user approval / role mgmt)
 // ============================================================

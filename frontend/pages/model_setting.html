@@ -1,0 +1,100 @@
+<!-- frontend/pages/model_set.html -->
+<!-- ============================================================
+     model_set.html — loaded into #content by dashboard.js
+     Logic lives in dashboard.js, section "FOR MODEL SET PAGE"
+     ============================================================ -->
+<div class="page-header">
+  <div>
+    <!-- <h1>Model Setting</h1> -->
+    <p>Create and edit marking conditions per Job No., grouped by station.</p>
+  </div>
+  <button class="btn btn-primary" id="ms-add-model-btn">+ Add Model</button>
+</div>
+
+<div id="ms-alert-box"></div>
+
+<div class="grid-2">
+  <!-- ---- Station 1 ---- -->
+  <div class="card">
+    <div class="card-title">Station 1</div>
+    <div class="field">
+      <label for="ms-select-Station1">Current job</label>
+      <select class="ms-station-select" id="ms-select-Station1" data-station="Station1">
+        <option value="">— select —</option>
+      </select>
+    </div>
+    <div class="ms-detail" id="ms-detail-Station1">
+      <div class="ms-empty">Select a job to see its condition.</div>
+    </div>
+  </div>
+
+  <!-- ---- Station 2 ---- -->
+  <div class="card">
+    <div class="card-title">Station 2</div>
+    <div class="field">
+      <label for="ms-select-Station2">Current job</label>
+      <select class="ms-station-select" id="ms-select-Station2" data-station="Station2">
+        <option value="">— select —</option>
+      </select>
+    </div>
+    <div class="ms-detail" id="ms-detail-Station2">
+      <div class="ms-empty">Select a job to see its condition.</div>
+    </div>
+  </div>
+</div>
+
+<!-- ================= Add / Edit Model modal ================= -->
+<div class="ms-modal-backdrop" id="ms-modal-backdrop">
+  <div class="ms-modal">
+    <div class="ms-modal-title" id="ms-modal-title">Add Model</div>
+    <div id="ms-modal-alert"></div>
+
+    <form id="ms-model-form">
+      <input type="hidden" id="ms-f-id" />
+
+      <div class="grid-2">
+        <div class="field">
+          <label for="ms-f-model">Model</label>
+          <input type="text" id="ms-f-model" required />
+        </div>
+        <div class="field">
+          <label for="ms-f-jobno">Job No. (0-1999)</label>
+          <input type="number" id="ms-f-jobno" min="0" max="1999" required />
+        </div>
+      </div>
+
+      <div class="field">
+        <label for="ms-f-station">Station</label>
+        <select id="ms-f-station">
+          <option value="Station1">Station1</option>
+          <option value="Station2">Station2</option>
+        </select>
+      </div>
+
+      <div class="ms-checks">
+        <label><input type="checkbox" id="ms-f-read2d" checked /> Check Read 2D Code</label>
+        <label><input type="checkbox" id="ms-f-grade2d" checked /> Check Grade 2D Code</label>
+        <label><input type="checkbox" id="ms-f-camera" checked /> Check Camera</label>
+      </div>
+
+      <div class="field">
+        <label for="ms-f-grade">Control Grade</label>
+        <input type="text" id="ms-f-grade" placeholder="optional,C-V" />
+      </div>
+
+      <div class="card-title" style="margin-top:14px;">
+        Conditions
+        <button type="button" class="btn btn-sm" id="ms-add-condition-btn">+ Add Condition</button>
+      </div>
+      <p class="field-hint" style="margin:-6px 0 10px;">Each condition marks one CharacterString at one BLK No.</p>
+      <div id="ms-conditions-wrap"></div>
+      <datalist id="ms-condition-names-datalist"></datalist>
+
+      <div style="display:flex; gap:8px; margin-top:16px;">
+        <button type="submit" class="btn btn-primary">Save</button>
+        <button type="button" class="btn" id="ms-modal-cancel-btn">Cancel</button>
+        <button type="button" class="btn btn-danger" id="ms-modal-delete-btn" style="margin-left:auto; display:none;">Delete</button>
+      </div>
+    </form>
+  </div>
+</div>

@@ -1,3 +1,4 @@
+// frontend/js/dashboard.js
 // ============================================================
 // dashboard.js
 // Sectioned: COMMON, then one section per page. Add new sections
@@ -32,13 +33,13 @@ async function apiFetch(path, options = {}) {
 }
 
 const PAGE_TITLES = {
-  home: "Home",
-  model_set: "Model Set",
-  manual: "Manual",
+  monitor: "Monitor",
+  model_setting: "Model Setting",
+  work_mode: "Work Mode",
   alarm_center: "Alarm Center",
   equipment: "Equipment",
   profile: "Profile",
-  user: "Users",
+  all_user: "Users",
 };
 
 // Per-page init hooks, filled in by each section below.
@@ -49,7 +50,7 @@ const PAGE_TEARDOWN = {};
 let activePage = null;
 
 async function loadPage(page) {
-  if (page === "equipment" || page === "user") {
+  if (page === "equipment" || page === "all_user") {
     if (!CURRENT_USER || CURRENT_USER.role !== "admin") return;
   }
 
@@ -112,23 +113,352 @@ async function bootstrap() {
     window.location.href = "login.html";
     return;
   }
-  loadPage("home");
+  loadPage("monitor");
 }
 
 document.addEventListener("DOMContentLoaded", bootstrap);
 
 /* ============================================================
-   FOR HOME PAGE — placeholder, nothing to initialize yet
+   SHARED STATE — currently selected job/condition per station.
+   Set from the Model Setting page, read by any other page (e.g.
+   Equipment) that needs to know "what command runs right now
+   for Station1 / Station2". Persisted to localStorage so it
+   survives page navigation and reloads.
    ============================================================ */
-PAGE_INIT.home = function () {};
+
+// Fixed CharacterString/BLK slot pairs — must match model.controller.js
+// CONDITION_FIELDS on the backend and the model_condition table columns.
+// Small shared HTML-escape helper (dashboard.js has no equivalent yet).
+function escapeHtml(str) {
+  const d = document.createElement("div");
+  d.textContent = str == null ? "" : String(str);
+  return d.innerHTML;
+}
+
+function padJob(n) {
+  return String(n).padStart(4, "0");
+}
+function padBlk(n) {
+  return String(n).padStart(3, "0");
+}
+
+// Builds the base command string for a model_condition row, e.g.
+// "JobNo=0001,BLK=001,CharacterString=G,BLK=002,CharacterString=K9L"
+function buildBaseCommand(condition) {
+  if (!condition) return "";
+  const parts = [`JobNo=${padJob(condition.job_no)}`];
+  (condition.conditions || []).forEach((item) => {
+    parts.push(`BLK=${padBlk(item.block_no)}`);
+    parts.push(`CharacterString=${item.condition_value}`);
+  });
+  return parts.join(",");
+}
+
+function getSelectedJobs() {
+  try {
+    return JSON.parse(localStorage.getItem("nlm_selected_jobs") || "{}");
+  } catch (err) {
+    return {};
+  }
+}
+
+function setSelectedJob(station, condition) {
+  const all = getSelectedJobs();
+  if (condition) {
+    all[station] = condition;
+  } else {
+    delete all[station];
+  }
+  localStorage.setItem("nlm_selected_jobs", JSON.stringify(all));
+}
+
+function getSelectedJob(station) {
+  return getSelectedJobs()[station] || null;
+}
+
+function getSelectedJobCommand(station) {
+  return buildBaseCommand(getSelectedJob(station));
+}
 
 /* ============================================================
-   FOR MODEL SET / MANUAL / ALARM CENTER — placeholders
+   FOR MONITOR PAGE — placeholder, nothing to initialize yet
    ============================================================ */
-PAGE_INIT.model_set = function () {};
-PAGE_INIT.manual = function () {};
+PAGE_INIT.monitor = function () {};
+
+/* ============================================================
+   FOR WORK MODE / ALARM CENTER — placeholders
+   ============================================================ */
+PAGE_INIT.work_mode = function () {};
 PAGE_INIT.alarm_center = function () {};
 
+/* ============================================================
+   FOR MODEL SETTING PAGE
+   ============================================================ */
+const MS_MAX_CONDITIONS = 20; // mirrors MAX_CONDITIONS in model.controller.js
+
+const MS = {
+  data: { Station1: [], Station2: [] }, // rows per station, keyed by id
+  editingId: null,
+  conditions: [], // working array of {condition_name, condition_value, block_no} while modal is open
+  conditionNameChoices: [], // for the datalist autocomplete
+};
+
+function msShowAlert(message, type = "error") {
+  const box = document.getElementById("ms-alert-box");
+  if (box) box.innerHTML = `<div class="alert alert-${type}">${message}</div>`;
+}
+function msClearAlert() {
+  const box = document.getElementById("ms-alert-box");
+  if (box) box.innerHTML = "";
+}
+function msModalAlert(message) {
+  document.getElementById("ms-modal-alert").innerHTML = `<div class="alert alert-error">${message}</div>`;
+}
+
+async function msLoadConditionNames() {
+  try {
+    const res = await apiFetch("/api/models/condition-names");
+    MS.conditionNameChoices = await res.json();
+    const datalist = document.getElementById("ms-condition-names-datalist");
+    if (datalist) {
+      datalist.innerHTML = MS.conditionNameChoices
+        .map((n) => `<option value="${escapeHtml(n)}"></option>`)
+        .join("");
+    }
+  } catch (err) {
+    // non-critical; autocomplete just won't have suggestions
+  }
+}
+
+async function msLoadStation(station) {
+  const res = await apiFetch(`/api/models?station=${station}`);
+  const rows = await res.json();
+  MS.data[station] = rows;
+
+  const select = document.getElementById(`ms-select-${station}`);
+  select.innerHTML =
+    `<option value="">— select —</option>` +
+    rows.map((r) => `<option value="${r.id}">${r.model} · Job ${padJob(r.job_no)}</option>`).join("");
+
+  const saved = getSelectedJob(station);
+  const stillExists = saved && rows.find((r) => r.id === saved.id);
+  if (stillExists) {
+    select.value = saved.id;
+    msRenderDetail(station, stillExists);
+    setSelectedJob(station, stillExists); // refresh with latest data
+  } else {
+    setSelectedJob(station, null);
+    msRenderDetail(station, null);
+  }
+}
+
+function msRenderDetail(station, condition) {
+  const wrap = document.getElementById(`ms-detail-${station}`);
+  if (!condition) {
+    wrap.innerHTML = `<div class="ms-empty">Select a job to see its condition.</div>`;
+    return;
+  }
+
+  const items = condition.conditions || [];
+  const conditionRows =
+    items
+      .map(
+        (it) => `
+      <tr>
+        <td>${escapeHtml(it.condition_name)}</td>
+        <td class="mono">${escapeHtml(it.condition_value)}</td>
+        <td class="mono">BLK ${padBlk(it.block_no)}</td>
+      </tr>`
+      )
+      .join("") || `<tr><td colspan="3" class="eq-queue-empty">No conditions set.</td></tr>`;
+
+  wrap.innerHTML = `
+    <table class="data-table ms-detail-table">
+      <tbody>
+        <tr><td>Model</td><td colspan="2">${escapeHtml(condition.model)}</td></tr>
+        <tr><td>Job No.</td><td colspan="2" class="mono">${padJob(condition.job_no)}</td></tr>
+        <tr><td>Read 2D Code</td><td colspan="2">${condition.check_read2dcode ? "Yes" : "No"}</td></tr>
+        <tr><td>Grade 2D Code</td><td colspan="2">${condition.check_grade2dcode ? "Yes" : "No"}</td></tr>
+        <tr><td>Control Grade</td><td colspan="2">${escapeHtml(condition.control_grade) || "—"}</td></tr>
+        <tr><td>Camera</td><td colspan="2">${condition.check_camera ? "Yes" : "No"}</td></tr>
+        ${conditionRows}
+      </tbody>
+    </table>
+    <div class="ms-preview-row">
+      <span class="ms-preview-label">BASE COMMAND</span>
+      <div class="mono-box">${buildBaseCommand(condition)}</div>
+    </div>
+    <button type="button" class="btn btn-sm" data-edit-id="${condition.id}">Edit Model</button>
+  `;
+  wrap.querySelector("[data-edit-id]").addEventListener("click", () => msOpenModal(condition));
+}
+
+function msConditionRowHtml(index, item) {
+  const name = item ? item.condition_name || "" : "";
+  const value = item ? item.condition_value || "" : "";
+  const block = item && item.block_no !== null && item.block_no !== undefined ? item.block_no : "";
+  return `
+    <div class="ms-condition-row" data-index="${index}">
+      <div class="field">
+        <label>Condition Name</label>
+        <input type="text" class="ms-cond-name" list="ms-condition-names-datalist"
+               value="${escapeHtml(name)}" placeholder="e.g. Heat/Lot No. 1" />
+      </div>
+      <div class="field">
+        <label>CharacterString</label>
+        <input type="text" class="ms-cond-value" value="${escapeHtml(value)}" />
+      </div>
+      <div class="field">
+        <label>BLK No.(0-255)</label>
+        <input type="number" min="0" max="255" class="ms-cond-block" value="${block}" />
+      </div>
+      <button type="button" class="btn btn-sm btn-ghost ms-cond-remove" data-index="${index}" title="Remove condition">&times;</button>
+    </div>`;
+}
+
+function msCaptureConditionsFromDom() {
+  const rows = document.querySelectorAll(".ms-condition-row");
+  const result = [];
+  rows.forEach((row) => {
+    result.push({
+      condition_name: row.querySelector(".ms-cond-name").value.trim(),
+      condition_value: row.querySelector(".ms-cond-value").value.trim(),
+      block_no: row.querySelector(".ms-cond-block").value.trim(),
+    });
+  });
+  return result;
+}
+
+function msRebuildConditionRows() {
+  const wrap = document.getElementById("ms-conditions-wrap");
+  wrap.innerHTML = MS.conditions.map((c, i) => msConditionRowHtml(i, c)).join("");
+  document.getElementById("ms-add-condition-btn").disabled = MS.conditions.length >= MS_MAX_CONDITIONS;
+
+  wrap.querySelectorAll(".ms-cond-remove").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      MS.conditions = msCaptureConditionsFromDom();
+      MS.conditions.splice(Number(btn.dataset.index), 1);
+      msRebuildConditionRows();
+    });
+  });
+}
+
+function msOpenModal(condition) {
+  msClearAlert();
+  document.getElementById("ms-modal-alert").innerHTML = "";
+  const form = document.getElementById("ms-model-form");
+  form.reset();
+
+  MS.editingId = condition ? condition.id : null;
+  document.getElementById("ms-modal-title").textContent = condition ? "Edit Model" : "Add Model";
+  document.getElementById("ms-f-id").value = condition ? condition.id : "";
+  document.getElementById("ms-f-model").value = condition ? condition.model : "";
+  document.getElementById("ms-f-jobno").value = condition ? condition.job_no : "";
+  document.getElementById("ms-f-station").value = condition ? condition.station_no : "Station1";
+  document.getElementById("ms-f-read2d").checked = condition ? !!condition.check_read2dcode : true;
+  document.getElementById("ms-f-grade2d").checked = condition ? !!condition.check_grade2dcode : true;
+  document.getElementById("ms-f-camera").checked = condition ? !!condition.check_camera : true;
+  document.getElementById("ms-f-grade").value = condition ? condition.control_grade || "" : "";
+  document.getElementById("ms-modal-delete-btn").style.display = condition ? "" : "none";
+
+  MS.conditions = condition && condition.conditions && condition.conditions.length
+    ? condition.conditions.map((c) => ({ ...c }))
+    : [{ condition_name: "", condition_value: "", block_no: "" }];
+  msRebuildConditionRows();
+
+  document.getElementById("ms-modal-backdrop").classList.add("open");
+}
+
+function msCloseModal() {
+  document.getElementById("ms-modal-backdrop").classList.remove("open");
+  MS.editingId = null;
+}
+
+function msCollectFormPayload() {
+  return {
+    model: document.getElementById("ms-f-model").value.trim(),
+    job_no: document.getElementById("ms-f-jobno").value,
+    station_no: document.getElementById("ms-f-station").value,
+    check_read2dcode: document.getElementById("ms-f-read2d").checked,
+    check_grade2dcode: document.getElementById("ms-f-grade2d").checked,
+    check_camera: document.getElementById("ms-f-camera").checked,
+    control_grade: document.getElementById("ms-f-grade").value.trim(),
+    conditions: msCaptureConditionsFromDom(),
+  };
+}
+
+async function msRefreshBothStations() {
+  await Promise.all([msLoadStation("Station1"), msLoadStation("Station2")]);
+}
+
+PAGE_INIT.model_setting = function () {
+  msClearAlert();
+  msLoadConditionNames();
+  msRefreshBothStations();
+
+  document.querySelectorAll(".ms-station-select").forEach((select) => {
+    select.addEventListener("change", () => {
+      const station = select.dataset.station;
+      const id = select.value;
+      const condition = MS.data[station].find((r) => String(r.id) === id) || null;
+      setSelectedJob(station, condition);
+      msRenderDetail(station, condition);
+    });
+  });
+
+  document.getElementById("ms-add-model-btn").addEventListener("click", () => msOpenModal(null));
+  document.getElementById("ms-modal-cancel-btn").addEventListener("click", msCloseModal);
+  document.getElementById("ms-modal-backdrop").addEventListener("click", (e) => {
+    if (e.target.id === "ms-modal-backdrop") msCloseModal();
+  });
+
+  document.getElementById("ms-add-condition-btn").addEventListener("click", () => {
+    if (MS.conditions.length >= MS_MAX_CONDITIONS) return;
+    MS.conditions = msCaptureConditionsFromDom();
+    MS.conditions.push({ condition_name: "", condition_value: "", block_no: "" });
+    msRebuildConditionRows();
+  });
+
+  document.getElementById("ms-modal-delete-btn").addEventListener("click", async () => {
+    if (!MS.editingId) return;
+    if (!confirm("Delete this model condition?")) return;
+    try {
+      const res = await apiFetch(`/api/models/${MS.editingId}`, { method: "DELETE" });
+      if (!res.ok) {
+        const data = await res.json();
+        msModalAlert(data.error || "Delete failed.");
+        return;
+      }
+      msCloseModal();
+      await msRefreshBothStations();
+    } catch (err) {
+      msModalAlert("Could not reach the server.");
+    }
+  });
+
+  document.getElementById("ms-model-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    document.getElementById("ms-modal-alert").innerHTML = "";
+    const payload = msCollectFormPayload();
+
+    try {
+      const res = MS.editingId
+        ? await apiFetch(`/api/models/${MS.editingId}`, { method: "PUT", body: JSON.stringify(payload) })
+        : await apiFetch(`/api/models`, { method: "POST", body: JSON.stringify(payload) });
+      const data = await res.json();
+      if (!res.ok) {
+        msModalAlert(data.error || "Save failed.");
+        return;
+      }
+      msCloseModal();
+      await msRefreshBothStations();
+      await msLoadConditionNames(); // pick up any newly-typed condition name
+      msShowAlert("Model condition saved.", "success");
+    } catch (err) {
+      msModalAlert("Could not reach the server.");
+    }
+  });
+};
 /* ============================================================
    FOR EQUIPMENT PAGE
    ============================================================ */
@@ -497,7 +827,7 @@ async function userSetRole(id, role) {
 }
 window.userSetRole = userSetRole;
 
-PAGE_INIT.user = function () {
+PAGE_INIT.all_user = function () {
   document.querySelectorAll(".user-filter-bar button").forEach((btn) => {
     btn.addEventListener("click", () => {
       document.querySelectorAll(".user-filter-bar button").forEach((b) => b.classList.remove("active"));

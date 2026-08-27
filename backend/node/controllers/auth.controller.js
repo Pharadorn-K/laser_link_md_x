@@ -1,3 +1,4 @@
+// backend/node/controllers/auth.controller.js
 // ============================================================
 // Auth + user-management controller
 //   Sign-up  : employee_id, name, password (+ optional photo) -> status='pending'

@@ -1,5 +1,6 @@
+// backend/node/server.js
 // ============================================================
-// new-laser-marking API gateway
+// laser_link_md_x API gateway
 //   - Serves the frontend (static files)
 //   - Handles auth / user approval (MySQL, this file's own domain)
 //   - Proxies equipment/laser calls to the Python service
@@ -12,6 +13,7 @@ require('dotenv').config();
 const authRoutes = require('./routes/auth.routes');
 const usersRoutes = require('./routes/users.routes');
 const equipmentRoutes = require('./routes/equipment.routes');
+const modelRoutes = require('./routes/model.routes');
 
 const app = express();
 
@@ -25,6 +27,7 @@ app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 app.use('/api/auth', authRoutes);
 app.use('/api/users', usersRoutes);
 app.use('/api/equipment', equipmentRoutes);
+app.use('/api/models', modelRoutes);
 
 app.get('/api/health', (req, res) => res.json({ ok: true }));
 
@@ -38,6 +41,6 @@ app.get('/', (req, res) => res.sendFile(path.join(frontendDir, 'login.html')));
 app.use('/api', (req, res) => res.status(404).json({ error: 'Not found.' }));
 
 const PORT = process.env.PORT || 4000;
-app.listen(PORT, () => {
-  console.log(`new-laser-marking API gateway listening on http://localhost:${PORT}`);
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`laser_link_md_x API gateway listening on port ${PORT}`);
 });

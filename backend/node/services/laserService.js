@@ -1,3 +1,4 @@
+// backend/node/services/laserService.js
 // ============================================================
 // Bridge to backend/python (laser_marker_service.py Flask API)
 // Node stays the single frontend-facing API; it forwards

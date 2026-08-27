@@ -1,3 +1,4 @@
+// backend/node/middleware/requireRole.js
 // ============================================================
 // Auth middleware
 //   requireAuth        -> verifies JWT, attaches req.user

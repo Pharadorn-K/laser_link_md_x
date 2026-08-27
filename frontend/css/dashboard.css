@@ -1,3 +1,4 @@
+/* frontend/css/dashboard.css */
 /* ============================================================
    dashboard.css
    Sectioned by page. Add new page blocks at the bottom as new
@@ -125,17 +126,6 @@ table.data-table tr:last-child td { border-bottom: none; }
 .eq-param-empty { color: var(--ink-faint); font-size: 12px; grid-column: 1 / -1; }
 
 .eq-preview-row { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
-.eq-preview-row .mono-box {
-  flex: 1;
-  font-family: var(--font-mono);
-  font-size: 13px;
-  padding: 9px 10px;
-  background: #12151a;
-  color: #b7f0c9;
-  border-radius: var(--radius-sm);
-  overflow-x: auto;
-  white-space: nowrap;
-}
 .eq-preview-row .mono-box.invalid { color: #ffb199; }
 
 /* -- log console -- */
@@ -157,7 +147,7 @@ table.data-table tr:last-child td { border-bottom: none; }
 .eq-log .line-warn { color: #f0c96b; }
 
 /* ---------------------------------------------------------
-   FOR USER MANAGEMENT PAGE  (pages/user.html)
+  FOR USER MANAGEMENT PAGE  (pages/all_user.html)
    --------------------------------------------------------- */
 .user-filter-bar { display: flex; gap: 8px; margin-bottom: 14px; }
 .user-filter-bar button {
@@ -176,3 +166,105 @@ table.data-table tr:last-child td { border-bottom: none; }
 }
 .profile-header h2 { margin: 0 0 2px; font-size: 17px; }
 .profile-header .eid { font-family: var(--font-mono); color: var(--ink-faint); font-size: 12px; }
+
+/* ---------------------------------------------------------
+   FOR MODEL SET PAGE  (pages/model_set.html)
+   --------------------------------------------------------- */
+.ms-empty {
+  color: var(--ink-faint);
+  font-size: 12px;
+  text-align: center;
+  padding: 20px 0;
+  border: 1px dashed var(--line);
+  border-radius: var(--radius-sm);
+}
+
+.ms-detail-table td:first-child {
+  color: var(--ink-soft);
+  font-weight: 600;
+  width: 40%;
+}
+
+.ms-preview-row { margin: 12px 0; }
+.ms-preview-label {
+  font-size: 12px;
+  color: var(--ink-soft);
+  font-weight: 700;
+  display: block;
+  margin-bottom: 6px;
+}
+
+/* generic dark mono preview box, reused outside the equipment page */
+.mono-box {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  padding: 9px 10px;
+  background: #12151a;
+  color: #b7f0c9;
+  border-radius: var(--radius-sm);
+  overflow-x: auto;
+  white-space: nowrap;
+}
+
+/* -- add/edit model modal -- */
+.ms-modal-backdrop {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 18, 23, 0.55);
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+  padding: 20px;
+}
+.ms-modal-backdrop.open { display: flex; }
+
+.ms-modal {
+  background: var(--bg-panel);
+  border-radius: var(--radius);
+  padding: 22px;
+  width: 100%;
+  max-width: 560px;
+  max-height: 90vh;
+  overflow-y: auto;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.35);
+}
+.ms-modal-title {
+  font-size: 16px;
+  font-weight: 800;
+  margin-bottom: 14px;
+}
+
+.ms-checks {
+  display: flex;
+  gap: 18px;
+  flex-wrap: wrap;
+  margin: 4px 0 14px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink-soft);
+}
+.ms-checks label { display: flex; align-items: center; gap: 6px; }
+
+.ms-condition-row {
+  display: grid;
+  grid-template-columns: 2fr 2fr 1fr auto;
+  align-items: end;
+  gap: 10px 14px;
+  padding: 10px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm);
+  margin-bottom: 8px;
+}
+.ms-condition-row .field { margin-bottom: 0; }
+.ms-cond-remove {
+  height: 38px;
+  width: 38px;
+  padding: 0;
+  font-size: 18px;
+  line-height: 1;
+  color: var(--err);
+}
+@media (max-width: 700px) {
+  .ms-condition-row { grid-template-columns: 1fr; }
+}
