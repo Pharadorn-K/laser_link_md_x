@@ -147,6 +147,10 @@ function padBlk(n) {
 function buildBaseCommand(condition) {
   if (!condition) return "";
   const parts = [`JobNo=${padJob(condition.job_no)}`];
+  if (condition.check_lot_no && condition.lot_no_block !== null && condition.lot_no_block !== undefined && condition.lot_no) {
+    parts.push(`BLK=${padBlk(condition.lot_no_block)}`);
+    parts.push(`CharacterString=${condition.lot_no}`);
+  }
   (condition.conditions || []).forEach((item) => {
     parts.push(`BLK=${padBlk(item.block_no)}`);
     parts.push(`CharacterString=${item.condition_value}`);
@@ -181,9 +185,180 @@ function getSelectedJobCommand(station) {
 }
 
 /* ============================================================
-   FOR MONITOR PAGE — placeholder, nothing to initialize yet
+   FOR MONITOR PAGE
+   ============================================================
+   NOTE: no equipment backend yet (hardware pending), so:
+   - "2 push buttons start" is a Simulate button (mon-simulate-btn)
+   - "marking complete" (the count-part trick) is simulated at the
+     end of the sequence for whichever pallet is running
+   Swap mon Simulate/step logic for a real signal (websocket or
+   polling /api/equipment/status) once the Python service reports
+   these events; monReportCount() is the one place that should
+   call POST /api/production/log for real.
    ============================================================ */
-PAGE_INIT.monitor = function () {};
+
+const MON_STEPS = [
+  { id: "open_door",  label: "Open door" },
+  { id: "close_door", label: "Close door" },
+  { id: "check_cam",  label: "Check camera" },
+  { id: "start_mark", label: "Start marking" },
+  { id: "count_part", label: "Count part / log result" },
+];
+
+const MON = {
+  counts: { Pallet1: 0, Pallet2: 0 },   // in-memory only until backend exists
+  lastMarked: { Pallet1: null, Pallet2: null },
+  running: false,
+  timer: null,
+};
+
+function monActivePallets() {
+  return ["Pallet1", "Pallet2"].filter((p) => !!getSelectedJob(p));
+}
+
+function monRenderPalletBlock(pallet) {
+  const job = getSelectedJob(pallet);
+  const lock = document.getElementById(`mon-lock-${pallet}`);
+  const body = document.getElementById(`mon-body-${pallet}`);
+
+  if (!job) {
+    lock.classList.add("show");
+    body.innerHTML = "";
+    return;
+  }
+  lock.classList.remove("show");
+
+  const running = MON.running && MON.activePallet === pallet;
+  const statusClass = running ? "busy" : "ready";
+  const statusLabel = running ? "Running" : "Idle";
+  const lastMarked = MON.lastMarked[pallet];
+
+  body.innerHTML = `
+    <div class="mon-model-row">
+      <div>
+        <div class="mon-model-name">${escapeHtml(job.model)}</div>
+        <div class="mon-model-meta mono">Job ${padJob(job.job_no)}${job.check_lot_no && job.lot_no ? ` · Lot ${escapeHtml(job.lot_no)}` : ""}</div>
+      </div>
+      <span class="status-pill ${statusClass}"><span class="dot"></span> ${statusLabel}</span>
+    </div>
+
+    <div class="mon-count-block">
+      <div class="mon-count-label">Count Part</div>
+      <div class="mon-count-value" id="mon-count-${pallet}">${MON.counts[pallet]}</div>
+      <div class="mon-count-sub">${lastMarked ? `Last: ${new Date(lastMarked).toLocaleTimeString()}` : "No parts marked yet"}</div>
+    </div>
+
+    <div class="mon-dev-row">
+      <button class="btn btn-sm btn-ghost" data-reset="${pallet}">Reset count</button>
+    </div>
+  `;
+
+  body.querySelector(`[data-reset="${pallet}"]`).addEventListener("click", () => {
+    MON.counts[pallet] = 0;
+    monRenderPalletBlock(pallet);
+  });
+}
+
+function monRenderAll() {
+  monRenderPalletBlock("Pallet1");
+  monRenderPalletBlock("Pallet2");
+}
+
+function monRenderSeqList(steps, activeIndex, palletTag) {
+  const idle = document.getElementById("mon-seq-idle");
+  const list = document.getElementById("mon-seq-list");
+  idle.style.display = "none";
+  list.style.display = "";
+  list.innerHTML = steps
+    .map((s, i) => {
+      let cls = "pending";
+      if (i < activeIndex) cls = "done";
+      else if (i === activeIndex) cls = "active";
+      return `<li class="wm-seq-step ${cls}"><span class="wm-seq-num">${i + 1}</span>[${palletTag}] ${s.label}</li>`;
+    })
+    .join("");
+}
+
+function monReportCount(pallet, job) {
+  MON.counts[pallet] += 1;
+  MON.lastMarked[pallet] = new Date().toISOString();
+
+  // Placeholder: send to backend once /api/production/log exists.
+  // apiFetch('/api/production/log', { method: 'POST', body: JSON.stringify({
+  //   model: job.model, job_no: job.job_no, pallet_no: pallet,
+  //   lot_no: job.lot_no || null, count: MON.counts[pallet],
+  // }) }).catch(() => {});
+
+  monRenderPalletBlock(pallet);
+}
+
+function monRunSequenceForPallet(pallet, onDone) {
+  const job = getSelectedJob(pallet);
+  let idx = 0;
+  MON.activePallet = pallet;
+  monRenderPalletBlock(pallet);
+
+  const stepDelayMs = 700;
+  const tick = () => {
+    if (!MON.running) return;
+    monRenderSeqList(MON_STEPS, idx, pallet);
+    if (idx >= MON_STEPS.length) {
+      if (job) monReportCount(pallet, job);
+      onDone();
+      return;
+    }
+    MON.timer = setTimeout(() => {
+      idx += 1;
+      tick();
+    }, stepDelayMs);
+  };
+  tick();
+}
+
+function monStartSimulation() {
+  if (MON.running) return;
+  const pallets = monActivePallets();
+  if (pallets.length === 0) {
+    showToast("Select a model for at least one pallet on Model Setting first.");
+    return;
+  }
+
+  MON.running = true;
+  document.getElementById("mon-signal-pill").className = "status-pill busy";
+  document.getElementById("mon-signal-pill").innerHTML = '<span class="dot"></span> Signal received';
+  document.getElementById("mon-simulate-btn").disabled = true;
+
+  let queue = [...pallets];
+  const runNext = () => {
+    if (queue.length === 0) {
+      MON.running = false;
+      MON.activePallet = null;
+      document.getElementById("mon-signal-pill").className = "status-pill offline";
+      document.getElementById("mon-signal-pill").innerHTML = '<span class="dot"></span> Waiting for signal';
+      document.getElementById("mon-simulate-btn").disabled = false;
+      document.getElementById("mon-seq-idle").style.display = "";
+      document.getElementById("mon-seq-idle").textContent = "Waiting for the 2-push-button start signal…";
+      document.getElementById("mon-seq-list").style.display = "none";
+      monRenderAll();
+      return;
+    }
+    const pallet = queue.shift();
+    monRunSequenceForPallet(pallet, runNext);
+  };
+  runNext();
+}
+
+PAGE_INIT.monitor = function () {
+  MON.running = false;
+  MON.activePallet = null;
+  monRenderAll();
+  document.getElementById("mon-simulate-btn").addEventListener("click", monStartSimulation);
+};
+
+PAGE_TEARDOWN.monitor = function () {
+  MON.running = false;
+  clearTimeout(MON.timer);
+};
 
 /* ============================================================
    FOR WORK MODE PAGE
@@ -381,8 +556,383 @@ PAGE_TEARDOWN.work_mode = function () {
   wmStopSequence();
 };
 
-/* alarm_center — still a placeholder */
-PAGE_INIT.alarm_center = function () {};
+/* ============================================================
+   FOR ALARM CENTER PAGE
+   ============================================================
+   NOTE: The equipment backend isn't wired up yet (hardware still
+   arriving), so this page runs entirely on mock data below.
+   When the backend is ready, replace acFetchAlarms()'s body with:
+     const [curRes, histRes] = await Promise.all([
+       apiFetch('/api/alarms/current'),
+       apiFetch('/api/alarms/history'),
+     ]);
+     AC.current = await curRes.json();
+     AC.history = await histRes.json();
+   and acResetAlarm() with a real call to
+     POST /api/alarms/:id/reset  -> { cleared: bool, alarm? }
+   Nothing else on this page needs to change.
+   ============================================================ */
+
+const AC_SOURCE_ICONS = {
+  "MD-X2520A": "fa-solid fa-bullseye",
+  "IAI Elecylinder": "fa-solid fa-arrows-left-right",
+  "MySQL": "fa-solid fa-database",
+  "Modbus I/O": "fa-solid fa-microchip",
+  "Node API": "fa-solid fa-server",
+};
+
+// Each mock alarm carries `clearsAfterAttempts` purely so the "Reset &
+// Check Again" flow has something realistic to demo without hardware:
+// it simulates the alarm clearing after that many reset attempts.
+const AC_MOCK_CURRENT = [
+  {
+    id: 1,
+    tag: "ERR_READY_1",
+    source: "MD-X2520A",
+    severity: "error",
+    description: "Laser marker reports RX,Ready=1 (active error on the unit).",
+    occurred_at: "2026-08-28T08:12:00",
+    instructions: [
+      "Check the marker's front panel display for the specific error code.",
+      "Clear the error on the unit itself (or send WX,ErrorClear from Equipment > Raw Command).",
+      "Confirm the laser safety shutter and enclosure are fully closed.",
+      "Click \"Reset & Check Again\" below once the error is cleared on the unit.",
+    ],
+    clearsAfterAttempts: 1,
+    attempts: 0,
+  },
+  {
+    id: 2,
+    tag: "IO_DISCONNECT",
+    source: "Modbus I/O",
+    severity: "error",
+    description: "ETH-MODBUS-IO16R module (door / pallet cylinder I/O) is not responding on the network.",
+    occurred_at: "2026-08-28T08:05:30",
+    instructions: [
+      "Check the module's power and Ethernet cable at the IPC panel.",
+      "Ping the module's IP from the IPC to confirm it's on the network.",
+      "Power-cycle the module if the link light is off.",
+      "Click \"Reset & Check Again\" once the module is back online.",
+    ],
+    clearsAfterAttempts: 2,
+    attempts: 0,
+  },
+  {
+    id: 3,
+    tag: "CYL_TIMEOUT",
+    source: "IAI Elecylinder",
+    severity: "warn",
+    description: "Cylinder EC-GS4 (pallet exchange) did not reach target position within timeout.",
+    occurred_at: "2026-08-28T07:58:10",
+    instructions: [
+      "Check for a physical obstruction along the cylinder's travel path.",
+      "Verify 24V supply to the elecylinder driver.",
+      "Home the axis from the driver's front panel if available.",
+      "Click \"Reset & Check Again\" to re-check the position.",
+    ],
+    clearsAfterAttempts: 1,
+    attempts: 0,
+  },
+  {
+    id: 4,
+    tag: "DB_CONN_LOST",
+    source: "MySQL",
+    severity: "warn",
+    description: "Node API gateway lost its connection pool to the MySQL database.",
+    occurred_at: "2026-08-28T07:40:00",
+    instructions: [
+      "Check that the MySQL service is running on the host in backend/node/.env.",
+      "Check network connectivity between the Node gateway and the DB host.",
+      "Restart the Node API gateway (npm run dev / npm start) if MySQL is confirmed up.",
+      "Click \"Reset & Check Again\" to re-test the connection.",
+    ],
+    clearsAfterAttempts: 1,
+    attempts: 0,
+  },
+];
+
+const AC_MOCK_HISTORY = [
+  {
+    id: 101,
+    tag: "ERR_READY_1",
+    source: "MD-X2520A",
+    severity: "error",
+    description: "Laser marker reports RX,Ready=1 (active error on the unit).",
+    occurred_at: "2026-08-27T14:02:00",
+    resolved_at: "2026-08-27T14:11:00",
+    resolution: "Enclosure interlock sensor was misaligned; realigned and error cleared.",
+  },
+  {
+    id: 102,
+    tag: "CYL_TIMEOUT",
+    source: "IAI Elecylinder",
+    severity: "warn",
+    description: "Cylinder EC-GS4 (pallet exchange) did not reach target position within timeout.",
+    occurred_at: "2026-08-26T09:15:00",
+    resolved_at: "2026-08-26T09:22:00",
+    resolution: "Loose bracket was catching on the rail; retightened, cylinder homed successfully.",
+  },
+  {
+    id: 103,
+    tag: "IO_DISCONNECT",
+    source: "Modbus I/O",
+    severity: "error",
+    description: "ETH-MODBUS-IO16R module (door / pallet cylinder I/O) is not responding on the network.",
+    occurred_at: "2026-08-25T11:30:00",
+    resolved_at: "2026-08-25T11:34:00",
+    resolution: "Ethernet cable had come loose during panel maintenance; reseated.",
+  },
+];
+
+const AC = {
+  tab: "current",
+  current: [],
+  history: [],
+  selectedId: null,
+  resetting: false,
+};
+
+function acSeverityLabel(sev) {
+  return { error: "Error", warn: "Warning", info: "Info" }[sev] || sev;
+}
+
+function acFormatDate(iso) {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  return d.toLocaleString([], { month: "short", day: "2-digit", hour: "2-digit", minute: "2-digit" });
+}
+
+function acDuration(startIso, endIso) {
+  const ms = new Date(endIso) - new Date(startIso);
+  const mins = Math.max(1, Math.round(ms / 60000));
+  if (mins < 60) return `${mins} min`;
+  return `${Math.floor(mins / 60)}h ${mins % 60}m`;
+}
+
+async function acFetchAlarms() {
+  // Placeholder data source — see NOTE at top of this section.
+  AC.current = AC_MOCK_CURRENT.map((a) => ({ ...a }));
+  AC.history = AC_MOCK_HISTORY.map((a) => ({ ...a }));
+}
+
+function acRenderCounts() {
+  document.getElementById("ac-count-current").textContent = AC.current.length;
+  document.getElementById("ac-count-history").textContent = AC.history.length;
+}
+
+function acSourceBadge(source) {
+  const icon = AC_SOURCE_ICONS[source] || "fa-solid fa-plug";
+  return `<span class="ac-source-badge"><i class="${icon}"></i> ${escapeHtml(source)}</span>`;
+}
+
+function acRenderTable() {
+  const head = document.getElementById("ac-table-head");
+  const body = document.getElementById("ac-table-body");
+  const title = document.getElementById("ac-list-title");
+  const isCurrent = AC.tab === "current";
+  const rows = isCurrent ? AC.current : AC.history;
+
+  title.textContent = isCurrent ? "Current Alarms" : "History Alarms";
+
+  head.innerHTML = isCurrent
+    ? `<tr><th>#</th><th>Tag</th><th>Source</th><th>Description</th><th>Severity</th><th>Occurred</th></tr>`
+    : `<tr><th>#</th><th>Tag</th><th>Source</th><th>Description</th><th>Occurred</th><th>Resolved</th></tr>`;
+
+  if (rows.length === 0) {
+    body.innerHTML = `<tr><td colspan="6" class="eq-queue-empty">${isCurrent ? "No active alarms. All clear." : "No alarm history yet."}</td></tr>`;
+    return;
+  }
+
+  body.innerHTML = rows
+    .map((a, i) => {
+      const selected = a.id === AC.selectedId ? "ac-row-selected" : "";
+      if (isCurrent) {
+        return `
+          <tr class="ac-row ${selected}" data-id="${a.id}">
+            <td class="mono">${i + 1}</td>
+            <td class="mono">${escapeHtml(a.tag)}</td>
+            <td>${acSourceBadge(a.source)}</td>
+            <td>${escapeHtml(a.description)}</td>
+            <td><span class="ac-sev ac-sev-${a.severity}">${acSeverityLabel(a.severity)}</span></td>
+            <td class="mono">${acFormatDate(a.occurred_at)}</td>
+          </tr>`;
+      }
+      return `
+        <tr class="ac-row ${selected}" data-id="${a.id}">
+          <td class="mono">${i + 1}</td>
+          <td class="mono">${escapeHtml(a.tag)}</td>
+          <td>${acSourceBadge(a.source)}</td>
+          <td>${escapeHtml(a.description)}</td>
+          <td class="mono">${acFormatDate(a.occurred_at)}</td>
+          <td class="mono">${acFormatDate(a.resolved_at)}</td>
+        </tr>`;
+    })
+    .join("");
+
+  body.querySelectorAll(".ac-row").forEach((tr) => {
+    tr.addEventListener("click", () => acSelect(Number(tr.dataset.id)));
+  });
+}
+
+function acFindSelected() {
+  const list = AC.tab === "current" ? AC.current : AC.history;
+  return list.find((a) => a.id === AC.selectedId) || null;
+}
+
+function acRenderDetail() {
+  const empty = document.getElementById("ac-detail-empty");
+  const bodyEl = document.getElementById("ac-detail-body");
+  const alarm = acFindSelected();
+
+  if (!alarm) {
+    empty.style.display = "flex";
+    bodyEl.style.display = "none";
+    return;
+  }
+  empty.style.display = "none";
+  bodyEl.style.display = "block";
+
+  const isCurrent = AC.tab === "current";
+
+  const instructionsHtml = isCurrent
+    ? `
+      <div class="ac-instructions">
+        <div class="ac-instructions-label">What to do</div>
+        <ol class="ac-step-list">
+          ${alarm.instructions.map((step) => `<li>${escapeHtml(step)}</li>`).join("")}
+        </ol>
+      </div>`
+    : `
+      <div class="ac-instructions">
+        <div class="ac-instructions-label">Resolution</div>
+        <p class="ac-resolution-text">${escapeHtml(alarm.resolution || "—")}</p>
+      </div>`;
+
+  const footerHtml = isCurrent
+    ? `
+      <div class="ac-detail-footer">
+        <button class="btn btn-primary" id="ac-reset-btn" ${AC.resetting ? "disabled" : ""}>
+          <i class="fa-solid fa-rotate${AC.resetting ? " fa-spin" : ""}"></i>
+          ${AC.resetting ? "Checking…" : "Reset & Check Again"}
+        </button>
+        <span class="ac-attempts-note">Attempts so far: ${alarm.attempts}</span>
+      </div>
+      <div id="ac-reset-result"></div>`
+    : `
+      <div class="ac-detail-footer">
+        <span class="ac-attempts-note">Resolved after ${acDuration(alarm.occurred_at, alarm.resolved_at)}</span>
+      </div>`;
+
+  bodyEl.innerHTML = `
+    <div class="ac-detail-top">
+      <span class="ac-sev ac-sev-${alarm.severity}">${acSeverityLabel(alarm.severity)}</span>
+      <span class="ac-detail-tag mono">${escapeHtml(alarm.tag)}</span>
+      ${acSourceBadge(alarm.source)}
+    </div>
+    <table class="data-table ac-detail-table">
+      <tbody>
+        <tr><td>Description</td><td colspan="2">${escapeHtml(alarm.description)}</td></tr>
+        <tr><td>Occurred</td><td colspan="2" class="mono">${acFormatDate(alarm.occurred_at)}</td></tr>
+        ${!isCurrent ? `<tr><td>Resolved</td><td colspan="2" class="mono">${acFormatDate(alarm.resolved_at)}</td></tr>` : ""}
+      </tbody>
+    </table>
+    ${instructionsHtml}
+    ${footerHtml}
+  `;
+
+  if (isCurrent) {
+    document.getElementById("ac-reset-btn").addEventListener("click", () => acResetAlarm(alarm.id));
+  }
+}
+
+function acSelect(id) {
+  AC.selectedId = id;
+  acRenderTable();
+  acRenderDetail();
+}
+
+async function acResetAlarm(id) {
+  const alarm = AC.current.find((a) => a.id === id);
+  if (!alarm || AC.resetting) return;
+
+  AC.resetting = true;
+  acRenderDetail();
+
+  // Placeholder: replace with a real POST /api/alarms/:id/reset call that
+  // re-checks the underlying condition and returns { cleared: bool }.
+  await new Promise((resolve) => setTimeout(resolve, 900));
+
+  alarm.attempts += 1;
+  const cleared = alarm.attempts >= alarm.clearsAfterAttempts;
+  AC.resetting = false;
+
+  const resultBox = document.getElementById("ac-reset-result");
+
+  if (cleared) {
+    AC.current = AC.current.filter((a) => a.id !== id);
+    AC.history = [
+      {
+        id: 1000 + id,
+        tag: alarm.tag,
+        source: alarm.source,
+        severity: alarm.severity,
+        description: alarm.description,
+        occurred_at: alarm.occurred_at,
+        resolved_at: new Date().toISOString(),
+        resolution: "Cleared after operator followed the listed recovery steps and reset.",
+      },
+      ...AC.history,
+    ];
+    AC.selectedId = null;
+    acRenderCounts();
+    acRenderTable();
+    acRenderDetail();
+    showToast(`${alarm.tag} cleared and moved to history.`, "success");
+  } else {
+    acRenderTable();
+    acRenderDetail();
+    if (resultBox) {
+      // acRenderDetail rebuilds the DOM, so re-fetch the fresh node.
+    }
+    const freshBox = document.getElementById("ac-reset-result");
+    if (freshBox) {
+      freshBox.innerHTML = `<div class="alert alert-error" style="margin-top:10px;">Alarm is still present. Please complete the steps above and try again.</div>`;
+    }
+    showToast(`${alarm.tag} is still active.`, "error");
+  }
+}
+
+PAGE_INIT.alarm_center = function () {
+  AC.tab = "current";
+  AC.selectedId = null;
+
+  document.querySelectorAll(".ac-tab").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      document.querySelectorAll(".ac-tab").forEach((b) => b.classList.remove("active"));
+      btn.classList.add("active");
+      AC.tab = btn.dataset.tab;
+      AC.selectedId = null;
+      acRenderTable();
+      acRenderDetail();
+    });
+  });
+
+  document.getElementById("ac-refresh-btn").addEventListener("click", async () => {
+    await acFetchAlarms();
+    acRenderCounts();
+    acRenderTable();
+    acRenderDetail();
+    document.getElementById("ac-last-updated").textContent = `Updated ${new Date().toLocaleTimeString()}`;
+  });
+
+  (async () => {
+    await acFetchAlarms();
+    acRenderCounts();
+    acRenderTable();
+    acRenderDetail();
+    document.getElementById("ac-last-updated").textContent = `Updated ${new Date().toLocaleTimeString()}`;
+  })();
+};
 
 /* ============================================================
    TOAST — small popup for permission/notice messages
@@ -486,6 +1036,16 @@ function msRenderDetail(pallet, condition) {
 
   const items = condition.conditions || [];
 
+  const lotNoRow = condition.check_lot_no ? `
+  <div class="ms-cond-edit-row ms-lotno-row">
+    <div class="ms-cond-edit-meta">
+      <span class="ms-cond-edit-name">Lot No.</span>
+      <span class="ms-cond-edit-blk mono">BLK ${padBlk(condition.lot_no_block || 0)}</span>
+    </div>
+    <input type="text" class="ms-cond-edit-input ms-lotno-input" value="${escapeHtml(condition.lot_no || "")}" />
+    <button type="button" class="btn btn-sm btn-primary ms-lotno-set-btn">Set</button>
+  </div>` : "";
+
   const editableRows = items.length
     ? items.map((it) => `
       <div class="ms-cond-edit-row" data-item-id="${it.id}" data-pallet="${pallet}">
@@ -533,8 +1093,7 @@ function msRenderDetail(pallet, condition) {
     </div>
 
     <div class="card-title" style="margin-top:10px;">Conditions <span style="font-weight:400;color:var(--ink-faint);font-size:11px;">(operators can update values)</span></div>
-    <div class="ms-cond-edit-list">${editableRows}</div>
-
+    <div class="ms-cond-edit-list">${lotNoRow}${editableRows}</div>
     <button type="button" class="btn btn-sm ms-edit-model-btn" data-edit-id="${condition.id}">Edit Model</button>
   `;
 
@@ -559,6 +1118,19 @@ function msRenderDetail(pallet, condition) {
       document.getElementById("ms-confirm-backdrop").classList.add("open");
     });
   });
+  const lotNoBtn = wrap.querySelector(".ms-lotno-set-btn");
+  if (lotNoBtn) {
+    lotNoBtn.addEventListener("click", () => {
+      const input = wrap.querySelector(".ms-lotno-input");
+      const newValue = input.value.trim();
+      if (!newValue) { showToast("Lot No. cannot be empty."); return; }
+      if (newValue === condition.lot_no) { showToast("No change.", "info"); return; }
+      MS.pendingSet = { pallet, modelId: condition.id, itemId: null, newValue, oldValue: condition.lot_no, name: "Lot No.", isLotNo: true };
+      document.getElementById("ms-confirm-text").textContent =
+        `Change "Lot No." from "${condition.lot_no || "(empty)"}" to "${newValue}"?`;
+      document.getElementById("ms-confirm-backdrop").classList.add("open");
+    });
+  }  
 }
 
 async function msConfirmSetValue() {
@@ -566,10 +1138,9 @@ async function msConfirmSetValue() {
   document.getElementById("ms-confirm-backdrop").classList.remove("open");
   if (!p) return;
   try {
-    const res = await apiFetch(`/api/models/${p.modelId}/conditions/${p.itemId}`, {
-      method: "PATCH",
-      body: JSON.stringify({ condition_value: p.newValue }),
-    });
+    const url = p.isLotNo ? `/api/models/${p.modelId}/lotno` : `/api/models/${p.modelId}/conditions/${p.itemId}`;
+    const body = p.isLotNo ? { lot_no: p.newValue } : { condition_value: p.newValue };
+    const res = await apiFetch(url, { method: "PATCH", body: JSON.stringify(body) });
     if (!res.ok) {
       const data = await res.json().catch(() => ({}));
       showToast(data.error || "Update failed.");
@@ -679,6 +1250,10 @@ function msOpenModal(condition) {
   document.getElementById("ms-f-grade").value = condition ? condition.control_grade || "" : "";
 
   document.getElementById("ms-f-camera").checked = condition ? !!condition.check_camera : true;
+  document.getElementById("ms-f-lotno").checked = condition ? !!condition.check_lot_no : false;
+  document.getElementById("ms-f-lotno-block").value = condition && condition.lot_no_block != null ? condition.lot_no_block : 0;
+  document.getElementById("ms-f-lotno-value").value = condition && condition.lot_no ? condition.lot_no : "";
+  msToggleCheckParams("ms-f-lotno", "ms-lotno-params-wrap");  
   document.getElementById("ms-modal-delete-btn").style.display = condition ? "" : "none";
 
   msToggleCheckParams("ms-f-start2d", "ms-start2d-params-wrap");
@@ -711,6 +1286,9 @@ function msCollectFormPayload() {
     control_grade: document.getElementById("ms-f-grade").value.trim(),
     check_camera: document.getElementById("ms-f-camera").checked,
     conditions: msCaptureConditionsFromDom(),
+    check_lot_no: document.getElementById("ms-f-lotno").checked,
+    lot_no_block: document.getElementById("ms-f-lotno-block").value,
+    lot_no: document.getElementById("ms-f-lotno-value").value.trim(),
   };
 }
 

@@ -87,3 +87,25 @@ ALTER TABLE model_condition
   ADD COLUMN check_start2dcode BOOLEAN NOT NULL DEFAULT FALSE,
   ADD COLUMN start2dcode_params JSON NULL DEFAULT NULL,
   ADD COLUMN read2dcode_detailed VARCHAR(4) NOT NULL DEFAULT '0';
+
+  -- Lot No. — fixed-name condition (like a condition, but singular per model
+-- and name can never change). Operators edit lot_no the same way they edit
+-- other condition values; only admins toggle it on/off or move its BLK.
+ALTER TABLE model_condition
+  ADD COLUMN check_lot_no BOOLEAN NOT NULL DEFAULT FALSE,
+  ADD COLUMN lot_no VARCHAR(255) NULL DEFAULT NULL,
+  ADD COLUMN lot_no_block SMALLINT NULL DEFAULT NULL;
+
+-- Monitor page: one row per completed part (the "count part" trick),
+-- used to build production history / traceability by lot.
+CREATE TABLE IF NOT EXISTS production_log (
+    id        INT AUTO_INCREMENT PRIMARY KEY,
+    model     VARCHAR(255) NOT NULL,
+    job_no    SMALLINT NOT NULL,
+    pallet_no ENUM('Pallet1', 'Pallet2') NOT NULL,
+    lot_no    VARCHAR(255) NULL DEFAULT NULL,
+    count     INT NOT NULL,
+    marked_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB;
+
+CREATE INDEX idx_production_log_pallet ON production_log (pallet_no, marked_at);

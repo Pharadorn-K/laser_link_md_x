@@ -28,6 +28,12 @@ function validateBody(body) {
   if (!['Pallet1', 'Pallet2'].includes(body.pallet_no)) {
     return "pallet_no must be 'Pallet1' or 'Pallet2'.";
   }
+  if (toBool(body.check_lot_no)) {
+    const lotBlock = Number(body.lot_no_block);
+    if (!Number.isInteger(lotBlock) || lotBlock < 0 || lotBlock > 255) {
+      return 'Lot No. BLK number must be an integer between 0 and 255.';
+    }
+  }
 
   const conditions = Array.isArray(body.conditions) ? body.conditions : [];
   if (conditions.length > MAX_CONDITIONS) {
@@ -56,6 +62,10 @@ function buildFieldsFromBody(body) {
     check_grade2dcode: toBool(body.check_grade2dcode),
     control_grade: body.control_grade ? String(body.control_grade).trim() : null,
     check_camera: toBool(body.check_camera),
+    check_lot_no: toBool(body.check_lot_no),
+    lot_no: body.lot_no ? String(body.lot_no).trim() : null,
+    lot_no_block: body.check_lot_no && body.lot_no_block !== undefined && body.lot_no_block !== ''
+      ? Number(body.lot_no_block) : null,
   };
 }
 
@@ -230,6 +240,20 @@ async function updateConditionValue(req, res) {
   return res.json(full);
 }
 // add updateConditionValue to module.exports
+async function updateLotNo(req, res) {
+  const { id } = req.params;
+  const { lot_no } = req.body;
+  if (!lot_no || !String(lot_no).trim()) {
+    return res.status(400).json({ error: 'lot_no is required.' });
+  }
+  const [result] = await pool.query(
+    'UPDATE model_condition SET lot_no = ? WHERE id = ?',
+    [String(lot_no).trim(), id]
+  );
+  if (result.affectedRows === 0) return res.status(404).json({ error: 'Model condition not found.' });
+  const full = await getFullModel(id);
+  return res.json(full);
+}
 
 module.exports = {
   listModels,
@@ -238,6 +262,7 @@ module.exports = {
   updateModel,
   deleteModel,
   updateConditionValue,
+  updateLotNo,
   listConditionNames,
   MAX_CONDITIONS,
 };

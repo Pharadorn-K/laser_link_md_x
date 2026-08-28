@@ -1,11 +1,49 @@
 <!-- frontend/pages/monitor.html -->
 <!-- ============================================================
-     monitor.html — placeholder, pending future development
+     monitor.html — loaded into #content by dashboard.js
+     Logic lives in dashboard.js, section "FOR MONITOR PAGE"
      ============================================================ -->
-<div class="page-header">
-  <div>
-    <h1>Monitor</h1>
-    <p>This page is not built yet.</p>
+<div class="mon-page">
+
+  <div class="mon-topbar">
+    <div>
+      <h1>Monitor</h1>
+      <p>Live production view — confirms the Auto flow running on each pallet.</p>
+    </div>
+    <div class="mon-topbar-actions">
+      <span class="status-pill offline" id="mon-signal-pill"><span class="dot"></span> Waiting for signal</span>
+      <button class="btn btn-primary" id="mon-simulate-btn">Simulate 2-Button Start</button>
+    </div>
+  </div>
+
+  <div class="mon-grid">
+
+    <!-- ================= PALLET 1 ================= -->
+    <div class="card mon-pallet-card" id="mon-card-Pallet1">
+      <div class="card-title">Pallet 1</div>
+      <div class="mon-pallet-body" id="mon-body-Pallet1"><!-- filled by JS --></div>
+      <div class="wm-lock-overlay" id="mon-lock-Pallet1">
+        <div class="wm-lock-icon"><i class="fa-solid fa-ban"></i></div>
+        <div class="wm-lock-text">No model selected for Pallet 1 — choose one on Model Setting.</div>
+      </div>
+    </div>
+
+    <!-- ================= LIVE SEQUENCE ================= -->
+    <div class="card mon-seq-card">
+      <div class="card-title">Live Sequence</div>
+      <div class="mon-seq-idle" id="mon-seq-idle">Waiting for the 2-push-button start signal…</div>
+      <ol class="wm-seq-list" id="mon-seq-list" style="display:none;"></ol>
+    </div>
+
+    <!-- ================= PALLET 2 ================= -->
+    <div class="card mon-pallet-card" id="mon-card-Pallet2">
+      <div class="card-title">Pallet 2</div>
+      <div class="mon-pallet-body" id="mon-body-Pallet2"><!-- filled by JS --></div>
+      <div class="wm-lock-overlay" id="mon-lock-Pallet2">
+        <div class="wm-lock-icon"><i class="fa-solid fa-ban"></i></div>
+        <div class="wm-lock-text">No model selected for Pallet 2 — choose one on Model Setting.</div>
+      </div>
+    </div>
+
   </div>
 </div>
-<div class="page-placeholder">Coming soon.</div>

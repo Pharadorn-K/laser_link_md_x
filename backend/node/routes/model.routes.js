@@ -16,4 +16,5 @@ router.post('/', requireRole('admin'), ctrl.createModel);
 router.put('/:id', requireRole('admin'), ctrl.updateModel);
 router.delete('/:id', requireRole('admin'), ctrl.deleteModel);
 router.patch('/:id/conditions/:itemId', requireAuth, ctrl.updateConditionValue);
+router.patch('/:id/lotno', requireAuth, ctrl.updateLotNo);
 module.exports = router;

@@ -147,6 +147,60 @@ table.data-table tr:last-child td { border-bottom: none; }
 .eq-log .line-warn { color: #f0c96b; }
 
 /* ---------------------------------------------------------
+   FOR MONITOR PAGE — one-screen, two pallet blocks + sequence
+   --------------------------------------------------------- */
+.mon-page {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  height: calc(100vh - 56px - 40px);
+  min-height: 480px;
+}
+.mon-topbar {
+  display: flex; align-items: flex-start; justify-content: space-between;
+  flex: 0 0 auto;
+}
+.mon-topbar h1 { font-size: 18px; margin: 0; }
+.mon-topbar p { margin: 2px 0 0; color: var(--ink-soft); font-size: 13px; }
+.mon-topbar-actions { display: flex; align-items: center; gap: 10px; }
+
+.mon-grid {
+  display: grid;
+  grid-template-columns: 1fr 260px 1fr;
+  gap: 16px;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+@media (max-width: 1100px) {
+  .mon-grid { grid-template-columns: 1fr; height: auto; }
+  .mon-page { height: auto; min-height: 0; }
+}
+
+.mon-pallet-card { position: relative; display: flex; flex-direction: column; overflow: hidden; }
+.mon-pallet-body { flex: 1 1 auto; display: flex; flex-direction: column; gap: 14px; }
+
+.mon-model-row { display: flex; align-items: center; justify-content: space-between; }
+.mon-model-name { font-size: 15px; font-weight: 800; }
+.mon-model-meta { font-size: 12px; color: var(--ink-faint); margin-top: 2px; }
+
+.mon-count-block {
+  flex: 1 1 auto;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  border: 1px dashed var(--line);
+  border-radius: var(--radius);
+  padding: 18px;
+}
+.mon-count-label { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--ink-faint); }
+.mon-count-value { font-size: 48px; font-weight: 800; font-family: var(--font-mono); color: var(--accent-strong); line-height: 1.2; }
+.mon-count-sub { font-size: 11px; color: var(--ink-faint); margin-top: 4px; }
+
+.mon-dev-row { display: flex; justify-content: flex-end; flex: 0 0 auto; }
+
+.mon-seq-card { display: flex; flex-direction: column; overflow-y: auto; }
+.mon-seq-idle { color: var(--ink-faint); font-size: 12.5px; text-align: center; padding: 20px 6px; }
+
+
+/* ---------------------------------------------------------
   FOR USER MANAGEMENT PAGE  (pages/all_user.html)
    --------------------------------------------------------- */
 .user-filter-bar { display: flex; gap: 8px; margin-bottom: 14px; }
@@ -168,7 +222,7 @@ table.data-table tr:last-child td { border-bottom: none; }
 .profile-header .eid { font-family: var(--font-mono); color: var(--ink-faint); font-size: 12px; }
 
 /* ---------------------------------------------------------
-   FOR MODEL SET PAGE  (pages/model_set.html)
+   FOR MODEL SETTING PAGE  (pages/model_set.html)
    --------------------------------------------------------- */
 .ms-empty {
   color: var(--ink-faint);
@@ -314,7 +368,7 @@ table.data-table tr:last-child td { border-bottom: none; }
 .ms-start2d-grid input { font-family: var(--font-mono); }
 
 .ms-modal-sm { max-width: 380px; }
-
+.ms-lotno-row { border-color: var(--accent-strong); background: var(--accent-soft); }
 /* global toast (permission / notice popups) */
 .global-toast {
   position: fixed; top: 18px; left: 50%;
@@ -434,3 +488,82 @@ table.data-table tr:last-child td { border-bottom: none; }
 .wm-lock-overlay.show { display: flex; }
 .wm-lock-icon { font-size: 28px; }
 .wm-lock-text { font-size: 13px; font-weight: 700; max-width: 220px; text-align: center; }
+
+/* ---------------------------------------------------------
+   FOR ALARM CENTER PAGE  (pages/alarm_center.html)
+   --------------------------------------------------------- */
+.ac-refresh-row { display: flex; align-items: center; gap: 10px; }
+.ac-updated { font-size: 12px; color: var(--ink-faint); }
+
+.ac-tab-bar { display: flex; gap: 8px; margin-bottom: 14px; }
+.ac-tab {
+  padding: 8px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: #fff;
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--ink-soft);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.ac-tab.active { background: var(--bg-sidebar); color: #fff; border-color: var(--bg-sidebar); }
+.ac-tab-count {
+  font-size: 11px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: rgba(255,255,255,.15);
+  color: inherit;
+}
+.ac-tab:not(.active) .ac-tab-count { background: var(--line-soft); color: var(--ink-soft); }
+
+.ac-grid { align-items: start; }
+.ac-list-card, .ac-detail-card { min-height: 380px; }
+.ac-table-wrap { overflow-x: auto; }
+
+.ac-row { cursor: pointer; }
+.ac-row:hover { background: var(--line-soft); }
+.ac-row.ac-row-selected { background: var(--accent-soft); }
+
+.ac-source-badge {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 12px; font-weight: 600; color: var(--ink-soft);
+  white-space: nowrap;
+}
+
+.ac-sev {
+  display: inline-block;
+  font-size: 11px; font-weight: 700;
+  padding: 3px 9px; border-radius: 999px;
+}
+.ac-sev-error { background: var(--err-soft); color: var(--err); }
+.ac-sev-warn  { background: var(--warn-soft); color: var(--warn); }
+.ac-sev-info  { background: var(--info-soft); color: var(--info); }
+
+.ac-detail-empty {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 10px;
+  color: var(--ink-faint);
+  font-size: 13px;
+  height: 260px;
+  text-align: center;
+}
+.ac-detail-empty i { font-size: 22px; }
+
+.ac-detail-top { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; }
+.ac-detail-tag { font-size: 13px; font-weight: 700; }
+
+.ac-detail-table td:first-child { color: var(--ink-soft); font-weight: 600; width: 30%; }
+
+.ac-instructions { margin: 14px 0; }
+.ac-instructions-label {
+  font-size: 12px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: .04em; color: var(--ink-soft); margin-bottom: 8px;
+}
+.ac-step-list { margin: 0; padding-left: 20px; }
+.ac-step-list li { margin-bottom: 8px; font-size: 13.5px; line-height: 1.5; }
+.ac-resolution-text { font-size: 13.5px; color: var(--ink-soft); line-height: 1.5; }
+
+.ac-detail-footer { display: flex; align-items: center; gap: 12px; margin-top: 6px; }
+.ac-attempts-note { font-size: 12px; color: var(--ink-faint); }
