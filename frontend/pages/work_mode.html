@@ -1,11 +1,87 @@
-<!-- frontend/pages/manual.html -->
+<!-- frontend/pages/work_mode.html -->
 <!-- ============================================================
-     manual.html — placeholder, pending future development
+     work_mode.html — loaded into #content by dashboard.js
+     Logic lives in dashboard.js, section "FOR WORK MODE PAGE"
      ============================================================ -->
-<div class="page-header">
-  <div>
-    <h1>Work Mode</h1>
-    <p>This page is not built yet.</p>
+<div class="wm-page">
+
+  <!-- ---- Row 1: mode select ---- -->
+  <div class="card wm-mode-row">
+    <div class="field wm-mode-field">
+      <label for="wm-mode-select">Work Mode</label>
+      <select id="wm-mode-select">
+        <option value="">— select mode —</option>
+        <option value="MANUAL">MANUAL</option>
+        <option value="AUTO1-2">AUTO 1-2 (both pallets)</option>
+        <option value="AUTO1">AUTO 1 (Pallet 1 only)</option>
+        <option value="AUTO2">AUTO 2 (Pallet 2 only)</option>
+      </select>
+    </div>
+    <button class="btn btn-primary" id="wm-set-mode-btn">Set Mode</button>
+    <span class="wm-active-mode" id="wm-active-mode-pill">No mode active</span>
+  </div>
+
+  <!-- ---- Row 2: content ---- -->
+  <div class="grid-2 wm-content-grid">
+
+    <!-- ================= MANUAL BLOCK ================= -->
+    <div class="card wm-block" id="wm-manual-block">
+      <div class="card-title">Manual Control</div>
+
+      <div class="wm-manual-grid">
+        <div class="wm-cmd-group">
+          <div class="wm-cmd-group-label">I/O (door / pallet)</div>
+          <button class="btn wm-cmd-btn" data-cmd="door_open">Open Door</button>
+          <button class="btn wm-cmd-btn" data-cmd="door_close">Close Door</button>
+          <button class="btn wm-cmd-btn" data-cmd="cyl1_out">Cylinder 1: Pallet 1 Out</button>
+          <button class="btn wm-cmd-btn" data-cmd="cyl2_in">Cylinder 2: Pallet 2 In</button>
+        </div>
+        <div class="wm-cmd-group">
+          <div class="wm-cmd-group-label">Laser</div>
+          <button class="btn wm-cmd-btn" data-cmd="start_marking">Start Marking</button>
+          <button class="btn wm-cmd-btn" data-cmd="stop_marking">Stop Marking</button>
+          <button class="btn wm-cmd-btn" data-cmd="guide_laser">Guide Laser</button>
+          <button class="btn wm-cmd-btn" data-cmd="clear_error">Clear Error</button>
+        </div>
+      </div>
+
+      <div class="card-title" style="margin-top:10px;">
+        Output Log
+        <button class="btn btn-sm btn-ghost" id="wm-clear-log-btn">Clear</button>
+      </div>
+      <div class="wm-log" id="wm-manual-log"></div>
+
+      <div class="wm-lock-overlay" id="wm-manual-lock">
+        <div class="wm-lock-icon">&#128274;</div>
+        <div class="wm-lock-text">Locked — switch to MANUAL mode to unlock</div>
+      </div>
+    </div>
+
+    <!-- ================= AUTO BLOCK ================= -->
+    <div class="card wm-block" id="wm-auto-block">
+      <div class="card-title">Auto Sequence</div>
+      <div class="alert alert-info wm-interlock-note">
+        ⚠ Interlock signals from equipment are not connected yet — this runs in simulation mode only.
+      </div>
+
+      <div class="wm-pallet-status-row" id="wm-pallet-status-row"><!-- filled by JS --></div>
+
+      <div class="wm-seq-wrap">
+        <div class="card-title" style="margin-top:4px;">Sequence</div>
+        <ol class="wm-seq-list" id="wm-seq-list"><!-- filled by JS --></ol>
+      </div>
+
+      <div class="wm-auto-actions">
+        <button class="btn btn-primary" id="wm-start-seq-btn">&#9654; Start Sequence</button>
+        <button class="btn" id="wm-stop-seq-btn" disabled>&#9724; Stop</button>
+        <button class="btn btn-primary" id="wm-confirm-seq-btn" style="margin-left:auto;" disabled>Confirm &amp; Go to Monitor</button>
+      </div>
+
+      <div class="wm-lock-overlay" id="wm-auto-lock">
+        <div class="wm-lock-icon">&#128274;</div>
+        <div class="wm-lock-text">Locked — select an AUTO mode to unlock</div>
+      </div>
+    </div>
+
   </div>
 </div>
-<div class="page-placeholder">Coming soon.</div>

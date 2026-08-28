@@ -186,21 +186,236 @@ function getSelectedJobCommand(station) {
 PAGE_INIT.monitor = function () {};
 
 /* ============================================================
-   FOR WORK MODE / ALARM CENTER — placeholders
+   FOR WORK MODE PAGE
    ============================================================ */
-PAGE_INIT.work_mode = function () {};
+const WM_MODE_KEY = "nlm_work_mode";
+const WM_STEPS = [
+  { id: "open_door",   label: "Open door" },
+  { id: "wait_start",  label: "Wait for start signal" },
+  { id: "close_door",  label: "Close door" },
+  { id: "check_cam",   label: "Check camera" },
+  { id: "change_pallet", label: "Change pallet (Cyl.1 out / Cyl.2 in)" },
+  { id: "start_mark",  label: "Start marking" },
+];
+
+const WM = {
+  mode: null,       // "MANUAL" | "AUTO1-2" | "AUTO1" | "AUTO2" | null
+  seqRunning: false,
+  seqTimer: null,
+  seqIndex: -1,
+};
+
+function wmLoadMode() {
+  return localStorage.getItem(WM_MODE_KEY) || null;
+}
+function wmSaveMode(mode) {
+  if (mode) localStorage.setItem(WM_MODE_KEY, mode);
+  else localStorage.removeItem(WM_MODE_KEY);
+}
+
+function wmLog(message, kind = "info") {
+  const log = document.getElementById("wm-manual-log");
+  if (!log) return;
+  const ts = new Date().toLocaleTimeString();
+  const cls = kind === "error" ? "line-err" : kind === "warn" ? "line-warn" : kind === "ok" ? "line-ok" : "";
+  const line = document.createElement("div");
+  line.className = cls;
+  line.textContent = `[${ts}] ${message}`;
+  log.appendChild(line);
+  log.scrollTop = log.scrollHeight;
+}
+
+const WM_CMD_LABELS = {
+  door_open: "Open Door",
+  door_close: "Close Door",
+  cyl1_out: "Cylinder 1: Pallet 1 Out",
+  cyl2_in: "Cylinder 2: Pallet 2 In",
+  start_marking: "Start Marking",
+  stop_marking: "Stop Marking",
+  guide_laser: "Guide Laser",
+  clear_error: "Clear Error",
+};
+
+function wmSimulateCommand(cmdKey, btn) {
+  const label = WM_CMD_LABELS[cmdKey] || cmdKey;
+  wmLog(`>>> ${label} (simulated — no interlock/equipment connected)`, "warn");
+  btn.disabled = true;
+  setTimeout(() => {
+    wmLog(`<<< ${label}: OK (simulated)`, "ok");
+    btn.disabled = false;
+  }, 400);
+}
+
+function wmRenderPalletStatus() {
+  const row = document.getElementById("wm-pallet-status-row");
+  if (!row) return;
+  const pallets = WM.mode === "AUTO1" ? ["Pallet1"] : WM.mode === "AUTO2" ? ["Pallet2"] : ["Pallet1", "Pallet2"];
+
+  row.innerHTML = pallets.map((p) => {
+    const job = getSelectedJob(p);
+    const ok = !!job;
+    return `
+      <div class="wm-pallet-status ${ok ? "ok" : "warn"}">
+        <div class="wm-pallet-status-title">${p}</div>
+        ${ok
+          ? `<div class="mono">${job.model} · Job ${padJob(job.job_no)}</div>`
+          : `<div class="wm-pallet-status-alarm">⚠ No model selected for ${p}</div>`}
+      </div>`;
+  }).join("");
+}
+
+function wmSeqStepsForMode() {
+  // AUTO1-2 alternates pallets; for the UI mock, just show the shared sequence once.
+  return WM_STEPS;
+}
+
+function wmRenderSeqList(activeIndex = -1, doneUpTo = -1) {
+  const list = document.getElementById("wm-seq-list");
+  if (!list) return;
+  const steps = wmSeqStepsForMode();
+  list.innerHTML = steps.map((s, i) => {
+    let stateClass = "pending";
+    if (i <= doneUpTo) stateClass = "done";
+    else if (i === activeIndex) stateClass = "active";
+    return `<li class="wm-seq-step ${stateClass}"><span class="wm-seq-num">${i + 1}</span>${s.label}</li>`;
+  }).join("");
+}
+
+function wmAllModelsSelected() {
+  const pallets = WM.mode === "AUTO1" ? ["Pallet1"] : WM.mode === "AUTO2" ? ["Pallet2"] : ["Pallet1", "Pallet2"];
+  return pallets.every((p) => !!getSelectedJob(p));
+}
+
+function wmStartSequence() {
+  if (!wmAllModelsSelected()) {
+    showToast("Select a model for the target pallet(s) before starting.");
+    return;
+  }
+  const steps = wmSeqStepsForMode();
+  WM.seqRunning = true;
+  WM.seqIndex = 0;
+  document.getElementById("wm-start-seq-btn").disabled = true;
+  document.getElementById("wm-stop-seq-btn").disabled = false;
+  document.getElementById("wm-confirm-seq-btn").disabled = true;
+  wmRenderSeqList(0, -1);
+
+  const stepDelayMs = 900;
+  const runStep = () => {
+    if (!WM.seqRunning) return;
+    wmRenderSeqList(WM.seqIndex, WM.seqIndex - 1);
+    if (WM.seqIndex >= steps.length) {
+      WM.seqRunning = false;
+      wmRenderSeqList(-1, steps.length - 1);
+      document.getElementById("wm-start-seq-btn").disabled = false;
+      document.getElementById("wm-stop-seq-btn").disabled = true;
+      document.getElementById("wm-confirm-seq-btn").disabled = false;
+      return;
+    }
+    WM.seqTimer = setTimeout(() => {
+      WM.seqIndex += 1;
+      runStep();
+    }, stepDelayMs);
+  };
+  runStep();
+}
+
+function wmStopSequence() {
+  WM.seqRunning = false;
+  clearTimeout(WM.seqTimer);
+  document.getElementById("wm-start-seq-btn").disabled = false;
+  document.getElementById("wm-stop-seq-btn").disabled = true;
+  document.getElementById("wm-confirm-seq-btn").disabled = true;
+  wmRenderSeqList(-1, -1);
+}
+
+function wmApplyMode(mode) {
+  WM.mode = mode;
+  wmSaveMode(mode);
+
+  const pill = document.getElementById("wm-active-mode-pill");
+  pill.textContent = mode ? `Active: ${mode}` : "No mode active";
+  pill.classList.toggle("set", !!mode);
+
+  const manualLock = document.getElementById("wm-manual-lock");
+  const autoLock = document.getElementById("wm-auto-lock");
+  const isManual = mode === "MANUAL";
+  const isAuto = mode === "AUTO1-2" || mode === "AUTO1" || mode === "AUTO2";
+
+  manualLock.classList.toggle("show", !isManual);
+  autoLock.classList.toggle("show", !isAuto);
+
+  if (isAuto) {
+    wmRenderPalletStatus();
+    wmRenderSeqList(-1, -1);
+  }
+  wmStopSequence();
+}
+
+PAGE_INIT.work_mode = function () {
+  const savedMode = wmLoadMode();
+  document.getElementById("wm-mode-select").value = savedMode || "";
+  wmApplyMode(savedMode);
+
+  document.getElementById("wm-set-mode-btn").addEventListener("click", () => {
+    const value = document.getElementById("wm-mode-select").value;
+    if (!value) { showToast("Choose a mode first."); return; }
+    wmApplyMode(value);
+    showToast(`Mode set to ${value}.`, "success");
+  });
+
+  document.querySelectorAll(".wm-cmd-btn").forEach((btn) => {
+    btn.addEventListener("click", () => wmSimulateCommand(btn.dataset.cmd, btn));
+  });
+  document.getElementById("wm-clear-log-btn").addEventListener("click", () => {
+    document.getElementById("wm-manual-log").innerHTML = "";
+  });
+
+  document.getElementById("wm-start-seq-btn").addEventListener("click", wmStartSequence);
+  document.getElementById("wm-stop-seq-btn").addEventListener("click", wmStopSequence);
+  document.getElementById("wm-confirm-seq-btn").addEventListener("click", () => {
+    loadPage("monitor");
+  });
+};
+
+PAGE_TEARDOWN.work_mode = function () {
+  wmStopSequence();
+};
+
+/* alarm_center — still a placeholder */
 PAGE_INIT.alarm_center = function () {};
+
+/* ============================================================
+   TOAST — small popup for permission/notice messages
+   ============================================================ */
+function showToast(message, type = "error", ms = 2200) {
+  let box = document.getElementById("global-toast");
+  if (!box) {
+    box = document.createElement("div");
+    box.id = "global-toast";
+    document.body.appendChild(box);
+  }
+  box.className = `global-toast toast-${type} show`;
+  box.textContent = message;
+  clearTimeout(showToast._t);
+  showToast._t = setTimeout(() => box.classList.remove("show"), ms);
+}
+
+function isAdmin() {
+  return CURRENT_USER && CURRENT_USER.role === "admin";
+}
 
 /* ============================================================
    FOR MODEL SETTING PAGE
    ============================================================ */
-const MS_MAX_CONDITIONS = 20; // mirrors MAX_CONDITIONS in model.controller.js
+const MS_MAX_CONDITIONS = 20;
+const START2D_LABELS = ["A","B","C","D","E","F","G","H","I","J","K","L","M","N","O","P","Q"];
 
 const MS = {
-  data: { Pallet1: [], Pallet2: [] }, // rows per pallet, keyed by id
+  data: { Pallet1: [], Pallet2: [] },
   editingId: null,
-  conditions: [], // working array of {condition_name, condition_value, block_no} while modal is open
-  conditionNameChoices: [], // for the datalist autocomplete
+  conditions: [],
+  conditionNameChoices: [],
+  pendingSet: null, // {pallet, itemId, newValue, oldValue, name}
 };
 
 function msShowAlert(message, type = "error") {
@@ -225,9 +440,7 @@ async function msLoadConditionNames() {
         .map((n) => `<option value="${escapeHtml(n)}"></option>`)
         .join("");
     }
-  } catch (err) {
-    // non-critical; autocomplete just won't have suggestions
-  }
+  } catch (err) {}
 }
 
 async function msLoadPallet(pallet) {
@@ -245,11 +458,23 @@ async function msLoadPallet(pallet) {
   if (stillExists) {
     select.value = saved.id;
     msRenderDetail(pallet, stillExists);
-    setSelectedJob(pallet, stillExists); // refresh with latest data
+    setSelectedJob(pallet, stillExists);
   } else {
     setSelectedJob(pallet, null);
     msRenderDetail(pallet, null);
   }
+}
+
+function msBuildStart2DCommand(condition) {
+  const params = (condition.start2dcode_params && condition.start2dcode_params.length === 17)
+    ? condition.start2dcode_params
+    : START2D_LABELS.map(() => "");
+  return `WX,Check2DCode5=${params.join(",")}`;
+}
+function msBuildRead2DCommand(condition) {
+  const v = condition.read2dcode_detailed !== undefined && condition.read2dcode_detailed !== null
+    ? condition.read2dcode_detailed : "0";
+  return `RX,CodeReadResult=${v}`;
 }
 
 function msRenderDetail(pallet, condition) {
@@ -260,37 +485,103 @@ function msRenderDetail(pallet, condition) {
   }
 
   const items = condition.conditions || [];
-  const conditionRows =
-    items
-      .map(
-        (it) => `
-      <tr>
-        <td>${escapeHtml(it.condition_name)}</td>
-        <td class="mono">${escapeHtml(it.condition_value)}</td>
-        <td class="mono">BLK ${padBlk(it.block_no)}</td>
-      </tr>`
-      )
-      .join("") || `<tr><td colspan="3" class="eq-queue-empty">No conditions set.</td></tr>`;
+
+  const editableRows = items.length
+    ? items.map((it) => `
+      <div class="ms-cond-edit-row" data-item-id="${it.id}" data-pallet="${pallet}">
+        <div class="ms-cond-edit-meta">
+          <span class="ms-cond-edit-name">${escapeHtml(it.condition_name)}</span>
+          <span class="ms-cond-edit-blk mono">BLK ${padBlk(it.block_no)}</span>
+        </div>
+        <input type="text" class="ms-cond-edit-input" value="${escapeHtml(it.condition_value)}" />
+        <button type="button" class="btn btn-sm btn-primary ms-cond-set-btn">Set</button>
+      </div>`).join("")
+    : `<div class="eq-queue-empty">No conditions set.</div>`;
+
+  const extras = [];
+  if (condition.check_start2dcode) {
+    extras.push(`
+      <div class="ms-preview-row">
+        <span class="ms-preview-label">START 2D CODE COMMAND</span>
+        <div class="mono-box">${msBuildStart2DCommand(condition)}</div>
+      </div>`);
+  }
+  if (condition.check_read2dcode) {
+    extras.push(`
+      <div class="ms-preview-row">
+        <span class="ms-preview-label">READ 2D CODE COMMAND</span>
+        <div class="mono-box">${msBuildRead2DCommand(condition)}</div>
+      </div>`);
+  }
 
   wrap.innerHTML = `
     <table class="data-table ms-detail-table">
       <tbody>
         <tr><td>Model</td><td colspan="2">${escapeHtml(condition.model)}</td></tr>
         <tr><td>Job No.</td><td colspan="2" class="mono">${padJob(condition.job_no)}</td></tr>
-        <tr><td>Read 2D Code</td><td colspan="2">${condition.check_read2dcode ? "Yes" : "No"}</td></tr>
-        <tr><td>Grade 2D Code</td><td colspan="2">${condition.check_grade2dcode ? "Yes" : "No"}</td></tr>
+        <tr><td>Start 2D Code</td><td colspan="2">${condition.check_start2dcode ? "Yes" : "No"}</td></tr>
+        <tr><td>Check Read 2D Code</td><td colspan="2">${condition.check_read2dcode ? "Yes" : "No"}</td></tr>
+        <tr><td>Check Grade 2D Code</td><td colspan="2">${condition.check_grade2dcode ? "Yes" : "No"}</td></tr>
         <tr><td>Control Grade</td><td colspan="2">${escapeHtml(condition.control_grade) || "—"}</td></tr>
         <tr><td>Camera</td><td colspan="2">${condition.check_camera ? "Yes" : "No"}</td></tr>
-        ${conditionRows}
       </tbody>
     </table>
+    ${extras.join("")}
     <div class="ms-preview-row">
       <span class="ms-preview-label">BASE COMMAND</span>
       <div class="mono-box">${buildBaseCommand(condition)}</div>
     </div>
-    <button type="button" class="btn btn-sm" data-edit-id="${condition.id}">Edit Model</button>
+
+    <div class="card-title" style="margin-top:10px;">Conditions <span style="font-weight:400;color:var(--ink-faint);font-size:11px;">(operators can update values)</span></div>
+    <div class="ms-cond-edit-list">${editableRows}</div>
+
+    <button type="button" class="btn btn-sm ms-edit-model-btn" data-edit-id="${condition.id}">Edit Model</button>
   `;
-  wrap.querySelector("[data-edit-id]").addEventListener("click", () => msOpenModal(condition));
+
+  wrap.querySelector(".ms-edit-model-btn").addEventListener("click", () => {
+    if (!isAdmin()) { showToast("Only admin can edit models."); return; }
+    msOpenModal(condition);
+  });
+
+  wrap.querySelectorAll(".ms-cond-set-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const row = btn.closest(".ms-cond-edit-row");
+      const itemId = row.dataset.itemId;
+      const input = row.querySelector(".ms-cond-edit-input");
+      const item = items.find((i) => String(i.id) === String(itemId));
+      const newValue = input.value.trim();
+      if (!newValue) { showToast("Value cannot be empty."); return; }
+      if (newValue === item.condition_value) { showToast("No change.", "info"); return; }
+
+      MS.pendingSet = { pallet, modelId: condition.id, itemId, newValue, oldValue: item.condition_value, name: item.condition_name };
+      document.getElementById("ms-confirm-text").textContent =
+        `Change "${item.condition_name}" from "${item.condition_value}" to "${newValue}"?`;
+      document.getElementById("ms-confirm-backdrop").classList.add("open");
+    });
+  });
+}
+
+async function msConfirmSetValue() {
+  const p = MS.pendingSet;
+  document.getElementById("ms-confirm-backdrop").classList.remove("open");
+  if (!p) return;
+  try {
+    const res = await apiFetch(`/api/models/${p.modelId}/conditions/${p.itemId}`, {
+      method: "PATCH",
+      body: JSON.stringify({ condition_value: p.newValue }),
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      showToast(data.error || "Update failed.");
+      return;
+    }
+    showToast(`"${p.name}" updated.`, "success");
+    await msLoadPallet(p.pallet);
+  } catch (err) {
+    showToast("Could not reach the server.");
+  } finally {
+    MS.pendingSet = null;
+  }
 }
 
 function msConditionRowHtml(index, item) {
@@ -343,6 +634,28 @@ function msRebuildConditionRows() {
   });
 }
 
+function msBuildStart2DGrid(values) {
+  const grid = document.getElementById("ms-start2d-grid");
+  grid.innerHTML = START2D_LABELS.map((label, i) => `
+    <div class="field">
+      <label>${label}</label>
+      <input type="text" class="ms-start2d-input" data-index="${i}" value="${escapeHtml((values && values[i]) || "")}" />
+    </div>`).join("");
+}
+function msCaptureStart2DValues() {
+  return Array.from(document.querySelectorAll(".ms-start2d-input"))
+    .sort((a, b) => Number(a.dataset.index) - Number(b.dataset.index))
+    .map((inp) => inp.value.trim());
+}
+
+function msToggleCheckParams(checkboxId, wrapId) {
+  const cb = document.getElementById(checkboxId);
+  const wrap = document.getElementById(wrapId);
+  const apply = () => { wrap.style.display = cb.checked ? "" : "none"; };
+  cb.addEventListener("change", apply);
+  apply();
+}
+
 function msOpenModal(condition) {
   msClearAlert();
   document.getElementById("ms-modal-alert").innerHTML = "";
@@ -355,11 +668,22 @@ function msOpenModal(condition) {
   document.getElementById("ms-f-model").value = condition ? condition.model : "";
   document.getElementById("ms-f-jobno").value = condition ? condition.job_no : "";
   document.getElementById("ms-f-pallet").value = condition ? condition.pallet_no : "Pallet1";
-  document.getElementById("ms-f-read2d").checked = condition ? !!condition.check_read2dcode : true;
+
+  document.getElementById("ms-f-start2d").checked = condition ? !!condition.check_start2dcode : false;
+  msBuildStart2DGrid(condition ? condition.start2dcode_params : null);
+
+  document.getElementById("ms-f-read2d").checked = condition ? !!condition.check_read2dcode : false;
+  document.getElementById("ms-f-read2d-detailed").value = condition && condition.read2dcode_detailed !== undefined ? condition.read2dcode_detailed : "0";
+
   document.getElementById("ms-f-grade2d").checked = condition ? !!condition.check_grade2dcode : true;
-  document.getElementById("ms-f-camera").checked = condition ? !!condition.check_camera : true;
   document.getElementById("ms-f-grade").value = condition ? condition.control_grade || "" : "";
+
+  document.getElementById("ms-f-camera").checked = condition ? !!condition.check_camera : true;
   document.getElementById("ms-modal-delete-btn").style.display = condition ? "" : "none";
+
+  msToggleCheckParams("ms-f-start2d", "ms-start2d-params-wrap");
+  msToggleCheckParams("ms-f-read2d", "ms-read2d-params-wrap");
+  msToggleCheckParams("ms-f-grade2d", "ms-grade2d-params-wrap");
 
   MS.conditions = condition && condition.conditions && condition.conditions.length
     ? condition.conditions.map((c) => ({ ...c }))
@@ -379,10 +703,13 @@ function msCollectFormPayload() {
     model: document.getElementById("ms-f-model").value.trim(),
     job_no: document.getElementById("ms-f-jobno").value,
     pallet_no: document.getElementById("ms-f-pallet").value,
+    check_start2dcode: document.getElementById("ms-f-start2d").checked,
+    start2dcode_params: msCaptureStart2DValues(),
     check_read2dcode: document.getElementById("ms-f-read2d").checked,
+    read2dcode_detailed: document.getElementById("ms-f-read2d-detailed").value.trim() || "0",
     check_grade2dcode: document.getElementById("ms-f-grade2d").checked,
-    check_camera: document.getElementById("ms-f-camera").checked,
     control_grade: document.getElementById("ms-f-grade").value.trim(),
+    check_camera: document.getElementById("ms-f-camera").checked,
     conditions: msCaptureConditionsFromDom(),
   };
 }
@@ -406,10 +733,25 @@ PAGE_INIT.model_setting = function () {
     });
   });
 
-  document.getElementById("ms-add-model-btn").addEventListener("click", () => msOpenModal(null));
+  document.getElementById("ms-add-model-btn").addEventListener("click", () => {
+    if (!isAdmin()) { showToast("Only admin can add models."); return; }
+    msOpenModal(null);
+  });
   document.getElementById("ms-modal-cancel-btn").addEventListener("click", msCloseModal);
   document.getElementById("ms-modal-backdrop").addEventListener("click", (e) => {
     if (e.target.id === "ms-modal-backdrop") msCloseModal();
+  });
+
+  document.getElementById("ms-confirm-yes-btn").addEventListener("click", msConfirmSetValue);
+  document.getElementById("ms-confirm-no-btn").addEventListener("click", () => {
+    document.getElementById("ms-confirm-backdrop").classList.remove("open");
+    MS.pendingSet = null;
+  });
+  document.getElementById("ms-confirm-backdrop").addEventListener("click", (e) => {
+    if (e.target.id === "ms-confirm-backdrop") {
+      document.getElementById("ms-confirm-backdrop").classList.remove("open");
+      MS.pendingSet = null;
+    }
   });
 
   document.getElementById("ms-add-condition-btn").addEventListener("click", () => {
@@ -420,6 +762,7 @@ PAGE_INIT.model_setting = function () {
   });
 
   document.getElementById("ms-modal-delete-btn").addEventListener("click", async () => {
+    if (!isAdmin()) { showToast("Only admin can delete models."); return; }
     if (!MS.editingId) return;
     if (!confirm("Delete this model condition?")) return;
     try {
@@ -438,6 +781,7 @@ PAGE_INIT.model_setting = function () {
 
   document.getElementById("ms-model-form").addEventListener("submit", async (e) => {
     e.preventDefault();
+    if (!isAdmin()) { showToast("Only admin can save models."); return; }
     document.getElementById("ms-modal-alert").innerHTML = "";
     const payload = msCollectFormPayload();
 
@@ -452,7 +796,7 @@ PAGE_INIT.model_setting = function () {
       }
       msCloseModal();
       await msRefreshBothPallets();
-      await msLoadConditionNames(); // pick up any newly-typed condition name
+      await msLoadConditionNames();
       msShowAlert("Model condition saved.", "success");
     } catch (err) {
       msModalAlert("Could not reach the server.");

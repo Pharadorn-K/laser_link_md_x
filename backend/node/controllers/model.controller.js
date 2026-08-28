@@ -215,12 +215,29 @@ async function listConditionNames(req, res) {
   return res.json(rows.map((r) => r.condition_name));
 }
 
+async function updateConditionValue(req, res) {
+  const { id, itemId } = req.params;
+  const { condition_value } = req.body;
+  if (!condition_value || !String(condition_value).trim()) {
+    return res.status(400).json({ error: 'condition_value is required.' });
+  }
+  const [result] = await pool.query(
+    'UPDATE model_condition_item SET condition_value = ? WHERE id = ? AND model_condition_id = ?',
+    [String(condition_value).trim(), itemId, id]
+  );
+  if (result.affectedRows === 0) return res.status(404).json({ error: 'Condition not found.' });
+  const full = await getFullModel(id);
+  return res.json(full);
+}
+// add updateConditionValue to module.exports
+
 module.exports = {
   listModels,
   getModel,
   createModel,
   updateModel,
   deleteModel,
+  updateConditionValue,
   listConditionNames,
   MAX_CONDITIONS,
 };

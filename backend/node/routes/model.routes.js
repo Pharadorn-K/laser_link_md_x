@@ -15,5 +15,5 @@ router.get('/:id', requireAuth, ctrl.getModel);
 router.post('/', requireRole('admin'), ctrl.createModel);
 router.put('/:id', requireRole('admin'), ctrl.updateModel);
 router.delete('/:id', requireRole('admin'), ctrl.deleteModel);
-
+router.patch('/:id/conditions/:itemId', requireAuth, ctrl.updateConditionValue);
 module.exports = router;

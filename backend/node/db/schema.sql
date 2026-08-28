@@ -82,3 +82,8 @@ CREATE TABLE IF NOT EXISTS model_condition_item (
 
 CREATE INDEX idx_mci_condition_name ON model_condition_item (condition_name);
 CREATE INDEX idx_mci_model_condition_id ON model_condition_item (model_condition_id);
+
+ALTER TABLE model_condition
+  ADD COLUMN check_start2dcode BOOLEAN NOT NULL DEFAULT FALSE,
+  ADD COLUMN start2dcode_params JSON NULL DEFAULT NULL,
+  ADD COLUMN read2dcode_detailed VARCHAR(4) NOT NULL DEFAULT '0';
