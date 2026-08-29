@@ -510,6 +510,22 @@ table.data-table tr:last-child td { border-bottom: none; }
 .wm-log .line-err { color: #ff9d80; }
 .wm-log .line-warn { color: #f0c96b; }
 
+.wm-eq-note { font-size: 12px; color: var(--ink-faint); margin: -4px 0 10px; }
+
+.wm-fn-groups { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; margin-bottom: 10px; }
+.wm-fn-group { display: flex; flex-direction: column; gap: 6px; }
+.wm-fn-group-label { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--ink-faint); margin-bottom: 2px; }
+.wm-fn-btn { flex-direction: column; align-items: flex-start; gap: 2px; text-align: left; }
+.wm-fn-btn-desc { display: block; font-size: 10.5px; font-weight: 400; color: var(--ink-faint); }
+
+.wm-start-row { display: flex; align-items: center; gap: 10px; padding: 10px 0; border-top: 1px solid var(--line-soft); border-bottom: 1px solid var(--line-soft); margin: 4px 0 10px; }
+.wm-start-hint { font-size: 12px; color: var(--ink-faint); }
+
+.wm-seq-step.alarm { border-color: var(--err); background: var(--err-soft); }
+.wm-seq-step.alarm .wm-seq-num { background: var(--err); color: #fff; }
+.wm-seq-step.blocked { border-color: var(--warn); background: var(--warn-soft); }
+.wm-seq-step.blocked .wm-seq-num { background: var(--warn); color: #fff; }
+
 /* -- auto block -- */
 .wm-interlock-note { font-size: 12px; padding: 8px 10px; margin-bottom: 10px; }
 .wm-pallet-status-row { display: flex; gap: 10px; margin-bottom: 10px; }
@@ -559,6 +575,8 @@ table.data-table tr:last-child td { border-bottom: none; }
 .wm-lock-overlay.show { display: flex; }
 .wm-lock-icon { font-size: 28px; }
 .wm-lock-text { font-size: 13px; font-weight: 700; max-width: 220px; text-align: center; }
+
+
 
 /* ---------------------------------------------------------
    FOR ALARM CENTER PAGE  (pages/alarm_center.html)

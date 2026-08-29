@@ -400,27 +400,6 @@ function wmLog(message, kind = "info") {
   log.scrollTop = log.scrollHeight;
 }
 
-const WM_CMD_LABELS = {
-  door_open: "Open Door",
-  door_close: "Close Door",
-  cyl1_out: "Cylinder 1: Pallet 1 Out",
-  cyl2_in: "Cylinder 2: Pallet 2 In",
-  start_marking: "Start Marking",
-  stop_marking: "Stop Marking",
-  guide_laser: "Guide Laser",
-  clear_error: "Clear Error",
-};
-
-function wmSimulateCommand(cmdKey, btn) {
-  const label = WM_CMD_LABELS[cmdKey] || cmdKey;
-  wmLog(`>>> ${label} (simulated — no interlock/equipment connected)`, "warn");
-  btn.disabled = true;
-  setTimeout(() => {
-    wmLog(`<<< ${label}: OK (simulated)`, "ok");
-    btn.disabled = false;
-  }, 400);
-}
-
 function wmRenderPalletStatus() {
   const row = document.getElementById("wm-pallet-status-row");
   if (!row) return;
@@ -526,6 +505,213 @@ function wmApplyMode(mode) {
   wmStopSequence();
 }
 
+/* ============================================================
+   Manual function registry — one entry per button from the spec.
+   Every `run()` is a STUB today. When equipment is connected, only
+   the body needs to change (call the real interlock check + the
+   real equipment API) — the verdict shape below must stay the same
+   so the sequence runner and every button keep working unmodified.
+
+   Verdict contract:
+     { ok: true,  message }                 — success, proceed
+     { ok: false, alarm: true,  message }   — hard stop, raise alarm
+     { ok: false, alarm: false, message }   — soft stop (e.g. interlock
+                                               not satisfied yet)
+   ============================================================ */
+async function wmStub(name, ms = 500) {
+  wmLog(`>>> ${name}`);
+  await new Promise((r) => setTimeout(r, ms));
+  wmLog(`<<< ${name}: OK (simulated)`, "ok");
+  return { ok: true, message: `${name} OK (simulated)` };
+}
+
+const WM_FUNCTIONS = {
+  OPEN_FRONT_DOOR: {
+    label: "Open Front Door",
+    group: "io",
+    desc: "IAI EC-R6H-250-3-WA. Interlocks TBD: pallet not mid-travel, middle door state OK.",
+    run: () => wmStub("OPEN_FRONT_DOOR"),
+  },
+  CLOSE_FRONT_DOOR: {
+    label: "Close Front Door",
+    group: "io",
+    desc: "IAI EC-R6H-250-3-WA. Closes before pallet change or marking.",
+    run: () => wmStub("CLOSE_FRONT_DOOR"),
+  },
+  CHANGE_PALLET: {
+    label: "Change Pallet",
+    group: "pallet",
+    desc: "Swaps Pallet1/Pallet2. Interlocks TBD: front door closed, side door closed.",
+    run: () => wmStub("CHANGE_PALLET", 900),
+  },
+  CALL_PALLET1: {
+    label: "Call Pallet 1",
+    group: "pallet",
+    desc: "IAI EC-S7H-500-3-WA #2 — bring Pallet 1 to the operator-side load position.",
+    run: () => wmStub("CALL_PALLET1", 900),
+  },
+  CALL_PALLET2: {
+    label: "Call Pallet 2",
+    group: "pallet",
+    desc: "IAI EC-S7H-500-3-WA #3 — bring Pallet 2 to the operator-side load position.",
+    run: () => wmStub("CALL_PALLET2", 900),
+  },
+  CAMERA_TRIGGER: {
+    label: "Camera Trigger",
+    group: "vision",
+    desc: "Fires the MD-X2520A camera check before marking.",
+    run: () => wmStub("CAMERA_TRIGGER"),
+  },
+  CODE2D_START_READER: {
+    label: "2D Code: Start Reader",
+    group: "vision",
+    desc: "WX,Check2DCode5 — starts 2D code verification on the marked part.",
+    run: () => wmStub("2DCODE_START_READER"),
+  },
+  CODE2D_RESULT_READER: {
+    label: "2D Code: Read Result",
+    group: "vision",
+    desc: "RX,CodeReadResult — reads back the last 2D code read result.",
+    run: () => wmStub("2DCODE_RESULT_READER"),
+  },
+  CODE2D_GRADE_RESULT: {
+    label: "2D Code: Grade Result",
+    group: "vision",
+    desc: "Reads the ISO grade of the last read, checked against Control Grade.",
+    run: () => wmStub("2DCODE_GRADE_RESULT"),
+  },
+  START_MARKING: {
+    label: "Start Marking",
+    group: "laser",
+    desc: "WX,StartMarking — triggers the laser on the currently selected job.",
+    run: () => wmStub("START_MARKING", 1200),
+  },
+};
+
+const WM_GROUP_LABELS = {
+  io: "Doors",
+  pallet: "Pallet",
+  vision: "Vision / 2D Code",
+  laser: "Laser",
+};
+
+function wmRenderFnGroups() {
+  const wrap = document.getElementById("wm-fn-groups");
+  if (!wrap) return;
+  const byGroup = {};
+  Object.entries(WM_FUNCTIONS).forEach(([key, fn]) => {
+    (byGroup[fn.group] ||= []).push({ key, ...fn });
+  });
+  wrap.innerHTML = Object.entries(byGroup)
+    .map(
+      ([group, fns]) => `
+    <div class="wm-fn-group">
+      <div class="wm-fn-group-label">${WM_GROUP_LABELS[group] || group}</div>
+      ${fns
+        .map(
+          (fn) => `
+        <button type="button" class="btn wm-fn-btn" data-fn="${fn.key}">
+          ${fn.label}
+          <span class="wm-fn-btn-desc">${fn.desc}</span>
+        </button>`
+        )
+        .join("")}
+    </div>`
+    )
+    .join("");
+
+  wrap.querySelectorAll(".wm-fn-btn").forEach((btn) => {
+    btn.addEventListener("click", () => wmRunSingleFunction(btn.dataset.fn, btn));
+  });
+}
+
+async function wmRunSingleFunction(key, btn) {
+  const fn = WM_FUNCTIONS[key];
+  if (!fn) return;
+  btn.disabled = true;
+  const verdict = await fn.run();
+  btn.disabled = false;
+  if (!verdict.ok) {
+    wmLog(`!!! ${fn.label} failed: ${verdict.message}`, "error");
+    if (verdict.alarm) showToast(`Alarm: ${fn.label} — ${verdict.message}`);
+  }
+}
+
+/* ------------------------------------------------------------
+   Start Marking sequence — the semi-auto flow behind the
+   "2-hand start" / "Start Marking" button, exactly as spec'd:
+   CONDITION_START_LOOP -> ... -> CONDITION_END_LOOP. A step that
+   returns ok:false stops the run; alarm:true also raises a toast.
+   ------------------------------------------------------------ */
+const WM_START_SEQUENCE = [
+  { id: "cond_start", label: "Condition Start Loop", note: "D001 ON, D002 ON — 2-hand start pushed", fn: () => wmStub("CONDITION_START_LOOP", 200) },
+  { id: "close_front", label: "Close Front Door", fn: WM_FUNCTIONS.CLOSE_FRONT_DOOR.run },
+  { id: "camera_check", label: "Camera Check", fn: WM_FUNCTIONS.CAMERA_TRIGGER.run },
+  { id: "change_pallet", label: "Change Pallet", fn: WM_FUNCTIONS.CHANGE_PALLET.run },
+  { id: "open_front", label: "Open Front Door", fn: WM_FUNCTIONS.OPEN_FRONT_DOOR.run },
+  { id: "start_marking", label: "Start Marking", fn: WM_FUNCTIONS.START_MARKING.run },
+  { id: "code_start", label: "2D Code: Start Reader", fn: WM_FUNCTIONS.CODE2D_START_READER.run },
+  { id: "code_result", label: "2D Code: Read Result", fn: WM_FUNCTIONS.CODE2D_RESULT_READER.run },
+  { id: "code_grade", label: "2D Code: Grade Result", fn: WM_FUNCTIONS.CODE2D_GRADE_RESULT.run },
+  { id: "cond_end", label: "Condition End Loop", fn: () => wmStub("CONDITION_END_LOOP", 200) },
+];
+
+function wmRenderStartSeqList(activeIndex = -1, doneUpTo = -1, failState = null) {
+  const list = document.getElementById("wm-start-seq-list");
+  if (!list) return;
+  list.innerHTML = WM_START_SEQUENCE.map((s, i) => {
+    let cls = "pending";
+    if (failState && i === activeIndex) cls = failState; // 'alarm' | 'blocked'
+    else if (i <= doneUpTo) cls = "done";
+    else if (i === activeIndex) cls = "active";
+    const note = s.note ? ` <span class="mono" style="font-size:10.5px;color:var(--ink-faint);">(${s.note})</span>` : "";
+    return `<li class="wm-seq-step ${cls}"><span class="wm-seq-num">${i + 1}</span>${s.label}${note}</li>`;
+  }).join("");
+}
+
+function wmSetStartBtnState(state) {
+  const btn = document.getElementById("wm-start-marking-btn");
+  if (!btn) return;
+  if (state === "running") {
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Running…';
+  } else {
+    btn.disabled = false;
+    btn.innerHTML = "&#9654; Start Marking (2-hand start)";
+  }
+}
+
+async function wmRunStartSequence() {
+  if (WM.manualRunning) return;
+  WM.manualRunning = true;
+  wmSetStartBtnState("running");
+  wmRenderStartSeqList(-1, -1);
+
+  for (let i = 0; i < WM_START_SEQUENCE.length; i++) {
+    if (!WM.manualRunning) return; // stopped externally (e.g. page navigation)
+    wmRenderStartSeqList(i, i - 1);
+    const step = WM_START_SEQUENCE[i];
+    let verdict;
+    try {
+      verdict = await step.fn();
+    } catch (err) {
+      verdict = { ok: false, alarm: true, message: String(err) };
+    }
+    if (!verdict.ok) {
+      WM.manualRunning = false;
+      wmRenderStartSeqList(i, i - 1, verdict.alarm ? "alarm" : "blocked");
+      wmLog(`!!! ${step.label} failed: ${verdict.message}`, "error");
+      wmSetStartBtnState("idle");
+      if (verdict.alarm) showToast(`Alarm: ${step.label} — ${verdict.message}`);
+      return;
+    }
+  }
+  WM.manualRunning = false;
+  wmRenderStartSeqList(-1, WM_START_SEQUENCE.length - 1);
+  wmLog("--- Start Marking sequence complete ---", "ok");
+  wmSetStartBtnState("idle");
+}
+
 PAGE_INIT.work_mode = function () {
   const savedMode = wmLoadMode();
   document.getElementById("wm-mode-select").value = savedMode || "";
@@ -538,9 +724,10 @@ PAGE_INIT.work_mode = function () {
     showToast(`Mode set to ${value}.`, "success");
   });
 
-  document.querySelectorAll(".wm-cmd-btn").forEach((btn) => {
-    btn.addEventListener("click", () => wmSimulateCommand(btn.dataset.cmd, btn));
-  });
+  wmRenderFnGroups();
+  wmRenderStartSeqList(-1, -1);
+  document.getElementById("wm-start-marking-btn").addEventListener("click", wmRunStartSequence);
+
   document.getElementById("wm-clear-log-btn").addEventListener("click", () => {
     document.getElementById("wm-manual-log").innerHTML = "";
   });
@@ -553,6 +740,7 @@ PAGE_INIT.work_mode = function () {
 };
 
 PAGE_TEARDOWN.work_mode = function () {
+  WM.manualRunning = false;
   wmStopSequence();
 };
 

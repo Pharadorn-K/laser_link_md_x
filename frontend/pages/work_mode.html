@@ -8,7 +8,6 @@
   <!-- ---- Row 1: mode select ---- -->
   <div class="card wm-mode-row">
     <div class="field wm-mode-field">
-      <!-- <label for="wm-mode-select">Work Mode</label> -->
       <select id="wm-mode-select">
         <option value="">— select mode —</option>
         <option value="MANUAL">MANUAL</option>
@@ -27,23 +26,17 @@
     <!-- ================= MANUAL BLOCK ================= -->
     <div class="card wm-block" id="wm-manual-block">
       <div class="card-title">Manual Control</div>
+      <p class="wm-eq-note">No equipment connected yet — every function below is a simulated stub. Interlock checks (side / middle / front door, pallet position) get filled in once hardware arrives; the button contract stays the same.</p>
 
-      <div class="wm-manual-grid">
-        <div class="wm-cmd-group">
-          <div class="wm-cmd-group-label">I/O (door / pallet)</div>
-          <button class="btn wm-cmd-btn" data-cmd="door_open">Open Door</button>
-          <button class="btn wm-cmd-btn" data-cmd="door_close">Close Door</button>
-          <button class="btn wm-cmd-btn" data-cmd="cyl1_out">Cylinder 1: Pallet 1 Out</button>
-          <button class="btn wm-cmd-btn" data-cmd="cyl2_in">Cylinder 2: Pallet 2 In</button>
-        </div>
-        <div class="wm-cmd-group">
-          <div class="wm-cmd-group-label">Laser</div>
-          <button class="btn wm-cmd-btn" data-cmd="start_marking">Start Marking</button>
-          <button class="btn wm-cmd-btn" data-cmd="stop_marking">Stop Marking</button>
-          <button class="btn wm-cmd-btn" data-cmd="guide_laser">Guide Laser</button>
-          <button class="btn wm-cmd-btn" data-cmd="clear_error">Clear Error</button>
-        </div>
+      <div class="wm-fn-groups" id="wm-fn-groups"><!-- filled by JS from WM_FUNCTIONS --></div>
+
+      <div class="wm-start-row">
+        <button class="btn btn-primary" id="wm-start-marking-btn">&#9654; Start Marking (2-hand start)</button>
+        <span class="wm-start-hint">Runs the semi-auto sequence below — not a single call.</span>
       </div>
+
+      <div class="card-title" style="margin-top:12px;">Start Marking Sequence</div>
+      <ol class="wm-seq-list" id="wm-start-seq-list"><!-- filled by JS --></ol>
 
       <div class="card-title" style="margin-top:10px;">
         Output Log
