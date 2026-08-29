@@ -77,19 +77,13 @@
         </div>
       </div>
 
-      <!-- ---- Lot No. — required on every model, value updated later like a condition ---- -->
-      <div class="grid-2">
-        <div class="field">
-          <label for="ms-f-lotno-block">Lot No. BLK No. (0-255)</label>
-          <input type="number" id="ms-f-lotno-block" min="0" max="255" value="0" required />
-        </div>
-        <div class="field">
-          <label for="ms-f-lotno-value">Lot No. (starting value)</label>
-          <input type="text" id="ms-f-lotno-value" placeholder="e.g. L20260828-01" required />
-        </div>
+      <!-- ---- Lot No. — required on every model, updated later like a condition.
+           Not marked on the part: recorded on production_log only. ---- -->
+      <div class="field">
+        <label for="ms-f-lotno-value">Lot No. (starting value)</label>
+        <input type="text" id="ms-f-lotno-value" placeholder="e.g. L20260828-01" required />
       </div>
-      <p class="field-hint" style="margin:-6px 0 10px;">Lot No. changes every 150 parts or less — update its value from the pallet card on Model Setting, the same way you update conditions.</p>
-
+      <p class="field-hint" style="margin:-6px 0 10px;">Lot No. isn't marked on the part — it's only recorded when a part is counted, so it can be used to filter production history later. Update its value from the pallet card, the same way you update conditions, every 150 parts or less.</p>
       <!-- ---- Start 2D Code ---- -->
       <div class="ms-check-block">
         <label><input type="checkbox" id="ms-f-start2d" /> Start 2D Code (Check2DCode5)</label>

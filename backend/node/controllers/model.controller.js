@@ -36,8 +36,8 @@ function normalizeBody(body) {
 }
 
 function validateBody(body) {
-  if (!body.model || String(body.model).trim() === '') {
-    return 'model is required.';
+  if (!body.lot_no || !String(body.lot_no).trim()) {
+    return 'Lot No. is required.';
   }
   const jobNo = Number(body.job_no);
   if (!Number.isInteger(jobNo) || jobNo < 0 || jobNo > 1999) {
@@ -53,10 +53,10 @@ function validateBody(body) {
   if (!body.lot_no || !String(body.lot_no).trim()) {
     return 'Lot No. is required.';
   }
-  const lotBlock = Number(body.lot_no_block);
-  if (!Number.isInteger(lotBlock) || lotBlock < 0 || lotBlock > 255) {
-    return 'Lot No. BLK number must be an integer between 0 and 255.';
-  }
+  // const lotBlock = Number(body.lot_no_block);
+  // if (!Number.isInteger(lotBlock) || lotBlock < 0 || lotBlock > 255) {
+  //   return 'Lot No. BLK number must be an integer between 0 and 255.';
+  // }
 
   const conditions = Array.isArray(body.conditions) ? body.conditions : [];
   if (conditions.length > MAX_CONDITIONS) {
@@ -89,7 +89,7 @@ function buildFieldsFromBody(body, photoPath) {
     check_camera: toBool(body.check_camera),
     check_lot_no: true, // always on — Lot No. is mandatory now
     lot_no: String(body.lot_no).trim(),
-    lot_no_block: Number(body.lot_no_block),
+    // lot_no_block: Number(body.lot_no_block),
   };
   if (photoPath !== undefined) {
     fields.photo_path = photoPath;

@@ -120,3 +120,8 @@ ALTER TABLE model_condition
 -- Optional part photo shown on the Model Setting page.
 ALTER TABLE model_condition
   ADD COLUMN photo_path VARCHAR(255) NULL DEFAULT NULL;
+
+ALTER TABLE model_condition
+  MODIFY COLUMN lot_no VARCHAR(255) NOT NULL,
+  MODIFY COLUMN lot_no_block SMALLINT NULL DEFAULT NULL,
+  MODIFY COLUMN check_lot_no BOOLEAN NOT NULL DEFAULT TRUE;

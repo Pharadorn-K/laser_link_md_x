@@ -147,10 +147,10 @@ function padBlk(n) {
 function buildBaseCommand(condition) {
   if (!condition) return "";
   const parts = [`JobNo=${padJob(condition.job_no)}`];
-  if (condition.check_lot_no && condition.lot_no_block !== null && condition.lot_no_block !== undefined && condition.lot_no) {
-    parts.push(`BLK=${padBlk(condition.lot_no_block)}`);
-    parts.push(`CharacterString=${condition.lot_no}`);
-  }
+  // if (condition.check_lot_no && condition.lot_no_block !== null && condition.lot_no_block !== undefined && condition.lot_no) {
+  //   parts.push(`BLK=${padBlk(condition.lot_no_block)}`);
+  //   parts.push(`CharacterString=${condition.lot_no}`);
+  // }
   (condition.conditions || []).forEach((item) => {
     parts.push(`BLK=${padBlk(item.block_no)}`);
     parts.push(`CharacterString=${item.condition_value}`);
@@ -1040,7 +1040,7 @@ function msRenderDetail(pallet, condition) {
   <div class="ms-cond-edit-row ms-lotno-row">
     <div class="ms-cond-edit-meta">
       <span class="ms-cond-edit-name">Lot No.</span>
-      <span class="ms-cond-edit-blk mono">BLK ${padBlk(condition.lot_no_block || 0)}</span>
+      <span class="ms-cond-edit-blk mono">Not marked · logged only</span>
     </div>
     <input type="text" class="ms-cond-edit-input ms-lotno-input" value="${escapeHtml(condition.lot_no || "")}" />
     <button type="button" class="btn btn-sm btn-primary ms-lotno-set-btn">Set</button>
@@ -1073,30 +1073,40 @@ function msRenderDetail(pallet, condition) {
         <div class="mono-box">${msBuildRead2DCommand(condition)}</div>
       </div>`);
   }
-  const photoHtml = condition.photo_path
-    ? `<img src="${condition.photo_path}" class="ms-detail-photo" alt="${escapeHtml(condition.model)}" />`
-    : "";
-  wrap.innerHTML = `
-    <table class="data-table ms-detail-table">
-      <tbody>
-        <tr><td>Model</td><td colspan="2">${escapeHtml(condition.model)}</td></tr>
-        <tr><td>Job No.</td><td colspan="2" class="mono">${padJob(condition.job_no)}</td></tr>
-        <tr><td>Start 2D Code</td><td colspan="2">${condition.check_start2dcode ? "Yes" : "No"}</td></tr>
-        <tr><td>Check Read 2D Code</td><td colspan="2">${condition.check_read2dcode ? "Yes" : "No"}</td></tr>
-        <tr><td>Check Grade 2D Code</td><td colspan="2">${condition.check_grade2dcode ? "Yes" : "No"}</td></tr>
-        <tr><td>Control Grade</td><td colspan="2">${escapeHtml(condition.control_grade) || "—"}</td></tr>
-        <tr><td>Camera</td><td colspan="2">${condition.check_camera ? "Yes" : "No"}</td></tr>
-      </tbody>
-    </table>
-    ${extras.join("")}
-    <div class="ms-preview-row">
-      <span class="ms-preview-label">BASE COMMAND</span>
-      <div class="mono-box">${buildBaseCommand(condition)}</div>
-    </div>
 
-    <div class="card-title" style="margin-top:10px;">Conditions <span style="font-weight:400;color:var(--ink-faint);font-size:11px;">(operators can update values)</span></div>
-    <div class="ms-cond-edit-list">${lotNoRow}${editableRows}</div>
-    <button type="button" class="btn btn-sm ms-edit-model-btn" data-edit-id="${condition.id}">Edit Model</button>
+  const photoHtml = condition.photo_path
+    ? `<img src="${condition.photo_path}" alt="${escapeHtml(condition.model)}" />`
+    : `<div class="ms-photo-placeholder"><i class="fa-regular fa-image"></i><span>No photo yet</span></div>`;
+
+  wrap.innerHTML = `
+    <div class="ms-detail-layout">
+      <div class="ms-detail-photo-col">
+        <div class="ms-detail-photo-frame">${photoHtml}</div>
+        <table class="data-table ms-detail-table compact">
+          <tbody>
+            <tr><td>Model</td><td>${escapeHtml(condition.model)}</td></tr>
+            <tr><td>Job No.</td><td class="mono">${padJob(condition.job_no)}</td></tr>
+            <tr><td>Start 2D Code</td><td>${condition.check_start2dcode ? "Yes" : "No"}</td></tr>
+            <tr><td>Read 2D Code</td><td>${condition.check_read2dcode ? "Yes" : "No"}</td></tr>
+            <tr><td>Grade 2D Code</td><td>${condition.check_grade2dcode ? "Yes" : "No"}</td></tr>
+            <tr><td>Control Grade</td><td>${escapeHtml(condition.control_grade) || "—"}</td></tr>
+            <tr><td>Camera</td><td>${condition.check_camera ? "Yes" : "No"}</td></tr>
+          </tbody>
+        </table>
+        <button type="button" class="btn btn-sm ms-edit-model-btn" data-edit-id="${condition.id}">Edit Model</button>
+      </div>
+
+      <div class="ms-detail-info-col">
+        <div class="ms-preview-row">
+          <span class="ms-preview-label">BASE COMMAND</span>
+          <div class="mono-box">${buildBaseCommand(condition)}</div>
+        </div>
+        ${extras.join("")}
+
+        <div class="card-title" style="margin-top:8px;">Conditions <span style="font-weight:400;color:var(--ink-faint);font-size:11px;">(operators can update values)</span></div>
+        <div class="ms-cond-edit-list">${lotNoRow}${editableRows}</div>
+      </div>
+    </div>
   `;
 
   wrap.querySelector(".ms-edit-model-btn").addEventListener("click", () => {
@@ -1129,10 +1139,10 @@ function msRenderDetail(pallet, condition) {
       if (newValue === condition.lot_no) { showToast("No change.", "info"); return; }
       MS.pendingSet = { pallet, modelId: condition.id, itemId: null, newValue, oldValue: condition.lot_no, name: "Lot No.", isLotNo: true };
       document.getElementById("ms-confirm-text").textContent =
-        `Change "Lot No." from "${condition.lot_no || "(empty)"}" to "${newValue}"?`;
+        `Change "Lot No." from "${condition.lot_no || "(empty)"}" to "${newValue}"? This is only logged with each part counted — it is not marked on the workpiece.`;
       document.getElementById("ms-confirm-backdrop").classList.add("open");
     });
-  }  
+  }
 }
 
 async function msConfirmSetValue() {
@@ -1253,7 +1263,7 @@ function msOpenModal(condition) {
 
   document.getElementById("ms-f-camera").checked = condition ? !!condition.check_camera : true;
   
-  document.getElementById("ms-f-lotno-block").value = condition && condition.lot_no_block != null ? condition.lot_no_block : 0;
+  // document.getElementById("ms-f-lotno-block").value = condition && condition.lot_no_block != null ? condition.lot_no_block : 0;
   document.getElementById("ms-f-lotno-value").value = condition && condition.lot_no ? condition.lot_no : "";
 
   const photoInputEl = document.getElementById("ms-f-photo");
@@ -1298,7 +1308,7 @@ function msCollectFormData() {
   fd.append("control_grade", document.getElementById("ms-f-grade").value.trim());
   fd.append("check_camera", document.getElementById("ms-f-camera").checked ? "1" : "");
   fd.append("conditions", JSON.stringify(msCaptureConditionsFromDom()));
-  fd.append("lot_no_block", document.getElementById("ms-f-lotno-block").value);
+  // fd.append("lot_no_block", document.getElementById("ms-f-lotno-block").value);
   fd.append("lot_no", document.getElementById("ms-f-lotno-value").value.trim());
   const photoFile = document.getElementById("ms-f-photo").files[0];
   if (photoFile) fd.append("photo", photoFile);
