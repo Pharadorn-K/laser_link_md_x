@@ -594,7 +594,6 @@ const WM_GROUP_LABELS = {
   vision: "Vision / 2D Code",
   laser: "Laser",
 };
-
 function wmRenderFnGroups() {
   const wrap = document.getElementById("wm-fn-groups");
   if (!wrap) return;
@@ -607,15 +606,16 @@ function wmRenderFnGroups() {
       ([group, fns]) => `
     <div class="wm-fn-group">
       <div class="wm-fn-group-label">${WM_GROUP_LABELS[group] || group}</div>
-      ${fns
-        .map(
-          (fn) => `
-        <button type="button" class="btn wm-fn-btn" data-fn="${fn.key}">
-          ${fn.label}
-          <span class="wm-fn-btn-desc">${fn.desc}</span>
-        </button>`
-        )
-        .join("")}
+      <div class="wm-fn-btn-row">
+        ${fns
+          .map(
+            (fn) => `
+          <button type="button" class="btn wm-fn-btn" data-fn="${fn.key}" title="${escapeHtml(fn.desc)}">
+            ${fn.label}
+          </button>`
+          )
+          .join("")}
+      </div>
     </div>`
     )
     .join("");

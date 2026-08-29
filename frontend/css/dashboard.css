@@ -60,6 +60,24 @@ table.data-table tr:last-child td { border-bottom: none; }
 /* ---------------------------------------------------------
    FOR EQUIPMENT PAGE  (pages/equipment.html + js/equipment.js)
    --------------------------------------------------------- */
+/* ---------------------------------------------------------
+   FOR EQUIPMENT PAGE  (pages/equipment.html + dashboard.js)
+   One-screen layout: connection bar on top, then a two-column
+   row (queue+raw tester | command browser+log) that stretches
+   to fill the viewport. Individual panels scroll internally so
+   the whole thing never needs a page-level scrollbar, no matter
+   how many jobs are queued or how many params a command has.
+   --------------------------------------------------------- */
+.eq-page {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  height: calc(100vh - 56px - 40px);
+  min-height: 560px;
+}
+
+.eq-conn-card { flex: 0 0 auto; }
+
 .eq-conn-row {
   display: flex;
   align-items: flex-end;
@@ -71,8 +89,31 @@ table.data-table tr:last-child td { border-bottom: none; }
 .eq-conn-row .field.ip input { width: 170px; }
 .eq-conn-row .status-pill { margin-left: auto; }
 
-/* -- job queue -- */
-.eq-jobs-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 10px; }
+/* -- two-column main area -- */
+.eq-main-grid {
+  display: flex;
+  gap: 16px;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.eq-col {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-height: 0;
+}
+.eq-col-left { flex: 0 0 340px; }
+.eq-col-right { flex: 1 1 auto; min-width: 0; }
+
+/* -- job queue (grows to fill the left column) -- */
+.eq-jobs-card {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.eq-jobs-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 10px; flex: 0 0 auto; }
 .eq-job-btn {
   padding: 14px 8px;
   border: 1px solid var(--line);
@@ -84,10 +125,15 @@ table.data-table tr:last-child td { border-bottom: none; }
 }
 .eq-job-btn:hover { border-color: var(--accent); color: var(--accent-strong); }
 
-.eq-custom-row { display: flex; gap: 8px; align-items: center; margin-top: 4px; }
+.eq-custom-row { display: flex; gap: 8px; align-items: center; margin-top: 4px; flex: 0 0 auto; }
 .eq-custom-row input { width: 90px; }
 
-.eq-queue-list { list-style: none; margin: 10px 0 0; padding: 0; max-height: 220px; overflow-y: auto; }
+.eq-queue-title { margin-top: 12px; flex: 0 0 auto; }
+
+.eq-queue-list {
+  list-style: none; margin: 10px 0 0; padding: 0;
+  flex: 1 1 auto; min-height: 0; overflow-y: auto;
+}
 .eq-queue-list li {
   display: flex; align-items: center; justify-content: space-between;
   padding: 8px 10px;
@@ -103,15 +149,22 @@ table.data-table tr:last-child td { border-bottom: none; }
 .eq-queue-list li.failed     { border-color: var(--err);  background: var(--err-soft); }
 .eq-queue-empty { color: var(--ink-faint); font-size: 12px; text-align: center; padding: 14px 0; }
 
-/* -- raw command tester -- */
+/* -- raw command tester (fixed height, sits under the queue) -- */
+.eq-raw-card { flex: 0 0 auto; }
 .eq-raw-row { display: flex; gap: 8px; }
 .eq-raw-row input { flex: 1; font-family: var(--font-mono); }
 
-/* -- command browser -- */
-.eq-browser-top { display: flex; gap: 14px; flex-wrap: wrap; margin-bottom: 10px; }
+/* -- command browser (capped so it can't crowd out the log; scrolls
+      internally if a command has a lot of parameters, e.g. Check2DCode5) -- */
+.eq-browser-card {
+  flex: 0 0 auto;
+  max-height: 44%;
+  overflow-y: auto;
+}
+.eq-browser-top { display: flex; gap: 14px; flex-wrap: wrap; margin-bottom: 8px; }
 .eq-browser-top .field { margin-bottom: 0; min-width: 200px; }
 
-.eq-mode-switch { display: flex; gap: 4px; background: var(--line-soft); padding: 3px; border-radius: 999px; width: fit-content; margin-bottom: 10px; }
+.eq-mode-switch { display: flex; gap: 4px; background: var(--line-soft); padding: 3px; border-radius: 999px; width: fit-content; margin-bottom: 8px; }
 .eq-mode-switch button {
   border: none; background: transparent; padding: 5px 14px;
   border-radius: 999px; font-size: 12px; font-weight: 700; color: var(--ink-soft);
@@ -119,17 +172,24 @@ table.data-table tr:last-child td { border-bottom: none; }
 .eq-mode-switch button.active { background: var(--bg-sidebar); color: #fff; }
 .eq-mode-switch button:disabled { opacity: .4; cursor: not-allowed; }
 
-.eq-cmd-desc { font-size: 12px; color: var(--ink-faint); font-style: italic; margin-bottom: 10px; }
+.eq-cmd-desc { font-size: 12px; color: var(--ink-faint); font-style: italic; margin-bottom: 8px; }
 
-.eq-param-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px 14px; margin-bottom: 12px; }
+.eq-param-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px 14px; margin-bottom: 10px; }
 .eq-param-grid .field { margin-bottom: 0; }
 .eq-param-grid .field label { text-transform: none; font-weight: 600; }
 .eq-param-empty { color: var(--ink-faint); font-size: 12px; grid-column: 1 / -1; }
 
-.eq-preview-row { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+.eq-preview-row { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
 .eq-preview-row .mono-box.invalid { color: #ffb199; }
 
-/* -- log console -- */
+/* -- log console (fills whatever's left in the right column) -- */
+.eq-log-card {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
 .eq-log {
   background: #0e1117;
   color: #cfd8e3;
@@ -138,7 +198,8 @@ table.data-table tr:last-child td { border-bottom: none; }
   line-height: 1.6;
   border-radius: var(--radius-sm);
   padding: 12px;
-  height: 260px;
+  flex: 1 1 auto;
+  min-height: 0;
   overflow-y: auto;
   white-space: pre-wrap;
   word-break: break-word;
@@ -146,6 +207,17 @@ table.data-table tr:last-child td { border-bottom: none; }
 .eq-log .line-ok   { color: #8be3a6; }
 .eq-log .line-err  { color: #ff9d80; }
 .eq-log .line-warn { color: #f0c96b; }
+
+/* -- fall back to normal page scrolling on narrow/short screens -- */
+@media (max-width: 1100px) {
+  .eq-page { height: auto; min-height: 0; }
+  .eq-main-grid { flex-direction: column; }
+  .eq-col-left, .eq-col-right { flex: 0 0 auto; }
+  .eq-jobs-card, .eq-log-card { flex: 0 0 auto; }
+  .eq-queue-list { max-height: 240px; }
+  .eq-log { min-height: 220px; }
+  .eq-browser-card { max-height: none; }
+}
 
 /* ---------------------------------------------------------
    FOR MONITOR PAGE — one-screen, two pallet blocks + sequence
@@ -502,7 +574,7 @@ table.data-table tr:last-child td { border-bottom: none; }
 }
 .wm-cmd-btn { justify-content: flex-start; }
 .wm-log {
-  flex: 1 1 auto; min-height: 90px;
+  flex: 1 1 160px; min-height: 140px;
   background: #0e1117; color: #cfd8e3;
   font-family: var(--font-mono); font-size: 12px; line-height: 1.6;
   border-radius: var(--radius-sm); padding: 10px; overflow-y: auto;
@@ -511,16 +583,41 @@ table.data-table tr:last-child td { border-bottom: none; }
 .wm-log .line-err { color: #ff9d80; }
 .wm-log .line-warn { color: #f0c96b; }
 
-.wm-eq-note { font-size: 12px; color: var(--ink-faint); margin: -4px 0 10px; }
+.wm-eq-note { font-size: 11.5px; color: var(--ink-faint); margin: -4px 0 8px; line-height: 1.4; }
 
-.wm-fn-groups { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; margin-bottom: 10px; }
-.wm-fn-group { display: flex; flex-direction: column; gap: 6px; }
+/* Compact function button strip: grouped chips, tooltip carries the
+   description (title attr) instead of an inline sub-label, and the
+   whole strip scrolls internally so it never pushes the log out of view. */
+.wm-fn-groups {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 10px 16px;
+  margin-bottom: 10px;
+  max-height: 168px;
+  overflow-y: auto;
+  padding-right: 4px;
+  flex: 0 0 auto;
+}
+.wm-fn-group { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .wm-fn-group-label { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--ink-faint); margin-bottom: 2px; }
-.wm-fn-btn { flex-direction: column; align-items: flex-start; gap: 2px; text-align: left; }
-.wm-fn-btn-desc { display: block; font-size: 10.5px; font-weight: 400; color: var(--ink-faint); }
+.wm-fn-btn-row { display: flex; flex-wrap: wrap; gap: 6px; }
+.wm-fn-btn {
+  padding: 6px 10px;
+  font-size: 12px;
+  white-space: nowrap;
+}
 
-.wm-start-row { display: flex; align-items: center; gap: 10px; padding: 10px 0; border-top: 1px solid var(--line-soft); border-bottom: 1px solid var(--line-soft); margin: 4px 0 10px; }
+.wm-start-row { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-top: 1px solid var(--line-soft); border-bottom: 1px solid var(--line-soft); margin: 4px 0 8px; flex: 0 0 auto; }
 .wm-start-hint { font-size: 12px; color: var(--ink-faint); }
+
+/* Start Marking Sequence list scrolls within a capped height so it can't
+   crowd out the log below it. */
+#wm-start-seq-list {
+  max-height: 118px;
+  overflow-y: auto;
+  padding-right: 4px;
+  flex: 0 0 auto;
+}
 
 .wm-seq-step.alarm { border-color: var(--err); background: var(--err-soft); }
 .wm-seq-step.alarm .wm-seq-num { background: var(--err); color: #fff; }

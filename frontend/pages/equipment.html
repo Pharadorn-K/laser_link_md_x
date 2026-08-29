@@ -3,95 +3,108 @@
      equipment.html — loaded into #content by dashboard.js
      Logic lives in dashboard.js, section "FOR EQUIPMENT PAGE"
      ============================================================ -->
-<!-- ---- Connection ---- -->
-<div class="card" style="margin-bottom:16px;">
-  <!-- <div class="card-title">Connection</div> -->
-  <div class="eq-conn-row">
-    <div class="field ip">
-      <label for="eq-ip">IP address</label>
-      <input type="text" id="eq-ip" value="10.207.1.254" />
-    </div>
-    <div class="field">
-      <label for="eq-port">Port</label>
-      <input type="text" id="eq-port" value="50002" />
-    </div>
-    <button class="btn btn-primary" id="eq-connect-btn">Test connection</button>
-    <span class="status-pill offline" id="eq-status-pill"><span class="dot"></span> Offline</span>
-  </div>
-</div>
+<div class="eq-page">
 
-<div class="grid-2" style="margin-bottom:16px;">
-
-  <!-- ---- Job queue ---- -->
-  <div class="card">
-    <div class="card-title">Add job to queue</div>
-    <div class="eq-jobs-grid" id="eq-job-buttons"><!-- filled by JS: jobs 1-4 --></div>
-    <div class="eq-custom-row">
-      <span style="font-size:12px;color:var(--ink-soft);">Custom #</span>
-      <input type="text" id="eq-custom-job" placeholder="0001" />
-      <button class="btn btn-sm" id="eq-add-custom-btn">Add</button>
-    </div>
-
-    <div class="card-title" style="margin-top:16px;">
-      Play-next queue
-      <button class="btn btn-sm btn-ghost" id="eq-clear-queue-btn">Clear pending</button>
-    </div>
-    <ul class="eq-queue-list" id="eq-queue-list">
-      <li class="eq-queue-empty">Queue is empty.</li>
-    </ul>
-  </div>
-
-  <!-- ---- Raw command tester ---- -->
-  <div class="card">
-    <div class="card-title">Raw command tester (debug)</div>
-    <div class="eq-raw-row">
-      <input type="text" class="mono" id="eq-raw-cmd" value="RX,Ready" />
-      <button class="btn btn-primary" id="eq-raw-send-btn">Send</button>
-    </div>
-    <p class="field-hint">Sends the exact string you type, terminated with \r.</p>
-  </div>
-</div>
-
-<!-- ---- Command browser ---- -->
-<div class="card" style="margin-bottom:16px;">
-  <div class="card-title">Command browser (all commands)</div>
-
-  <div class="eq-browser-top">
-    <div class="field">
-      <label for="eq-cat-select">Category</label>
-      <select id="eq-cat-select"></select>
-    </div>
-    <div class="field">
-      <label for="eq-cmd-select">Command</label>
-      <select id="eq-cmd-select"></select>
+  <!-- ---- Connection (compact, full width) ---- -->
+  <div class="card eq-conn-card">
+    <div class="eq-conn-row">
+      <div class="field ip">
+        <label for="eq-ip">IP address</label>
+        <input type="text" id="eq-ip" value="10.207.1.254" />
+      </div>
+      <div class="field">
+        <label for="eq-port">Port</label>
+        <input type="text" id="eq-port" value="50002" />
+      </div>
+      <button class="btn btn-primary" id="eq-connect-btn">Test connection</button>
+      <span class="status-pill offline" id="eq-status-pill"><span class="dot"></span> Offline</span>
     </div>
   </div>
 
-  <div class="eq-mode-switch">
-    <button type="button" data-mode="wx" id="eq-mode-wx">WX (Set)</button>
-    <button type="button" data-mode="rx" id="eq-mode-rx">RX (Get)</button>
+  <div class="eq-main-grid">
+
+    <!-- ================= LEFT COLUMN ================= -->
+    <div class="eq-col eq-col-left">
+
+      <!-- ---- Job queue (grows to fill the column; queue list scrolls) ---- -->
+      <div class="card eq-jobs-card">
+        <div class="card-title">Add job to queue</div>
+        <div class="eq-jobs-grid" id="eq-job-buttons"><!-- filled by JS: jobs 1-4 --></div>
+        <div class="eq-custom-row">
+          <span style="font-size:12px;color:var(--ink-soft);">Custom #</span>
+          <input type="text" id="eq-custom-job" placeholder="0001" />
+          <button class="btn btn-sm" id="eq-add-custom-btn">Add</button>
+        </div>
+
+        <div class="card-title eq-queue-title">
+          Play-next queue
+          <button class="btn btn-sm btn-ghost" id="eq-clear-queue-btn">Clear pending</button>
+        </div>
+        <ul class="eq-queue-list" id="eq-queue-list">
+          <li class="eq-queue-empty">Queue is empty.</li>
+        </ul>
+      </div>
+
+      <!-- ---- Raw command tester ---- -->
+      <div class="card eq-raw-card">
+        <div class="card-title">Raw command tester (debug)</div>
+        <div class="eq-raw-row">
+          <input type="text" class="mono" id="eq-raw-cmd" value="RX,Ready" />
+          <button class="btn btn-primary" id="eq-raw-send-btn">Send</button>
+        </div>
+        <p class="field-hint">Sends the exact string you type, terminated with \r.</p>
+      </div>
+
+    </div>
+
+    <!-- ================= RIGHT COLUMN ================= -->
+    <div class="eq-col eq-col-right">
+
+      <!-- ---- Command browser (capped height, scrolls if params are long) ---- -->
+      <div class="card eq-browser-card">
+        <div class="card-title">Command browser (all commands)</div>
+
+        <div class="eq-browser-top">
+          <div class="field">
+            <label for="eq-cat-select">Category</label>
+            <select id="eq-cat-select"></select>
+          </div>
+          <div class="field">
+            <label for="eq-cmd-select">Command</label>
+            <select id="eq-cmd-select"></select>
+          </div>
+        </div>
+
+        <div class="eq-mode-switch">
+          <button type="button" data-mode="wx" id="eq-mode-wx">WX (Set)</button>
+          <button type="button" data-mode="rx" id="eq-mode-rx">RX (Get)</button>
+        </div>
+
+        <p class="eq-cmd-desc" id="eq-cmd-desc">Select a category and command above.</p>
+
+        <div class="eq-param-grid" id="eq-param-grid"></div>
+
+        <div class="eq-preview-row">
+          <span style="font-size:12px;color:var(--ink-soft);font-weight:700;">PREVIEW</span>
+          <div class="mono-box" id="eq-preview-box">&nbsp;</div>
+        </div>
+
+        <div style="display:flex; gap:8px;">
+          <button class="btn btn-primary" id="eq-run-cmd-btn">&#9654; Run command</button>
+          <button class="btn" id="eq-copy-raw-btn">Copy &rarr; Raw tester</button>
+        </div>
+      </div>
+
+      <!-- ---- Log (fills remaining vertical space) ---- -->
+      <div class="card eq-log-card">
+        <div class="card-title">
+          Log
+          <button class="btn btn-sm btn-ghost" id="eq-clear-log-btn">Clear view</button>
+        </div>
+        <div class="eq-log" id="eq-log"></div>
+      </div>
+
+    </div>
+
   </div>
-
-  <p class="eq-cmd-desc" id="eq-cmd-desc">Select a category and command above.</p>
-
-  <div class="eq-param-grid" id="eq-param-grid"></div>
-
-  <div class="eq-preview-row">
-    <span style="font-size:12px;color:var(--ink-soft);font-weight:700;">PREVIEW</span>
-    <div class="mono-box" id="eq-preview-box">&nbsp;</div>
-  </div>
-
-  <div style="display:flex; gap:8px;">
-    <button class="btn btn-primary" id="eq-run-cmd-btn">&#9654; Run command</button>
-    <button class="btn" id="eq-copy-raw-btn">Copy &rarr; Raw tester</button>
-  </div>
-</div>
-
-<!-- ---- Log ---- -->
-<div class="card">
-  <div class="card-title">
-    Log
-    <button class="btn btn-sm btn-ghost" id="eq-clear-log-btn">Clear view</button>
-  </div>
-  <div class="eq-log" id="eq-log"></div>
 </div>
