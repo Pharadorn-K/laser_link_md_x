@@ -1036,7 +1036,7 @@ function msRenderDetail(pallet, condition) {
 
   const items = condition.conditions || [];
 
-  const lotNoRow = condition.check_lot_no ? `
+  const lotNoRow = `
   <div class="ms-cond-edit-row ms-lotno-row">
     <div class="ms-cond-edit-meta">
       <span class="ms-cond-edit-name">Lot No.</span>
@@ -1044,7 +1044,7 @@ function msRenderDetail(pallet, condition) {
     </div>
     <input type="text" class="ms-cond-edit-input ms-lotno-input" value="${escapeHtml(condition.lot_no || "")}" />
     <button type="button" class="btn btn-sm btn-primary ms-lotno-set-btn">Set</button>
-  </div>` : "";
+  </div>`;
 
   const editableRows = items.length
     ? items.map((it) => `
@@ -1073,7 +1073,9 @@ function msRenderDetail(pallet, condition) {
         <div class="mono-box">${msBuildRead2DCommand(condition)}</div>
       </div>`);
   }
-
+  const photoHtml = condition.photo_path
+    ? `<img src="${condition.photo_path}" class="ms-detail-photo" alt="${escapeHtml(condition.model)}" />`
+    : "";
   wrap.innerHTML = `
     <table class="data-table ms-detail-table">
       <tbody>
@@ -1250,10 +1252,20 @@ function msOpenModal(condition) {
   document.getElementById("ms-f-grade").value = condition ? condition.control_grade || "" : "";
 
   document.getElementById("ms-f-camera").checked = condition ? !!condition.check_camera : true;
-  document.getElementById("ms-f-lotno").checked = condition ? !!condition.check_lot_no : false;
+  
   document.getElementById("ms-f-lotno-block").value = condition && condition.lot_no_block != null ? condition.lot_no_block : 0;
   document.getElementById("ms-f-lotno-value").value = condition && condition.lot_no ? condition.lot_no : "";
-  msToggleCheckParams("ms-f-lotno", "ms-lotno-params-wrap");  
+
+  const photoInputEl = document.getElementById("ms-f-photo");
+  photoInputEl.value = "";
+  const photoPreviewEl = document.getElementById("ms-f-photo-preview");
+  if (condition && condition.photo_path) {
+    photoPreviewEl.src = condition.photo_path;
+    photoPreviewEl.style.display = "";
+  } else {
+    photoPreviewEl.style.display = "none";
+  }
+
   document.getElementById("ms-modal-delete-btn").style.display = condition ? "" : "none";
 
   msToggleCheckParams("ms-f-start2d", "ms-start2d-params-wrap");
@@ -1273,23 +1285,24 @@ function msCloseModal() {
   MS.editingId = null;
 }
 
-function msCollectFormPayload() {
-  return {
-    model: document.getElementById("ms-f-model").value.trim(),
-    job_no: document.getElementById("ms-f-jobno").value,
-    pallet_no: document.getElementById("ms-f-pallet").value,
-    check_start2dcode: document.getElementById("ms-f-start2d").checked,
-    start2dcode_params: msCaptureStart2DValues(),
-    check_read2dcode: document.getElementById("ms-f-read2d").checked,
-    read2dcode_detailed: document.getElementById("ms-f-read2d-detailed").value.trim() || "0",
-    check_grade2dcode: document.getElementById("ms-f-grade2d").checked,
-    control_grade: document.getElementById("ms-f-grade").value.trim(),
-    check_camera: document.getElementById("ms-f-camera").checked,
-    conditions: msCaptureConditionsFromDom(),
-    check_lot_no: document.getElementById("ms-f-lotno").checked,
-    lot_no_block: document.getElementById("ms-f-lotno-block").value,
-    lot_no: document.getElementById("ms-f-lotno-value").value.trim(),
-  };
+function msCollectFormData() {
+  const fd = new FormData();
+  fd.append("model", document.getElementById("ms-f-model").value.trim());
+  fd.append("job_no", document.getElementById("ms-f-jobno").value);
+  fd.append("pallet_no", document.getElementById("ms-f-pallet").value);
+  fd.append("check_start2dcode", document.getElementById("ms-f-start2d").checked ? "1" : "");
+  fd.append("start2dcode_params", JSON.stringify(msCaptureStart2DValues()));
+  fd.append("check_read2dcode", document.getElementById("ms-f-read2d").checked ? "1" : "");
+  fd.append("read2dcode_detailed", document.getElementById("ms-f-read2d-detailed").value.trim() || "0");
+  fd.append("check_grade2dcode", document.getElementById("ms-f-grade2d").checked ? "1" : "");
+  fd.append("control_grade", document.getElementById("ms-f-grade").value.trim());
+  fd.append("check_camera", document.getElementById("ms-f-camera").checked ? "1" : "");
+  fd.append("conditions", JSON.stringify(msCaptureConditionsFromDom()));
+  fd.append("lot_no_block", document.getElementById("ms-f-lotno-block").value);
+  fd.append("lot_no", document.getElementById("ms-f-lotno-value").value.trim());
+  const photoFile = document.getElementById("ms-f-photo").files[0];
+  if (photoFile) fd.append("photo", photoFile);
+  return fd;
 }
 
 async function msRefreshBothPallets() {
@@ -1314,6 +1327,17 @@ PAGE_INIT.model_setting = function () {
   document.getElementById("ms-add-model-btn").addEventListener("click", () => {
     if (!isAdmin()) { showToast("Only admin can add models."); return; }
     msOpenModal(null);
+  });
+  document.getElementById("ms-f-photo").addEventListener("change", () => {
+    const file = document.getElementById("ms-f-photo").files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const img = document.getElementById("ms-f-photo-preview");
+      img.src = e.target.result;
+      img.style.display = "";
+    };
+    reader.readAsDataURL(file);
   });
   document.getElementById("ms-modal-cancel-btn").addEventListener("click", msCloseModal);
   document.getElementById("ms-modal-backdrop").addEventListener("click", (e) => {
@@ -1361,12 +1385,12 @@ PAGE_INIT.model_setting = function () {
     e.preventDefault();
     if (!isAdmin()) { showToast("Only admin can save models."); return; }
     document.getElementById("ms-modal-alert").innerHTML = "";
-    const payload = msCollectFormPayload();
+    const fd = msCollectFormData();
 
     try {
       const res = MS.editingId
-        ? await apiFetch(`/api/models/${MS.editingId}`, { method: "PUT", body: JSON.stringify(payload) })
-        : await apiFetch(`/api/models`, { method: "POST", body: JSON.stringify(payload) });
+        ? await apiFetch(`/api/models/${MS.editingId}`, { method: "PUT", body: fd })
+        : await apiFetch(`/api/models`, { method: "POST", body: fd });
       const data = await res.json();
       if (!res.ok) {
         msModalAlert(data.error || "Save failed.");

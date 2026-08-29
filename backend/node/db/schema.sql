@@ -109,3 +109,14 @@ CREATE TABLE IF NOT EXISTS production_log (
 ) ENGINE=InnoDB;
 
 CREATE INDEX idx_production_log_pallet ON production_log (pallet_no, marked_at);
+
+-- Lot No. is now mandatory on every model (see migrate_lotno_and_photo.sql
+-- for the equivalent migration on existing databases).
+ALTER TABLE model_condition
+  MODIFY COLUMN lot_no VARCHAR(255) NOT NULL,
+  MODIFY COLUMN lot_no_block SMALLINT NOT NULL DEFAULT 0,
+  MODIFY COLUMN check_lot_no BOOLEAN NOT NULL DEFAULT TRUE;
+
+-- Optional part photo shown on the Model Setting page.
+ALTER TABLE model_condition
+  ADD COLUMN photo_path VARCHAR(255) NULL DEFAULT NULL;

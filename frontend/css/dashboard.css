@@ -386,6 +386,23 @@ table.data-table tr:last-child td { border-bottom: none; }
 .global-toast.toast-success { background: var(--ok); }
 .global-toast.toast-info { background: var(--info); }
 
+.ms-photo-preview {
+  display: block;
+  width: 100px; height: 100px;
+  object-fit: cover;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  margin-top: 6px;
+}
+.ms-detail-photo {
+  width: 100%;
+  max-height: 160px;
+  object-fit: cover;
+  border-radius: var(--radius-sm);
+  margin-bottom: 10px;
+  border: 1px solid var(--line-soft);
+}
+
 /* ---------------------------------------------------------
    FOR WORK MODE PAGE — one-screen layout
    --------------------------------------------------------- */
