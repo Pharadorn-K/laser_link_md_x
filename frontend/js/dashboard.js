@@ -212,6 +212,144 @@ const MON = {
   timer: null,
 };
 
+const MON_AUTO = {
+  queue: 0,
+  running: false,
+  roundCount: { Pallet1: 0, Pallet2: 0 },
+  palletCycleIndex: 0,
+};
+
+function monAutoActivePallets(mode) {
+  if (mode === "AUTO1") return ["Pallet1"];
+  if (mode === "AUTO2") return ["Pallet2"];
+  return ["Pallet1", "Pallet2"];
+}
+
+function monAutoNextPallet(mode) {
+  const pallets = monAutoActivePallets(mode);
+  if (pallets.length === 1) return pallets[0];
+  const p = pallets[MON_AUTO.palletCycleIndex % pallets.length];
+  MON_AUTO.palletCycleIndex += 1;
+  return p;
+}
+
+function monRenderAutoSeqList(activeIndex, round, pallet) {
+  const idle = document.getElementById("mon-seq-idle");
+  const list = document.getElementById("mon-seq-list");
+  idle.style.display = "none";
+  list.style.display = "";
+  list.innerHTML = AUTO_SEQUENCE_STEPS.map((s, i) => {
+    let cls = "pending";
+    if (i < activeIndex) cls = "done";
+    else if (i === activeIndex) cls = "active";
+    const label = s.firstLabel ? (round === "first" ? s.firstLabel : s.loopLabel) : s.label;
+    return `<li class="wm-seq-step ${cls}"><span class="wm-seq-num">${i + 1}</span>[${pallet}] ${label}</li>`;
+  }).join("");
+}
+
+function monRenderAutoSeqListGeneric(steps, activeIndex, pallet, labelFn) {
+  const idle = document.getElementById("mon-seq-idle");
+  const list = document.getElementById("mon-seq-list");
+  idle.style.display = "none";
+  list.style.display = "";
+  list.innerHTML = steps.map((s, i) => {
+    let cls = "pending";
+    if (i < activeIndex) cls = "done";
+    else if (i === activeIndex) cls = "active";
+    const label = labelFn ? labelFn(s) : s.label;
+    return `<li class="wm-seq-step ${cls}"><span class="wm-seq-num">${i + 1}</span>[${pallet}] ${label}</li>`;
+  }).join("");
+}
+
+async function monAutoRunOneCycle(mode) {
+  const info = wmAutoModeInfo(mode);
+
+  if (info.kind === "single") {
+    const pallet = info.pallet;
+    MON.activePallet = pallet;
+    monRenderPalletBlock(pallet);
+
+    for (let i = 0; i < AUTO_SINGLE_LOOP_STEPS.length; i++) {
+      monRenderAutoSeqListGeneric(AUTO_SINGLE_LOOP_STEPS, i, pallet);
+      try {
+        await AUTO_SINGLE_LOOP_STEPS[i].fn();
+      } catch (err) {
+        showToast(`Auto cycle error: ${err}`);
+        break;
+      }
+    }
+    monRenderAutoSeqListGeneric(AUTO_SINGLE_LOOP_STEPS, AUTO_SINGLE_LOOP_STEPS.length, pallet);
+
+    const job = getSelectedJob(pallet);
+    if (job) monReportCount(pallet, job);
+    return;
+  }
+
+  // dual (AUTO1-2)
+  const pallet = monAutoNextPallet(mode);
+  const round = MON_AUTO.roundCount[pallet] === 0 ? "first" : "loop";
+  MON.activePallet = pallet;
+  monRenderPalletBlock(pallet);
+
+  for (let i = 0; i < AUTO_SEQUENCE_STEPS.length; i++) {
+    const label = AUTO_SEQUENCE_STEPS[i].firstLabel
+      ? (round === "first" ? AUTO_SEQUENCE_STEPS[i].firstLabel : AUTO_SEQUENCE_STEPS[i].loopLabel)
+      : AUTO_SEQUENCE_STEPS[i].label;
+    monRenderAutoSeqListGeneric(AUTO_SEQUENCE_STEPS, i, pallet, () => label);
+    try {
+      await AUTO_SEQUENCE_STEPS[i].fn(round);
+    } catch (err) {
+      showToast(`Auto cycle error: ${err}`);
+      break;
+    }
+  }
+  monRenderAutoSeqListGeneric(AUTO_SEQUENCE_STEPS, AUTO_SEQUENCE_STEPS.length, pallet);
+  MON_AUTO.roundCount[pallet] += 1;
+
+  const job = getSelectedJob(pallet);
+  if (job) monReportCount(pallet, job);
+}
+
+async function monProcessAutoQueue(mode) {
+  if (MON_AUTO.running) return;
+  MON_AUTO.running = true;
+  MON.running = true;
+  document.getElementById("mon-signal-pill").className = "status-pill busy";
+  document.getElementById("mon-signal-pill").innerHTML = '<span class="dot"></span> Signal received';
+
+  while (MON_AUTO.queue > 0) {
+    MON_AUTO.queue -= 1;
+    await monAutoRunOneCycle(mode);
+  }
+
+  MON_AUTO.running = false;
+  MON.running = false;
+  MON.activePallet = null;
+  document.getElementById("mon-signal-pill").className = "status-pill offline";
+  document.getElementById("mon-signal-pill").innerHTML = '<span class="dot"></span> Waiting for signal';
+  document.getElementById("mon-seq-idle").style.display = "";
+  document.getElementById("mon-seq-idle").textContent = "Waiting for the 2-hand start signal…";
+  document.getElementById("mon-seq-list").style.display = "none";
+  monRenderAll();
+}
+
+function monHandleStartSignal() {
+  const mode = wmLoadMode();
+  const isAuto = mode === "AUTO1-2" || mode === "AUTO1" || mode === "AUTO2";
+  if (!isAuto) { monStartSimulation(); return; }
+
+  const info = wmAutoModeInfo(mode);
+  const pallets = info.kind === "single" ? [info.pallet] : monAutoActivePallets(mode);
+  const ready = pallets.filter((p) => !!getSelectedJob(p));
+  if (ready.length === 0) {
+    showToast(`Select a model for ${info.kind === "single" ? info.pallet : "the active pallet(s)"} on Model Setting first.`);
+    return;
+  }
+  MON_AUTO.queue += 1;
+  showToast(MON_AUTO.running ? "Cycle queued — runs after the current one." : "2-hand start received — running cycle…", "info");
+  monProcessAutoQueue(mode);
+}
+
 function monActivePallets() {
   return ["Pallet1", "Pallet2"].filter((p) => !!getSelectedJob(p));
 }
@@ -352,11 +490,17 @@ PAGE_INIT.monitor = function () {
   MON.running = false;
   MON.activePallet = null;
   monRenderAll();
-  document.getElementById("mon-simulate-btn").addEventListener("click", monStartSimulation);
+
+  const mode = wmLoadMode();
+  const isAutoMode = mode === "AUTO1-2" || mode === "AUTO1" || mode === "AUTO2";
+  const btn = document.getElementById("mon-simulate-btn");
+  btn.textContent = isAutoMode ? "▶ 2-Hand Start (Push)" : "Simulate 2-Button Start";
+  btn.addEventListener("click", monHandleStartSignal);
 };
 
 PAGE_TEARDOWN.monitor = function () {
   MON.running = false;
+  MON_AUTO.running = false;
   clearTimeout(MON.timer);
 };
 
@@ -364,17 +508,10 @@ PAGE_TEARDOWN.monitor = function () {
    FOR WORK MODE PAGE
    ============================================================ */
 const WM_MODE_KEY = "nlm_work_mode";
-const WM_STEPS = [
-  { id: "open_door",   label: "Open door" },
-  { id: "wait_start",  label: "Wait for start signal" },
-  { id: "close_door",  label: "Close door" },
-  { id: "check_cam",   label: "Check camera" },
-  { id: "change_pallet", label: "Change pallet (Cyl.1 out / Cyl.2 in)" },
-  { id: "start_mark",  label: "Start marking" },
-];
 
 const WM = {
   mode: null,       // "MANUAL" | "AUTO1-2" | "AUTO1" | "AUTO2" | null
+  manualRunning: false,
   seqRunning: false,
   seqTimer: null,
   seqIndex: -1,
@@ -418,70 +555,6 @@ function wmRenderPalletStatus() {
   }).join("");
 }
 
-function wmSeqStepsForMode() {
-  // AUTO1-2 alternates pallets; for the UI mock, just show the shared sequence once.
-  return WM_STEPS;
-}
-
-function wmRenderSeqList(activeIndex = -1, doneUpTo = -1) {
-  const list = document.getElementById("wm-seq-list");
-  if (!list) return;
-  const steps = wmSeqStepsForMode();
-  list.innerHTML = steps.map((s, i) => {
-    let stateClass = "pending";
-    if (i <= doneUpTo) stateClass = "done";
-    else if (i === activeIndex) stateClass = "active";
-    return `<li class="wm-seq-step ${stateClass}"><span class="wm-seq-num">${i + 1}</span>${s.label}</li>`;
-  }).join("");
-}
-
-function wmAllModelsSelected() {
-  const pallets = WM.mode === "AUTO1" ? ["Pallet1"] : WM.mode === "AUTO2" ? ["Pallet2"] : ["Pallet1", "Pallet2"];
-  return pallets.every((p) => !!getSelectedJob(p));
-}
-
-function wmStartSequence() {
-  if (!wmAllModelsSelected()) {
-    showToast("Select a model for the target pallet(s) before starting.");
-    return;
-  }
-  const steps = wmSeqStepsForMode();
-  WM.seqRunning = true;
-  WM.seqIndex = 0;
-  document.getElementById("wm-start-seq-btn").disabled = true;
-  document.getElementById("wm-stop-seq-btn").disabled = false;
-  document.getElementById("wm-confirm-seq-btn").disabled = true;
-  wmRenderSeqList(0, -1);
-
-  const stepDelayMs = 900;
-  const runStep = () => {
-    if (!WM.seqRunning) return;
-    wmRenderSeqList(WM.seqIndex, WM.seqIndex - 1);
-    if (WM.seqIndex >= steps.length) {
-      WM.seqRunning = false;
-      wmRenderSeqList(-1, steps.length - 1);
-      document.getElementById("wm-start-seq-btn").disabled = false;
-      document.getElementById("wm-stop-seq-btn").disabled = true;
-      document.getElementById("wm-confirm-seq-btn").disabled = false;
-      return;
-    }
-    WM.seqTimer = setTimeout(() => {
-      WM.seqIndex += 1;
-      runStep();
-    }, stepDelayMs);
-  };
-  runStep();
-}
-
-function wmStopSequence() {
-  WM.seqRunning = false;
-  clearTimeout(WM.seqTimer);
-  document.getElementById("wm-start-seq-btn").disabled = false;
-  document.getElementById("wm-stop-seq-btn").disabled = true;
-  document.getElementById("wm-confirm-seq-btn").disabled = true;
-  wmRenderSeqList(-1, -1);
-}
-
 function wmApplyMode(mode) {
   WM.mode = mode;
   wmSaveMode(mode);
@@ -499,10 +572,9 @@ function wmApplyMode(mode) {
   autoLock.classList.toggle("show", !isAuto);
 
   if (isAuto) {
-    wmRenderPalletStatus();
-    wmRenderSeqList(-1, -1);
+      wmRenderPalletStatus();
+      wmRenderAutoSequenceContent(mode);
   }
-  wmStopSequence();
 }
 
 /* ============================================================
@@ -588,6 +660,194 @@ const WM_FUNCTIONS = {
   },
 };
 
+/* ------------------------------------------------------------
+   Auto sequence template — the *first>>/*loop>> flow from spec.
+   Same array drives: (a) the static preview on Work Mode, and
+   (b) the live run on Monitor.
+   ------------------------------------------------------------ */
+const AUTO_SEQUENCE_STEPS = [
+  {
+    id: "cond_start",
+    firstLabel: "Condition Start Loop",
+    loopLabel: "Condition Start Auto",
+    note: "D001 ON, D002 ON — 2-hand start pushed",
+    fn: (round) => wmStub(round === "first" ? "CONDITION_START" : "CONDITION_START_AUTO", 200),
+  },
+  {
+    id: "queue_loop",
+    label: "Queue Loop Control",
+    note: "Holds this cycle until the previous one confirms done",
+    fn: () => wmStub("QUEUE_LOOP_CONTROL", 200),
+  },
+  { id: "close_front", label: "Close Front Door", fn: () => WM_FUNCTIONS.CLOSE_FRONT_DOOR.run() },
+  { id: "camera_check", label: "Camera Check", fn: () => WM_FUNCTIONS.CAMERA_TRIGGER.run() },
+  { id: "change_pallet", label: "Change Pallet", fn: () => WM_FUNCTIONS.CHANGE_PALLET.run() },
+  {
+    id: "open_front",
+    label: "Open Front Door",
+    note: "Door reopens here — user can load/unload and push start again",
+    fn: () => WM_FUNCTIONS.OPEN_FRONT_DOOR.run(),
+  },
+  { id: "start_marking", label: "Start Marking", fn: () => WM_FUNCTIONS.START_MARKING.run() },
+  { id: "count_auto", label: "Count Part (Auto)", fn: () => wmStub("COUNT_AUTO", 300) },
+  { id: "code_result", label: "2D Code: Read Result", fn: () => WM_FUNCTIONS.CODE2D_RESULT_READER.run() },
+  { id: "code_grade", label: "2D Code: Grade Result", fn: () => WM_FUNCTIONS.CODE2D_GRADE_RESULT.run() },
+  {
+    id: "confirm_end",
+    label: "Confirm End Loop",
+    note: "Confirms Condition Start + Queue Loop Control actually completed",
+    fn: () => wmStub("CONFIRM_END_LOOP", 200),
+  },
+];
+
+/* ------------------------------------------------------------
+   Single-pallet auto sequence (AUTO1 / AUTO2). Unlike AUTO1-2
+   there's no first/loop split — the same loop repeats every
+   time, and CHANGE_PALLET fires twice per cycle: once to bring
+   the pallet into the machine room to mark, once to bring it
+   back out to the operator room afterward.
+   ------------------------------------------------------------ */
+const AUTO_SINGLE_ACTIVATION_STEPS = (palletNum) => [
+  { id: "close_front", label: "Close Front Door", fn: () => WM_FUNCTIONS.CLOSE_FRONT_DOOR.run() },
+  {
+    id: "call_pallet",
+    label: `Call Pallet ${palletNum}`,
+    note: "Checks pallet is in operator room; calls Change Pallet if not",
+    fn: () => (palletNum === 1 ? WM_FUNCTIONS.CALL_PALLET1.run() : WM_FUNCTIONS.CALL_PALLET2.run()),
+  },
+  { id: "open_front", label: "Open Front Door", fn: () => WM_FUNCTIONS.OPEN_FRONT_DOOR.run() },
+];
+
+const AUTO_DUAL_ACTIVATION_STEPS = [
+  { id: "open_front", label: "Open Front Door", fn: () => WM_FUNCTIONS.OPEN_FRONT_DOOR.run() },
+];
+
+const AUTO_SINGLE_LOOP_STEPS = [
+  { id: "cond_start", label: "Condition Start", note: "D001 ON, D002 ON — 2-hand start pushed", fn: () => wmStub("CONDITION_START", 200) },
+  { id: "queue_loop", label: "Queue Loop Control", note: "Holds this cycle until the previous one confirms done", fn: () => wmStub("QUEUE_LOOP_CONTROL", 200) },
+  { id: "close_front", label: "Close Front Door", fn: () => WM_FUNCTIONS.CLOSE_FRONT_DOOR.run() },
+  { id: "camera_check", label: "Camera Check", fn: () => WM_FUNCTIONS.CAMERA_TRIGGER.run() },
+  { id: "change_pallet_in", label: "Change Pallet (into machine room)", fn: () => WM_FUNCTIONS.CHANGE_PALLET.run() },
+  { id: "start_marking", label: "Start Marking", fn: () => WM_FUNCTIONS.START_MARKING.run() },
+  { id: "count_auto", label: "Count Part (Auto)", fn: () => wmStub("COUNT_AUTO", 300) },
+  { id: "code_result", label: "2D Code: Read Result", fn: () => WM_FUNCTIONS.CODE2D_RESULT_READER.run() },
+  { id: "code_grade", label: "2D Code: Grade Result", fn: () => WM_FUNCTIONS.CODE2D_GRADE_RESULT.run() },
+  {
+    id: "confirm_end",
+    label: "Confirm End Loop",
+    note: "Confirms Condition Start + Queue Loop Control actually completed",
+    fn: () => wmStub("CONFIRM_END_LOOP", 200),
+  },
+  { id: "change_pallet_out", label: "Change Pallet (back to operator room)", fn: () => WM_FUNCTIONS.CHANGE_PALLET.run() },
+  { id: "open_front", label: "Open Front Door", fn: () => WM_FUNCTIONS.OPEN_FRONT_DOOR.run() },
+];
+
+function wmAutoModeInfo(mode) {
+  if (mode === "AUTO1") return { kind: "single", pallet: "Pallet1", palletNum: 1 };
+  if (mode === "AUTO2") return { kind: "single", pallet: "Pallet2", palletNum: 2 };
+  return { kind: "dual" };
+}
+
+function wmTooltipText(step) {
+  const parts = [];
+  if (step.label) parts.push(step.label);
+  if (step.note) parts.push(step.note);
+  if (step.desc) parts.push(step.desc);
+  return parts.join(" — ");
+}
+
+function wmRenderStepsList(elId, steps, completedCount = 0) {
+  const list = document.getElementById(elId);
+  if (!list) return;
+  list.innerHTML = steps.map((s, i) => {
+    const tooltip = wmTooltipText(s);
+    const cls = i < completedCount ? "done" : "pending";
+    return `<li class="wm-seq-step ${cls}" title="${escapeHtml(tooltip)}"><span class="wm-seq-num">${i + 1}</span>${s.label}</li>`;
+  }).join("");
+}
+
+function wmRenderAutoSeqPreviewList(elId, round) {
+  const list = document.getElementById(elId);
+  if (!list) return;
+  list.innerHTML = AUTO_SEQUENCE_STEPS.map((s, i) => {
+    const label = s.firstLabel ? (round === "first" ? s.firstLabel : s.loopLabel) : s.label;
+    const tooltip = wmTooltipText({ ...s, label });
+    return `<li class="wm-seq-step pending" title="${escapeHtml(tooltip)}"><span class="wm-seq-num">${i + 1}</span>${label}</li>`;
+  }).join("");
+}
+
+function wmRenderAutoSequenceContent(mode) {
+  const wrap = document.getElementById("wm-auto-seq-wrap");
+  if (!wrap) return;
+  const info = wmAutoModeInfo(mode);
+
+  if (info.kind === "single") {
+    wrap.innerHTML = `
+      <div class="wm-auto-seq-single">
+        <div class="card-title" style="margin-top:4px;">Activation <span style="font-weight:400;color:var(--ink-faint);font-size:11px;">(runs once, on Set)</span></div>
+        <ol class="wm-seq-list wm-auto-activation-list" id="wm-auto-activation-list"></ol>
+        <div class="card-title" style="margin-top:10px;">Loop Cycle <span style="font-weight:400;color:var(--ink-faint);font-size:11px;">(repeats every 2-hand start — pallet swaps in to mark, then back out)</span></div>
+        <ol class="wm-seq-list" id="wm-auto-loop-list"></ol>
+      </div>`;
+    wmRenderStepsList("wm-auto-activation-list", AUTO_SINGLE_ACTIVATION_STEPS(info.palletNum));
+    wmRenderStepsList("wm-auto-loop-list", AUTO_SINGLE_LOOP_STEPS);
+  } else {
+    wrap.innerHTML = `
+      <div class="wm-auto-seq-dual">
+        <div class="card-title" style="margin-top:4px;">Activation <span style="font-weight:400;color:var(--ink-faint);font-size:11px;">(runs once, on Set)</span></div>
+        <ol class="wm-seq-list wm-auto-activation-list" id="wm-auto-activation-list"></ol>
+        <div class="wm-auto-seq-cols" style="margin-top:10px;">
+          <div class="wm-auto-seq-col">
+            <div class="card-title" style="margin-top:4px;">First Cycle <span style="font-weight:400;color:var(--ink-faint);font-size:11px;">(runs once, on the first 2-hand start)</span></div>
+            <ol class="wm-seq-list" id="wm-auto-first-list"></ol>
+          </div>
+          <div class="wm-auto-seq-col">
+            <div class="card-title" style="margin-top:4px;">Loop Cycle <span style="font-weight:400;color:var(--ink-faint);font-size:11px;">(repeats after every following 2-hand start)</span></div>
+            <ol class="wm-seq-list" id="wm-auto-loop-list"></ol>
+          </div>
+        </div>
+      </div>`;
+    wmRenderStepsList("wm-auto-activation-list", AUTO_DUAL_ACTIVATION_STEPS);
+    wmRenderAutoSeqPreviewList("wm-auto-first-list", "first");
+    wmRenderAutoSeqPreviewList("wm-auto-loop-list", "loop");
+  }
+}
+
+async function wmActivateAutoMode(mode) {
+  const info = wmAutoModeInfo(mode);
+  showToast(`Mode changed to ${mode}.`, "success", 1800);
+
+  let activationSteps = info.kind === "single"
+    ? AUTO_SINGLE_ACTIVATION_STEPS(info.palletNum)
+    : AUTO_DUAL_ACTIVATION_STEPS;
+
+  if (info.kind === "single") {
+    wmLog(`>>> Auto mode ${mode} activated — running ${activationSteps.map((s) => s.label).join(", ")}`);
+  } else {
+    wmLog(`>>> Auto mode ${mode} activated — running ${activationSteps.map((s) => s.label).join(", ")}`);
+  }
+
+  for (let i = 0; i < activationSteps.length; i++) {
+    const step = activationSteps[i];
+    try {
+      const result = await step.fn();
+      if (!result || result.ok !== false) {
+        wmRenderStepsList("wm-auto-activation-list", activationSteps, i + 1);
+      }
+    } catch (err) {
+      // keep current view; errors will still surface in the log below
+    }
+  }
+
+  await new Promise((resolve) => setTimeout(resolve, 1500));
+
+  MON_AUTO.queue = 0;
+  MON_AUTO.running = false;
+  MON_AUTO.roundCount = { Pallet1: 0, Pallet2: 0 };
+  MON_AUTO.palletCycleIndex = 0;
+  setTimeout(() => loadPage("monitor"), 0);
+}
+
 const WM_GROUP_LABELS = {
   io: "Doors",
   pallet: "Pallet",
@@ -664,8 +924,8 @@ function wmRenderStartSeqList(activeIndex = -1, doneUpTo = -1, failState = null)
     if (failState && i === activeIndex) cls = failState; // 'alarm' | 'blocked'
     else if (i <= doneUpTo) cls = "done";
     else if (i === activeIndex) cls = "active";
-    const note = s.note ? ` <span class="mono" style="font-size:10.5px;color:var(--ink-faint);">(${s.note})</span>` : "";
-    return `<li class="wm-seq-step ${cls}"><span class="wm-seq-num">${i + 1}</span>${s.label}${note}</li>`;
+    const tooltip = wmTooltipText(s);
+    return `<li class="wm-seq-step ${cls}" title="${escapeHtml(tooltip)}"><span class="wm-seq-num">${i + 1}</span>${s.label}</li>`;
   }).join("");
 }
 
@@ -679,6 +939,12 @@ function wmSetStartBtnState(state) {
     btn.disabled = false;
     btn.innerHTML = "&#9654; Start Marking (2-hand start)";
   }
+}
+
+function wmStopSequence() {
+  WM.manualRunning = false;
+  wmSetStartBtnState("idle");
+  wmRenderStartSeqList(-1, -1);
 }
 
 async function wmRunStartSequence() {
@@ -718,10 +984,15 @@ PAGE_INIT.work_mode = function () {
   wmApplyMode(savedMode);
 
   document.getElementById("wm-set-mode-btn").addEventListener("click", () => {
-    const value = document.getElementById("wm-mode-select").value;
-    if (!value) { showToast("Choose a mode first."); return; }
-    wmApplyMode(value);
-    showToast(`Mode set to ${value}.`, "success");
+      const value = document.getElementById("wm-mode-select").value;
+      if (!value) { showToast("Choose a mode first."); return; }
+      const isAuto = value === "AUTO1-2" || value === "AUTO1" || value === "AUTO2";
+      wmApplyMode(value);
+      if (isAuto) {
+        wmActivateAutoMode(value);
+      } else {
+        showToast(`Mode set to ${value}.`, "success");
+      }
   });
 
   wmRenderFnGroups();
@@ -732,11 +1003,6 @@ PAGE_INIT.work_mode = function () {
     document.getElementById("wm-manual-log").innerHTML = "";
   });
 
-  document.getElementById("wm-start-seq-btn").addEventListener("click", wmStartSequence);
-  document.getElementById("wm-stop-seq-btn").addEventListener("click", wmStopSequence);
-  document.getElementById("wm-confirm-seq-btn").addEventListener("click", () => {
-    loadPage("monitor");
-  });
 };
 
 PAGE_TEARDOWN.work_mode = function () {

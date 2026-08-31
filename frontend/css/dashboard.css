@@ -18,7 +18,7 @@
 .page-header p { margin: 2px 0 0; color: var(--ink-soft); font-size: 13px; }
 
 .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-.grid-2-1 { display: grid; grid-template-columns: 2fr 1fr; gap: 16px; }
+.grid-2-1 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; }
 @media (max-width: 1100px) {
   .grid-2, .grid-3 { grid-template-columns: 1fr; }
@@ -236,10 +236,19 @@ table.data-table tr:last-child td { border-bottom: none; }
 .mon-topbar h1 { font-size: 18px; margin: 0; }
 .mon-topbar p { margin: 2px 0 0; color: var(--ink-soft); font-size: 13px; }
 .mon-topbar-actions { display: flex; align-items: center; gap: 10px; }
+.mon-seq-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: auto;
+  padding-top: 10px;
+  border-top: 1px solid var(--line-soft);
+}
 
 .mon-grid {
   display: grid;
-  grid-template-columns: 1fr 260px 1fr;
+  grid-template-columns: 1fr 290px 1fr;
   gap: 16px;
   flex: 1 1 auto;
   min-height: 0;
@@ -269,8 +278,15 @@ table.data-table tr:last-child td { border-bottom: none; }
 
 .mon-dev-row { display: flex; justify-content: flex-end; flex: 0 0 auto; }
 
-.mon-seq-card { display: flex; flex-direction: column; overflow-y: auto; }
+.mon-seq-card {
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  height: 100%;
+  min-height: 0;
+}
 .mon-seq-idle { color: var(--ink-faint); font-size: 12.5px; text-align: center; padding: 20px 6px; }
+.mon-seq-list { flex: 1 1 auto; }
 
 
 /* ---------------------------------------------------------
@@ -590,7 +606,7 @@ table.data-table tr:last-child td { border-bottom: none; }
    whole strip scrolls internally so it never pushes the log out of view. */
 .wm-fn-groups {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   gap: 10px 16px;
   margin-bottom: 10px;
   max-height: 168px;
@@ -651,7 +667,11 @@ table.data-table tr:last-child td { border-bottom: none; }
 }
 .wm-seq-step.active { border-color: var(--accent); background: var(--accent-soft); }
 .wm-seq-step.active .wm-seq-num { background: var(--accent); color: #fff; }
-.wm-seq-step.done { opacity: .65; }
+.wm-seq-step.done {
+  opacity: 1;
+  border-color: var(--ok);
+  background: rgba(59, 196, 118, 0.14);
+}
 .wm-seq-step.done .wm-seq-num { background: var(--ok); color: #fff; }
 
 .wm-auto-actions { display: flex; gap: 8px; margin-top: 10px; flex: 0 0 auto; }
@@ -674,7 +694,31 @@ table.data-table tr:last-child td { border-bottom: none; }
 .wm-lock-icon { font-size: 28px; }
 .wm-lock-text { font-size: 13px; font-weight: 700; max-width: 220px; text-align: center; }
 
+.wm-auto-note {
+  font-size: 12px;
+  color: var(--ink-soft);
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-strong);
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  margin-bottom: 10px;
+}
+.wm-auto-seq-cols {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.wm-auto-seq-col { display: flex; flex-direction: column; min-height: 0; }
+.wm-auto-seq-col .wm-seq-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; max-height: 260px; }
+@media (max-width: 900px) {
+  .wm-auto-seq-cols { grid-template-columns: 1fr; }
+}
 
+.wm-auto-seq-single .wm-seq-list { max-height: 320px; overflow-y: auto; }
+.wm-auto-activation-list { margin-bottom: 12px; }
+.wm-auto-activation-list .wm-seq-step { opacity: .85; }
 
 /* ---------------------------------------------------------
    FOR ALARM CENTER PAGE  (pages/alarm_center.html)

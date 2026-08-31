@@ -4,18 +4,6 @@
      Logic lives in dashboard.js, section "FOR MONITOR PAGE"
      ============================================================ -->
 <div class="mon-page">
-
-  <div class="mon-topbar">
-    <div>
-      <h1>Monitor</h1>
-      <p>Live production view — confirms the Auto flow running on each pallet.</p>
-    </div>
-    <div class="mon-topbar-actions">
-      <span class="status-pill offline" id="mon-signal-pill"><span class="dot"></span> Waiting for signal</span>
-      <button class="btn btn-primary" id="mon-simulate-btn">Simulate 2-Button Start</button>
-    </div>
-  </div>
-
   <div class="mon-grid">
 
     <!-- ================= PALLET 1 ================= -->
@@ -29,10 +17,17 @@
     </div>
 
     <!-- ================= LIVE SEQUENCE ================= -->
-    <div class="card mon-seq-card">
-      <div class="card-title">Live Sequence</div>
-      <div class="mon-seq-idle" id="mon-seq-idle">Waiting for the 2-push-button start signal…</div>
-      <ol class="wm-seq-list" id="mon-seq-list" style="display:none;"></ol>
+    <div class="card mon-seq-button-card">
+      <div class="card mon-seq-card">
+        <div class="card-title">Live Sequence</div>
+        <div class="mon-seq-idle" id="mon-seq-idle">Waiting for the 2-push-button start signal…</div>
+        <ol class="wm-seq-list" id="mon-seq-list" style="display:none;"></ol>
+
+        <div class="mon-seq-actions">
+          <span class="status-pill offline" id="mon-signal-pill"><span class="dot"></span> Waiting for signal</span>
+          <button class="btn btn-primary" id="mon-simulate-btn">Simulate 2-Button Start</button>
+        </div>
+      </div>
     </div>
 
     <!-- ================= PALLET 2 ================= -->
