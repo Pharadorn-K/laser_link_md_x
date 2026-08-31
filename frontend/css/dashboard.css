@@ -360,6 +360,11 @@ table.data-table tr:last-child td { border-bottom: none; }
 }
 #mon-seq-preview .wm-auto-seq-cols {
   max-height: 220px;
+  grid-template-columns: 1fr;
+}
+#mon-seq-preview .wm-auto-seq-col {
+  border: none;
+  padding: 0;
 }
 
 /* ---------------------------------------------------------
@@ -778,8 +783,8 @@ table.data-table tr:last-child td { border-bottom: none; }
 }
 .wm-auto-seq-cols {
   display: grid;
-  /* grid-template-columns: 1fr 1fr; */
-  gap: 20px;
+  grid-template-columns: 1fr 1fr;
+  gap: 30px;
   flex: 1 1 auto;
   min-height: 0;
 }
