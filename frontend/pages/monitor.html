@@ -4,6 +4,9 @@
      Logic lives in dashboard.js, section "FOR MONITOR PAGE"
      ============================================================ -->
 <div class="mon-page">
+
+  <div class="mon-mode-banner" id="mon-mode-banner"><!-- filled by JS --></div>
+
   <div class="mon-grid">
 
     <!-- ================= PALLET 1 ================= -->
@@ -16,16 +19,37 @@
       </div>
     </div>
 
-    <!-- ================= LIVE SEQUENCE ================= -->
+    <!-- ================= LIVE SEQUENCE / MANUAL NOTICE ================= -->
     <div class="card mon-seq-button-card">
       <div class="card mon-seq-card">
-        <div class="card-title">Live Sequence</div>
-        <div class="mon-seq-idle" id="mon-seq-idle">Waiting for the 2-push-button start signal…</div>
-        <ol class="wm-seq-list" id="mon-seq-list" style="display:none;"></ol>
+        <div class="card-title" id="mon-seq-title">Live Sequence</div>
 
-        <div class="mon-seq-actions">
-          <span class="status-pill offline" id="mon-signal-pill"><span class="dot"></span> Waiting for signal</span>
-          <button class="btn btn-primary" id="mon-simulate-btn">Simulate 2-Button Start</button>
+        <!-- AUTO mode: sequence preview + 2-hand start -->
+        <div id="mon-auto-block">
+          <div id="mon-seq-preview"><!-- filled by JS: First/Loop (dual) or Loop (single) --></div>
+
+          <div class="mon-seq-idle" id="mon-seq-idle" style="display:none;">Waiting for the 2-push-button start signal…</div>
+          <ol class="wm-seq-list" id="mon-seq-list" style="display:none;"></ol>
+
+          <div class="mon-seq-actions">
+            <span class="status-pill offline" id="mon-signal-pill"><span class="dot"></span> Waiting for signal</span>
+            <button class="btn btn-primary" id="mon-simulate-btn">Simulate 2-Button Start</button>
+          </div>
+        </div>
+
+        <!-- MANUAL mode: read-only notice, start button disabled/hidden -->
+        <div id="mon-manual-block" style="display:none;">
+          <div class="mon-manual-notice">
+            <i class="fa-solid fa-hand"></i>
+            <div>
+              <strong>Manual mode active.</strong>
+              <p>Marking is triggered from the <b>Work Mode</b> page in manual mode. This page shows model details only — the 2‑hand start / auto sequence here is disabled.</p>
+            </div>
+          </div>
+          <div class="mon-seq-actions">
+            <span class="status-pill offline"><span class="dot"></span> Manual mode</span>
+            <button class="btn" id="mon-goto-workmode-btn">Go to Work Mode</button>
+          </div>
         </div>
       </div>
     </div>

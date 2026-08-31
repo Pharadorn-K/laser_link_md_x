@@ -196,7 +196,6 @@ function getSelectedJobCommand(station) {
    these events; monReportCount() is the one place that should
    call POST /api/production/log for real.
    ============================================================ */
-
 const MON_STEPS = [
   { id: "open_door",  label: "Open door" },
   { id: "close_door", label: "Close door" },
@@ -206,10 +205,11 @@ const MON_STEPS = [
 ];
 
 const MON = {
-  counts: { Pallet1: 0, Pallet2: 0 },   // in-memory only until backend exists
+  counts: { Pallet1: 0, Pallet2: 0 },
   lastMarked: { Pallet1: null, Pallet2: null },
   running: false,
   timer: null,
+  mode: null, // snapshot of work-mode at page load
 };
 
 const MON_AUTO = {
@@ -218,6 +218,10 @@ const MON_AUTO = {
   roundCount: { Pallet1: 0, Pallet2: 0 },
   palletCycleIndex: 0,
 };
+
+function monIsAutoMode(mode) {
+  return mode === "AUTO1-2" || mode === "AUTO1" || mode === "AUTO2";
+}
 
 function monAutoActivePallets(mode) {
   if (mode === "AUTO1") return ["Pallet1"];
@@ -233,25 +237,9 @@ function monAutoNextPallet(mode) {
   return p;
 }
 
-function monRenderAutoSeqList(activeIndex, round, pallet) {
-  const idle = document.getElementById("mon-seq-idle");
-  const list = document.getElementById("mon-seq-list");
-  idle.style.display = "none";
-  list.style.display = "";
-  list.innerHTML = AUTO_SEQUENCE_STEPS.map((s, i) => {
-    let cls = "pending";
-    if (i < activeIndex) cls = "done";
-    else if (i === activeIndex) cls = "active";
-    const label = s.firstLabel ? (round === "first" ? s.firstLabel : s.loopLabel) : s.label;
-    return `<li class="wm-seq-step ${cls}"><span class="wm-seq-num">${i + 1}</span>[${pallet}] ${label}</li>`;
-  }).join("");
-}
-
 function monRenderAutoSeqListGeneric(steps, activeIndex, pallet, labelFn) {
-  const idle = document.getElementById("mon-seq-idle");
+  monShowLiveList();
   const list = document.getElementById("mon-seq-list");
-  idle.style.display = "none";
-  list.style.display = "";
   list.innerHTML = steps.map((s, i) => {
     let cls = "pending";
     if (i < activeIndex) cls = "done";
@@ -259,6 +247,61 @@ function monRenderAutoSeqListGeneric(steps, activeIndex, pallet, labelFn) {
     const label = labelFn ? labelFn(s) : s.label;
     return `<li class="wm-seq-step ${cls}"><span class="wm-seq-num">${i + 1}</span>[${pallet}] ${label}</li>`;
   }).join("");
+}
+
+function monRenderSeqPreviewList(elId, steps, round) {
+  const list = document.getElementById(elId);
+  if (!list) return;
+  list.innerHTML = steps.map((s, i) => {
+    const label = s.firstLabel ? (round === "first" ? s.firstLabel : s.loopLabel) : s.label;
+    const tooltip = wmTooltipText({ ...s, label });
+    return `<li class="wm-seq-step pending" title="${escapeHtml(tooltip)}"><span class="wm-seq-num">${i + 1}</span>${label}</li>`;
+  }).join("");
+}
+
+function monRenderSeqPreview(mode) {
+  const wrap = document.getElementById("mon-seq-preview");
+  if (!wrap) return;
+  const info = wmAutoModeInfo(mode);
+
+  if (info.kind === "single") {
+    wrap.innerHTML = `
+      <div class="card-title" style="margin-top:0;">Loop Cycle <span style="font-weight:400;color:var(--ink-faint);font-size:11px;">(repeats every 2-hand start)</span></div>
+      <ol class="wm-seq-list" id="mon-preview-loop-list"></ol>`;
+    monRenderSeqPreviewList("mon-preview-loop-list", AUTO_SINGLE_LOOP_STEPS);
+  } else {
+    wrap.innerHTML = `
+      <div class="wm-auto-seq-cols">
+        <div class="wm-auto-seq-col">
+          <div class="card-title" style="margin-top:0;">First Cycle <span style="font-weight:400;color:var(--ink-faint);font-size:11px;">(on the first 2-hand start)</span></div>
+          <ol class="wm-seq-list" id="mon-preview-first-list"></ol>
+        </div>
+        <div class="wm-auto-seq-col">
+          <div class="card-title" style="margin-top:0;">Loop Cycle <span style="font-weight:400;color:var(--ink-faint);font-size:11px;">(after every following start)</span></div>
+          <ol class="wm-seq-list" id="mon-preview-loop-list"></ol>
+        </div>
+      </div>`;
+    monRenderSeqPreviewList("mon-preview-first-list", AUTO_SEQUENCE_STEPS, "first");
+    monRenderSeqPreviewList("mon-preview-loop-list", AUTO_SEQUENCE_STEPS, "loop");
+  }
+}
+
+function monShowPreview() {
+  const preview = document.getElementById("mon-seq-preview");
+  const idle = document.getElementById("mon-seq-idle");
+  const list = document.getElementById("mon-seq-list");
+  if (preview) preview.style.display = "";
+  if (idle) idle.style.display = "none";
+  if (list) list.style.display = "none";
+}
+
+function monShowLiveList() {
+  const preview = document.getElementById("mon-seq-preview");
+  const idle = document.getElementById("mon-seq-idle");
+  const list = document.getElementById("mon-seq-list");
+  if (preview) preview.style.display = "none";
+  if (idle) idle.style.display = "none";
+  if (list) list.style.display = "";
 }
 
 async function monAutoRunOneCycle(mode) {
@@ -285,7 +328,6 @@ async function monAutoRunOneCycle(mode) {
     return;
   }
 
-  // dual (AUTO1-2)
   const pallet = monAutoNextPallet(mode);
   const round = MON_AUTO.roundCount[pallet] === 0 ? "first" : "loop";
   MON.activePallet = pallet;
@@ -310,6 +352,8 @@ async function monAutoRunOneCycle(mode) {
   if (job) monReportCount(pallet, job);
 }
 
+
+
 async function monProcessAutoQueue(mode) {
   if (MON_AUTO.running) return;
   MON_AUTO.running = true;
@@ -327,16 +371,16 @@ async function monProcessAutoQueue(mode) {
   MON.activePallet = null;
   document.getElementById("mon-signal-pill").className = "status-pill offline";
   document.getElementById("mon-signal-pill").innerHTML = '<span class="dot"></span> Waiting for signal';
-  document.getElementById("mon-seq-idle").style.display = "";
-  document.getElementById("mon-seq-idle").textContent = "Waiting for the 2-hand start signal…";
-  document.getElementById("mon-seq-list").style.display = "none";
+  monShowPreview();
   monRenderAll();
 }
 
 function monHandleStartSignal() {
   const mode = wmLoadMode();
-  const isAuto = mode === "AUTO1-2" || mode === "AUTO1" || mode === "AUTO2";
-  if (!isAuto) { monStartSimulation(); return; }
+  if (!monIsAutoMode(mode)) {
+    showToast("Manual mode is active — start marking from the Work Mode page.", "info");
+    return;
+  }
 
   const info = wmAutoModeInfo(mode);
   const pallets = info.kind === "single" ? [info.pallet] : monAutoActivePallets(mode);
@@ -345,6 +389,7 @@ function monHandleStartSignal() {
     showToast(`Select a model for ${info.kind === "single" ? info.pallet : "the active pallet(s)"} on Model Setting first.`);
     return;
   }
+
   MON_AUTO.queue += 1;
   showToast(MON_AUTO.running ? "Cycle queued — runs after the current one." : "2-hand start received — running cycle…", "info");
   monProcessAutoQueue(mode);
@@ -352,6 +397,30 @@ function monHandleStartSignal() {
 
 function monActivePallets() {
   return ["Pallet1", "Pallet2"].filter((p) => !!getSelectedJob(p));
+}
+
+// ---- condition / check summary chips, shared with the pallet card ----
+function monConditionRowsHtml(job) {
+  const items = job.conditions || [];
+  const lotRow = job.check_lot_no
+    ? `<tr><td>Lot No.</td><td class="mono">${escapeHtml(job.lot_no || "—")}</td></tr>`
+    : "";
+  const condRows = items.length
+    ? items.map((it) => `<tr><td>${escapeHtml(it.condition_name)}</td><td class="mono">${escapeHtml(it.condition_value)} <span style="color:var(--ink-faint);">(BLK ${padBlk(it.block_no)})</span></td></tr>`).join("")
+    : `<tr><td colspan="2" style="color:var(--ink-faint);">No conditions set.</td></tr>`;
+  return lotRow + condRows;
+}
+
+function monCheckBadgesHtml(job) {
+  const checks = [
+    ["Start 2D", job.check_start2dcode],
+    ["Read 2D", job.check_read2dcode],
+    ["Grade 2D", job.check_grade2dcode],
+    ["Camera", job.check_camera],
+  ];
+  return checks
+    .map(([label, on]) => `<span class="mon-chk-badge ${on ? "on" : "off"}">${on ? "✓" : "✕"} ${label}</span>`)
+    .join("");
 }
 
 function monRenderPalletBlock(pallet) {
@@ -371,13 +440,27 @@ function monRenderPalletBlock(pallet) {
   const statusLabel = running ? "Running" : "Idle";
   const lastMarked = MON.lastMarked[pallet];
 
+  const photoHtml = job.photo_path
+    ? `<img src="${job.photo_path}" alt="${escapeHtml(job.model)}" />`
+    : `<div class="ms-photo-placeholder"><i class="fa-regular fa-image"></i><span>No photo</span></div>`;
+
   body.innerHTML = `
     <div class="mon-model-row">
       <div>
         <div class="mon-model-name">${escapeHtml(job.model)}</div>
-        <div class="mon-model-meta mono">Job ${padJob(job.job_no)}${job.check_lot_no && job.lot_no ? ` · Lot ${escapeHtml(job.lot_no)}` : ""}</div>
+        <div class="mon-model-meta mono">Job ${padJob(job.job_no)}${job.control_grade ? ` · Grade ${escapeHtml(job.control_grade)}` : ""}</div>
       </div>
       <span class="status-pill ${statusClass}"><span class="dot"></span> ${statusLabel}</span>
+    </div>
+
+    <div class="mon-detail-layout">
+      <div class="mon-photo-frame">${photoHtml}</div>
+      <div class="mon-detail-info">
+        <div class="mon-chk-row">${monCheckBadgesHtml(job)}</div>
+        <table class="data-table ms-detail-table compact mon-cond-table">
+          <tbody>${monConditionRowsHtml(job)}</tbody>
+        </table>
+      </div>
     </div>
 
     <div class="mon-count-block">
@@ -420,13 +503,6 @@ function monRenderSeqList(steps, activeIndex, palletTag) {
 function monReportCount(pallet, job) {
   MON.counts[pallet] += 1;
   MON.lastMarked[pallet] = new Date().toISOString();
-
-  // Placeholder: send to backend once /api/production/log exists.
-  // apiFetch('/api/production/log', { method: 'POST', body: JSON.stringify({
-  //   model: job.model, job_no: job.job_no, pallet_no: pallet,
-  //   lot_no: job.lot_no || null, count: MON.counts[pallet],
-  // }) }).catch(() => {});
-
   monRenderPalletBlock(pallet);
 }
 
@@ -453,49 +529,39 @@ function monRunSequenceForPallet(pallet, onDone) {
   tick();
 }
 
-function monStartSimulation() {
-  if (MON.running) return;
-  const pallets = monActivePallets();
-  if (pallets.length === 0) {
-    showToast("Select a model for at least one pallet on Model Setting first.");
-    return;
+function monApplyModeView() {
+  const mode = wmLoadMode();
+  MON.mode = mode;
+  const isAuto = monIsAutoMode(mode);
+
+  const banner = document.getElementById("mon-mode-banner");
+  if (mode) {
+    banner.className = `mon-mode-banner ${isAuto ? "auto" : "manual"}`;
+    banner.innerHTML = `<i class="fa-solid ${isAuto ? "fa-gears" : "fa-hand"}"></i> Current mode: <strong>${mode}</strong>${isAuto ? "" : " — set an AUTO mode on Work Mode to run the live sequence here."}`;
+  } else {
+    banner.className = "mon-mode-banner none";
+    banner.innerHTML = `<i class="fa-solid fa-circle-question"></i> No mode set yet — go to <strong>Work Mode</strong> to choose MANUAL or an AUTO mode.`;
   }
 
-  MON.running = true;
-  document.getElementById("mon-signal-pill").className = "status-pill busy";
-  document.getElementById("mon-signal-pill").innerHTML = '<span class="dot"></span> Signal received';
-  document.getElementById("mon-simulate-btn").disabled = true;
+  document.getElementById("mon-auto-block").style.display = isAuto ? "" : "none";
+  document.getElementById("mon-manual-block").style.display = isAuto ? "none" : "";
+  document.getElementById("mon-seq-title").textContent = isAuto ? "Live Sequence" : "Manual Mode";
 
-  let queue = [...pallets];
-  const runNext = () => {
-    if (queue.length === 0) {
-      MON.running = false;
-      MON.activePallet = null;
-      document.getElementById("mon-signal-pill").className = "status-pill offline";
-      document.getElementById("mon-signal-pill").innerHTML = '<span class="dot"></span> Waiting for signal';
-      document.getElementById("mon-simulate-btn").disabled = false;
-      document.getElementById("mon-seq-idle").style.display = "";
-      document.getElementById("mon-seq-idle").textContent = "Waiting for the 2-push-button start signal…";
-      document.getElementById("mon-seq-list").style.display = "none";
-      monRenderAll();
-      return;
-    }
-    const pallet = queue.shift();
-    monRunSequenceForPallet(pallet, runNext);
-  };
-  runNext();
+  if (isAuto) {
+    monRenderSeqPreview(mode);
+    monShowPreview();
+  }
 }
 
 PAGE_INIT.monitor = function () {
   MON.running = false;
   MON.activePallet = null;
   monRenderAll();
+  monApplyModeView();
 
-  const mode = wmLoadMode();
-  const isAutoMode = mode === "AUTO1-2" || mode === "AUTO1" || mode === "AUTO2";
-  const btn = document.getElementById("mon-simulate-btn");
-  btn.textContent = isAutoMode ? "▶ 2-Hand Start (Push)" : "Simulate 2-Button Start";
-  btn.addEventListener("click", monHandleStartSignal);
+  document.getElementById("mon-simulate-btn").addEventListener("click", monHandleStartSignal);
+  const gotoBtn = document.getElementById("mon-goto-workmode-btn");
+  if (gotoBtn) gotoBtn.addEventListener("click", () => loadPage("work_mode"));
 };
 
 PAGE_TEARDOWN.monitor = function () {
@@ -553,6 +619,13 @@ function wmRenderPalletStatus() {
           : `<div class="wm-pallet-status-alarm">⚠ No model selected for ${p}</div>`}
       </div>`;
   }).join("");
+}
+
+function wmCheckPalletsReady(mode) {
+  const info = wmAutoModeInfo(mode);
+  const pallets = info.kind === "single" ? [info.pallet] : monAutoActivePallets(mode);
+  const missing = pallets.filter((p) => !getSelectedJob(p));
+  return { ok: missing.length === 0, missing };
 }
 
 function wmApplyMode(mode) {
@@ -987,12 +1060,26 @@ PAGE_INIT.work_mode = function () {
       const value = document.getElementById("wm-mode-select").value;
       if (!value) { showToast("Choose a mode first."); return; }
       const isAuto = value === "AUTO1-2" || value === "AUTO1" || value === "AUTO2";
-      wmApplyMode(value);
-      if (isAuto) {
-        wmActivateAutoMode(value);
-      } else {
+
+      wmApplyMode(value); // renders pallet-status row / lock overlays either way
+
+      if (!isAuto) {
         showToast(`Mode set to ${value}.`, "success");
+        return;
       }
+
+      const readiness = wmCheckPalletsReady(value);
+      if (!readiness.ok) {
+        showToast(
+          `Select a model for ${readiness.missing.join(" and ")} on Model Setting before activating ${value}.`,
+          "error"
+        );
+        // Don't run activation steps or navigate — stay on Work Mode so the
+        // "⚠ No model selected" pallet-status card stays visible.
+        return;
+      }
+
+      wmActivateAutoMode(value);
   });
 
   wmRenderFnGroups();
