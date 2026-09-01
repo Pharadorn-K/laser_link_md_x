@@ -28,6 +28,12 @@
           <div><div class="k">Marker</div><div class="v">MD-X2000 / 2500 series</div></div>
           <div><div class="k">Access</div><div class="v">Admin-approved accounts</div></div>
         </div>
+        <div class="login-brand-meta">
+          <div><div class="k">Admin</div><div class="v">`admin` / `Admin@123`</div></div>
+          <div><div class="k">Operator</div><div class="v">`66005` / `OPT123`</div></div>
+          <div><div class="k">Machine Controller</div><div class="v">`64036` / `MCC123`</div></div>
+          <div><div class="k">Machine Controller</div><div class="v">`60014` / `ENG123`</div></div>
+        </div>
       </div>
 
       <!-- ---- right: form panel ---- -->
@@ -47,6 +53,7 @@
               <label for="si-employee-id">Employee ID</label>
               <input type="text" id="si-employee-id" name="employee_id" autocomplete="username" required />
             </div>
+
             <div class="field">
               <label for="si-password">Password</label>
               <input type="password" id="si-password" name="password" autocomplete="current-password" required />
@@ -73,6 +80,15 @@
               <input type="text" id="su-employee-id" name="employee_id" required />
             </div>
             <div class="field">
+              <label for="su-role">Role</label>
+              <select id="su-role" name="role" required>
+                <option value="" disabled selected>— select role —</option>
+                <option value="operator">Operator</option>
+                <option value="machine_controller">Machine Controller</option>
+                <option value="engineer">Engineer</option>
+              </select>
+            </div>
+            <div class="field">
               <label for="su-password">Password</label>
               <input type="password" id="su-password" name="password" autocomplete="new-password" required minlength="6" />
             </div>
@@ -82,6 +98,7 @@
             </div>
             <button type="submit" class="btn btn-primary btn-block">Create account</button>
             <p class="login-submit-note">An admin must approve your account before you can sign in.</p>
+
           </form>
 
         </div>

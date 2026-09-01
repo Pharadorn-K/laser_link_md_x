@@ -237,16 +237,23 @@ function monAutoNextPallet(mode) {
   return p;
 }
 
-function monRenderAutoSeqListGeneric(steps, activeIndex, pallet, labelFn) {
-  monShowLiveList();
-  const list = document.getElementById("mon-seq-list");
-  list.innerHTML = steps.map((s, i) => {
-    let cls = "pending";
-    if (i < activeIndex) cls = "done";
-    else if (i === activeIndex) cls = "active";
-    const label = labelFn ? labelFn(s) : s.label;
-    return `<li class="wm-seq-step ${cls}"><span class="wm-seq-num">${i + 1}</span>[${pallet}] ${label}</li>`;
-  }).join("");
+// Animates step state (pending/active/done) directly on the already-visible
+// First Cycle / Loop Cycle lists built by monRenderSeqPreview(), instead of
+// swapping to a separate flat list. activeIndex === steps.length -> all done.
+function monSetPreviewStepState(listId, steps, activeIndex) {
+  const list = document.getElementById(listId);
+  if (!list) return;
+  const items = list.querySelectorAll("li");
+  items.forEach((li, i) => {
+    li.classList.remove("pending", "active", "done");
+    if (i < activeIndex) li.classList.add("done");
+    else if (i === activeIndex) li.classList.add("active");
+    else li.classList.add("pending");
+  });
+}
+
+function monResetPreviewStepState(listId, steps) {
+  monSetPreviewStepState(listId, steps, -1);
 }
 
 function monRenderSeqPreviewList(elId, steps, round) {
@@ -306,14 +313,16 @@ function monShowLiveList() {
 
 async function monAutoRunOneCycle(mode) {
   const info = wmAutoModeInfo(mode);
+  monShowPreview(); // keep the First/Loop columns visible the whole run
 
   if (info.kind === "single") {
     const pallet = info.pallet;
     MON.activePallet = pallet;
     monRenderPalletBlock(pallet);
 
+    monResetPreviewStepState("mon-preview-loop-list", AUTO_SINGLE_LOOP_STEPS);
     for (let i = 0; i < AUTO_SINGLE_LOOP_STEPS.length; i++) {
-      monRenderAutoSeqListGeneric(AUTO_SINGLE_LOOP_STEPS, i, pallet);
+      monSetPreviewStepState("mon-preview-loop-list", AUTO_SINGLE_LOOP_STEPS, i);
       try {
         await AUTO_SINGLE_LOOP_STEPS[i].fn();
       } catch (err) {
@@ -321,7 +330,7 @@ async function monAutoRunOneCycle(mode) {
         break;
       }
     }
-    monRenderAutoSeqListGeneric(AUTO_SINGLE_LOOP_STEPS, AUTO_SINGLE_LOOP_STEPS.length, pallet);
+    monSetPreviewStepState("mon-preview-loop-list", AUTO_SINGLE_LOOP_STEPS, AUTO_SINGLE_LOOP_STEPS.length);
 
     const job = getSelectedJob(pallet);
     if (job) monReportCount(pallet, job);
@@ -330,14 +339,13 @@ async function monAutoRunOneCycle(mode) {
 
   const pallet = monAutoNextPallet(mode);
   const round = MON_AUTO.roundCount[pallet] === 0 ? "first" : "loop";
+  const activeListId = round === "first" ? "mon-preview-first-list" : "mon-preview-loop-list";
   MON.activePallet = pallet;
   monRenderPalletBlock(pallet);
 
+  monResetPreviewStepState(activeListId, AUTO_SEQUENCE_STEPS);
   for (let i = 0; i < AUTO_SEQUENCE_STEPS.length; i++) {
-    const label = AUTO_SEQUENCE_STEPS[i].firstLabel
-      ? (round === "first" ? AUTO_SEQUENCE_STEPS[i].firstLabel : AUTO_SEQUENCE_STEPS[i].loopLabel)
-      : AUTO_SEQUENCE_STEPS[i].label;
-    monRenderAutoSeqListGeneric(AUTO_SEQUENCE_STEPS, i, pallet, () => label);
+    monSetPreviewStepState(activeListId, AUTO_SEQUENCE_STEPS, i);
     try {
       await AUTO_SEQUENCE_STEPS[i].fn(round);
     } catch (err) {
@@ -345,14 +353,12 @@ async function monAutoRunOneCycle(mode) {
       break;
     }
   }
-  monRenderAutoSeqListGeneric(AUTO_SEQUENCE_STEPS, AUTO_SEQUENCE_STEPS.length, pallet);
+  monSetPreviewStepState(activeListId, AUTO_SEQUENCE_STEPS, AUTO_SEQUENCE_STEPS.length);
   MON_AUTO.roundCount[pallet] += 1;
 
   const job = getSelectedJob(pallet);
   if (job) monReportCount(pallet, job);
 }
-
-
 
 async function monProcessAutoQueue(mode) {
   if (MON_AUTO.running) return;
@@ -400,14 +406,34 @@ function monActivePallets() {
 }
 
 // ---- condition / check summary chips, shared with the pallet card ----
-function monConditionRowsHtml(job) {
+// Editable condition/lot-no rows for the Monitor pallet card — same
+// concept as Model Setting's ms-cond-edit-list, so operators can update
+// values (e.g. every ≤150 pcs) without leaving Monitor.
+function monConditionEditRowsHtml(job, pallet) {
   const items = job.conditions || [];
   const lotRow = job.check_lot_no
-    ? `<tr><td>Lot No.</td><td class="mono">${escapeHtml(job.lot_no || "—")}</td></tr>`
+    ? `<div class="ms-cond-edit-row mon-cond-edit-row ms-lotno-row" data-pallet="${pallet}">
+        <div class="ms-cond-edit-meta">
+          <span class="ms-cond-edit-name">Lot No.</span>
+          <span class="ms-cond-edit-blk mono">Not marked · logged only</span>
+        </div>
+        <input type="text" class="ms-cond-edit-input mon-lotno-input" value="${escapeHtml(job.lot_no || "")}" />
+        <button type="button" class="btn btn-sm btn-primary mon-lotno-set-btn">Set</button>
+      </div>`
     : "";
+
   const condRows = items.length
-    ? items.map((it) => `<tr><td>${escapeHtml(it.condition_name)}</td><td class="mono">${escapeHtml(it.condition_value)} <span style="color:var(--ink-faint);">(BLK ${padBlk(it.block_no)})</span></td></tr>`).join("")
-    : `<tr><td colspan="2" style="color:var(--ink-faint);">No conditions set.</td></tr>`;
+    ? items.map((it) => `
+      <div class="ms-cond-edit-row mon-cond-edit-row" data-item-id="${it.id}" data-pallet="${pallet}">
+        <div class="ms-cond-edit-meta">
+          <span class="ms-cond-edit-name">${escapeHtml(it.condition_name)}</span>
+          <span class="ms-cond-edit-blk mono">BLK ${padBlk(it.block_no)}</span>
+        </div>
+        <input type="text" class="ms-cond-edit-input mon-cond-input" value="${escapeHtml(it.condition_value)}" />
+        <button type="button" class="btn btn-sm btn-primary mon-cond-set-btn">Set</button>
+      </div>`).join("")
+    : `<div class="eq-queue-empty">No conditions set.</div>`;
+
   return lotRow + condRows;
 }
 
@@ -457,9 +483,7 @@ function monRenderPalletBlock(pallet) {
       <div class="mon-photo-frame">${photoHtml}</div>
       <div class="mon-detail-info">
         <div class="mon-chk-row">${monCheckBadgesHtml(job)}</div>
-        <table class="data-table ms-detail-table compact mon-cond-table">
-          <tbody>${monConditionRowsHtml(job)}</tbody>
-        </table>
+        <div class="ms-cond-edit-list mon-cond-edit-list">${monConditionEditRowsHtml(job, pallet)}</div>
       </div>
     </div>
 
@@ -478,6 +502,38 @@ function monRenderPalletBlock(pallet) {
     MON.counts[pallet] = 0;
     monRenderPalletBlock(pallet);
   });
+
+  body.querySelectorAll(".mon-cond-set-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const row = btn.closest(".mon-cond-edit-row");
+      const itemId = row.dataset.itemId;
+      const input = row.querySelector(".mon-cond-input");
+      const item = (job.conditions || []).find((i) => String(i.id) === String(itemId));
+      const newValue = input.value.trim();
+      if (!newValue) { showToast("Value cannot be empty."); return; }
+      if (newValue === item.condition_value) { showToast("No change.", "info"); return; }
+
+      MON.pendingSet = { pallet, modelId: job.id, itemId, newValue, oldValue: item.condition_value, name: item.condition_name };
+      document.getElementById("mon-confirm-text").textContent =
+        `Change "${item.condition_name}" from "${item.condition_value}" to "${newValue}"?`;
+      document.getElementById("mon-confirm-backdrop").classList.add("open");
+    });
+  });
+
+  const lotBtn = body.querySelector(".mon-lotno-set-btn");
+  if (lotBtn) {
+    lotBtn.addEventListener("click", () => {
+      const input = body.querySelector(".mon-lotno-input");
+      const newValue = input.value.trim();
+      if (!newValue) { showToast("Lot No. cannot be empty."); return; }
+      if (newValue === job.lot_no) { showToast("No change.", "info"); return; }
+
+      MON.pendingSet = { pallet, modelId: job.id, itemId: null, newValue, oldValue: job.lot_no, name: "Lot No.", isLotNo: true };
+      document.getElementById("mon-confirm-text").textContent =
+        `Change "Lot No." from "${job.lot_no || "(empty)"}" to "${newValue}"? This is only logged with each part counted — it isn't marked on the workpiece.`;
+      document.getElementById("mon-confirm-backdrop").classList.add("open");
+    });
+  }
 }
 
 function monRenderAll() {
@@ -504,6 +560,42 @@ function monReportCount(pallet, job) {
   MON.counts[pallet] += 1;
   MON.lastMarked[pallet] = new Date().toISOString();
   monRenderPalletBlock(pallet);
+}
+
+async function monRefetchJob(pallet) {
+  const current = getSelectedJob(pallet);
+  if (!current) return;
+  try {
+    const res = await apiFetch(`/api/models/${current.id}`);
+    if (!res.ok) return;
+    const updated = await res.json();
+    setSelectedJob(pallet, updated);
+    monRenderPalletBlock(pallet);
+  } catch (err) {
+    // stay on stale data; next render/poll will retry
+  }
+}
+
+async function monConfirmSetValue() {
+  const p = MON.pendingSet;
+  document.getElementById("mon-confirm-backdrop").classList.remove("open");
+  if (!p) return;
+  try {
+    const url = p.isLotNo ? `/api/models/${p.modelId}/lotno` : `/api/models/${p.modelId}/conditions/${p.itemId}`;
+    const body = p.isLotNo ? { lot_no: p.newValue } : { condition_value: p.newValue };
+    const res = await apiFetch(url, { method: "PATCH", body: JSON.stringify(body) });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      showToast(data.error || "Update failed.");
+      return;
+    }
+    showToast(`"${p.name}" updated.`, "success");
+    await monRefetchJob(p.pallet);
+  } catch (err) {
+    showToast("Could not reach the server.");
+  } finally {
+    MON.pendingSet = null;
+  }
 }
 
 function monRunSequenceForPallet(pallet, onDone) {
@@ -556,12 +648,25 @@ function monApplyModeView() {
 PAGE_INIT.monitor = function () {
   MON.running = false;
   MON.activePallet = null;
+  MON.pendingSet = null;
   monRenderAll();
   monApplyModeView();
 
   document.getElementById("mon-simulate-btn").addEventListener("click", monHandleStartSignal);
   const gotoBtn = document.getElementById("mon-goto-workmode-btn");
   if (gotoBtn) gotoBtn.addEventListener("click", () => loadPage("work_mode"));
+
+  document.getElementById("mon-confirm-yes-btn").addEventListener("click", monConfirmSetValue);
+  document.getElementById("mon-confirm-no-btn").addEventListener("click", () => {
+    document.getElementById("mon-confirm-backdrop").classList.remove("open");
+    MON.pendingSet = null;
+  });
+  document.getElementById("mon-confirm-backdrop").addEventListener("click", (e) => {
+    if (e.target.id === "mon-confirm-backdrop") {
+      document.getElementById("mon-confirm-backdrop").classList.remove("open");
+      MON.pendingSet = null;
+    }
+  });
 };
 
 PAGE_TEARDOWN.monitor = function () {
@@ -811,7 +916,7 @@ const AUTO_SINGLE_LOOP_STEPS = [
     note: "Confirms Condition Start + Queue Loop Control actually completed",
     fn: () => wmStub("CONFIRM_END_LOOP", 200),
   },
-  { id: "change_pallet_out", label: "Change Pallet (back to operator room)", fn: () => WM_FUNCTIONS.CHANGE_PALLET.run() },
+  { id: "change_pallet_out", label: "Change Pallet", fn: () => WM_FUNCTIONS.CHANGE_PALLET.run() },
   { id: "open_front", label: "Open Front Door", fn: () => WM_FUNCTIONS.OPEN_FRONT_DOOR.run() },
 ];
 
@@ -2286,9 +2391,14 @@ async function userFetchAndRender(filter) {
       if (u.status === "pending") {
         actions.push(`<button class="btn btn-sm" onclick="userSetStatus(${u.id},'approved')">Approve</button>`);
         actions.push(`<button class="btn btn-sm btn-danger" onclick="userSetStatus(${u.id},'rejected')">Reject</button>`);
-      } else if (u.id !== CURRENT_USER.id) {
-        const toggleRole = u.role === "admin" ? "user" : "admin";
-        actions.push(`<button class="btn btn-sm" onclick="userSetRole(${u.id},'${toggleRole}')">Make ${toggleRole}</button>`);
+      } else if (u.id !== CURRENT_USER.id && u.role !== "admin") {
+        actions.push(`
+          <select class="role-select" data-user-id="${u.id}">
+            <option value="operator" ${u.role === "operator" ? "selected" : ""}>Operator</option>
+            <option value="machine_controller" ${u.role === "machine_controller" ? "selected" : ""}>Machine Controller</option>
+            <option value="engineer" ${u.role === "engineer" ? "selected" : ""}>Engineer</option>
+          </select>
+          <button class="btn btn-sm" onclick="userChangeRole(${u.id})">Save</button>`);
       }
       return `
       <tr>
@@ -2314,15 +2424,33 @@ async function userSetStatus(id, status) {
 }
 window.userSetStatus = userSetStatus;
 
-async function userSetRole(id, role) {
-  await apiFetch(`/api/users/${id}/role`, {
+// async function userSetRole(id, role) {
+//   await apiFetch(`/api/users/${id}/role`, {
+//     method: "PATCH",
+//     body: JSON.stringify({ role }),
+//   });
+//   const activeFilter = document.querySelector(".user-filter-bar button.active");
+//   userFetchAndRender(activeFilter ? activeFilter.dataset.filter : "pending");
+// }
+// window.userSetRole = userSetRole;
+
+async function userChangeRole(id) {
+  const select = document.querySelector(`.role-select[data-user-id="${id}"]`);
+  if (!select) return;
+  const res = await apiFetch(`/api/users/${id}/role`, {
     method: "PATCH",
-    body: JSON.stringify({ role }),
+    body: JSON.stringify({ role: select.value }),
   });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    showToast(data.error || "Could not update role.");
+    return;
+  }
+  showToast("Role updated.", "success");
   const activeFilter = document.querySelector(".user-filter-bar button.active");
   userFetchAndRender(activeFilter ? activeFilter.dataset.filter : "pending");
 }
-window.userSetRole = userSetRole;
+window.userChangeRole = userChangeRole;
 
 PAGE_INIT.all_user = function () {
   document.querySelectorAll(".user-filter-bar button").forEach((btn) => {

@@ -77,6 +77,7 @@ signupForm.addEventListener("submit", async (e) => {
 
   const name = document.getElementById("su-name").value.trim();
   const employee_id = document.getElementById("su-employee-id").value.trim();
+  const role = document.getElementById("su-role").value;
   const password = document.getElementById("su-password").value;
   const password2 = document.getElementById("su-password2").value;
 
@@ -88,6 +89,7 @@ signupForm.addEventListener("submit", async (e) => {
   const fd = new FormData();
   fd.append("name", name);
   fd.append("employee_id", employee_id);
+  fd.append("role", role);
   fd.append("password", password);
   if (photoInput.files[0]) fd.append("photo", photoInput.files[0]);
 

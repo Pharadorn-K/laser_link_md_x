@@ -6,7 +6,7 @@ CREATE DATABASE IF NOT EXISTS laser_link_md_x
   CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
 USE laser_link_md_x;
-
+SET SQL_SAFE_UPDATES = 0;
 -- ------------------------------------------------------------
 -- users
 --   Sign-up requires: photo (optional), name, employee_id, password.
@@ -125,3 +125,13 @@ ALTER TABLE model_condition
   MODIFY COLUMN lot_no VARCHAR(255) NOT NULL,
   MODIFY COLUMN lot_no_block SMALLINT NULL DEFAULT NULL,
   MODIFY COLUMN check_lot_no BOOLEAN NOT NULL DEFAULT TRUE;
+
+-- Role system: Admin stays limited to the existing bootstrap account.
+-- New signups choose Operator, Setting, or Engineer only.
+ALTER TABLE users
+  MODIFY COLUMN role ENUM('admin', 'user', 'operator', 'machine_controller', 'engineer') NOT NULL DEFAULT 'operator';
+
+UPDATE users SET role = 'operator' WHERE role = 'user';
+
+ALTER TABLE users
+  MODIFY COLUMN role ENUM('admin', 'operator', 'machine_controller', 'engineer') NOT NULL DEFAULT 'operator';

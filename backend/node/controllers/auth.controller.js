@@ -13,6 +13,9 @@ require('dotenv').config();
 
 const SALT_ROUNDS = 10;
 
+const SIGNUP_ROLES = ['operator', 'machine_controller', 'engineer']; // never 'admin' — that account already exists
+const ASSIGNABLE_ROLES = ['operator', 'machine_controller', 'engineer']; // admin can't be granted via API either
+
 function signToken(user) {
   return jwt.sign(
     {
@@ -42,9 +45,12 @@ function publicUser(u) {
 // ---------------- Sign up ----------------
 async function signup(req, res) {
   try {
-    const { employee_id, name, password } = req.body;
-    if (!employee_id || !name || !password) {
-      return res.status(400).json({ error: 'employee_id, name and password are required.' });
+    const { employee_id, name, password, role } = req.body;
+    if (!employee_id || !name || !password || !role) {
+      return res.status(400).json({ error: 'employee_id, name, password and role are required.' });
+    }
+    if (!SIGNUP_ROLES.includes(role)) {
+      return res.status(400).json({ error: `role must be one of: ${SIGNUP_ROLES.join(', ')}.` });
     }
 
     const [existing] = await pool.query('SELECT id FROM users WHERE employee_id = ?', [employee_id]);
@@ -57,8 +63,8 @@ async function signup(req, res) {
 
     const [result] = await pool.query(
       `INSERT INTO users (employee_id, name, password_hash, photo_path, role, status)
-       VALUES (?, ?, ?, ?, 'user', 'pending')`,
-      [employee_id, name, password_hash, photo_path]
+       VALUES (?, ?, ?, ?, ?, 'pending')`,
+      [employee_id, name, password_hash, photo_path, role]
     );
 
     return res.status(201).json({
@@ -178,9 +184,9 @@ async function setUserStatus(req, res) {
 // ---------------- Admin: change role ----------------
 async function setUserRole(req, res) {
   const { id } = req.params;
-  const { role } = req.body; // 'admin' | 'user'
-  if (!['admin', 'user'].includes(role)) {
-    return res.status(400).json({ error: "role must be 'admin' or 'user'." });
+  const { role } = req.body;
+  if (!ASSIGNABLE_ROLES.includes(role)) {
+    return res.status(400).json({ error: `role must be one of: ${ASSIGNABLE_ROLES.join(', ')}.` });
   }
   await pool.query('UPDATE users SET role = ? WHERE id = ?', [role, id]);
   const [rows] = await pool.query('SELECT * FROM users WHERE id = ?', [id]);
