@@ -15,6 +15,33 @@ function authToken() {
   return localStorage.getItem("nlm_token");
 }
 
+/* ============================================================
+   TOP BAR CLOCK — DD/MM/YYYY HH:MM:SS, ticks every second
+   ============================================================ */
+function pad2(n) {
+  return String(n).padStart(2, "0");
+}
+
+function formatTopbarClock(d) {
+  const dd = pad2(d.getDate());
+  const mm = pad2(d.getMonth() + 1);
+  const yyyy = d.getFullYear();
+  const hh = pad2(d.getHours());
+  const mi = pad2(d.getMinutes());
+  const ss = pad2(d.getSeconds());
+  return `${dd}/${mm}/${yyyy} ${hh}:${mi}:${ss}`;
+}
+
+let topbarClockTimer = null;
+function startTopbarClock() {
+  const el = document.getElementById("topbar-clock");
+  if (!el) return;
+  const tick = () => { el.textContent = formatTopbarClock(new Date()); };
+  tick();
+  clearInterval(topbarClockTimer);
+  topbarClockTimer = setInterval(tick, 1000);
+}
+
 async function apiFetch(path, options = {}) {
   const headers = Object.assign({}, options.headers || {});
   const token = authToken();
@@ -35,9 +62,9 @@ async function apiFetch(path, options = {}) {
 const PAGE_TITLES = {
   monitor: "Monitor",
   model_setting: "Model Setting",
+  add_new_model: "Add New Model",
   work_mode: "Work Mode",
   alarm_center: "Alarm Center",
-  equipment: "Equipment",
   profile: "Profile",
   all_user: "Users",
 };
@@ -49,10 +76,14 @@ const PAGE_TEARDOWN = {};
 
 let activePage = null;
 
+const PAGE_ROLES = {
+  add_new_model: ["admin", "engineer"],
+  all_user: ["admin"],
+};
+
 async function loadPage(page) {
-  if (page === "equipment" || page === "all_user") {
-    if (!CURRENT_USER || CURRENT_USER.role !== "admin") return;
-  }
+  const allowedRoles = PAGE_ROLES[page];
+  if (allowedRoles && (!CURRENT_USER || !allowedRoles.includes(CURRENT_USER.role))) return;
 
   if (activePage && PAGE_TEARDOWN[activePage]) PAGE_TEARDOWN[activePage]();
   activePage = page;
@@ -83,6 +114,7 @@ function initShell() {
     localStorage.removeItem("nlm_user");
     window.location.href = "login.html";
   });
+  startTopbarClock(); // NEW
 }
 
 function applyUserToChrome(user) {
@@ -92,8 +124,9 @@ function applyUserToChrome(user) {
   if (user.photo_path) {
     document.getElementById("topbar-avatar").src = user.photo_path;
   }
-  document.querySelectorAll('.nav-link[data-admin-only]').forEach((el) => {
-    el.style.display = user.role === "admin" ? "" : "none";
+  document.querySelectorAll(".nav-link[data-roles]").forEach((el) => {
+    const allowed = el.dataset.roles.split(",").map((r) => r.trim());
+    el.style.display = allowed.includes(user.role) ? "" : "none";
   });
 }
 
@@ -415,7 +448,7 @@ function monConditionEditRowsHtml(job, pallet) {
     ? `<div class="ms-cond-edit-row mon-cond-edit-row ms-lotno-row" data-pallet="${pallet}">
         <div class="ms-cond-edit-meta">
           <span class="ms-cond-edit-name">Lot No.</span>
-          <span class="ms-cond-edit-blk mono">Not marked · logged only</span>
+          <span class="ms-cond-edit-blk mono">Not marked</span>
         </div>
         <input type="text" class="ms-cond-edit-input mon-lotno-input" value="${escapeHtml(job.lot_no || "")}" />
         <button type="button" class="btn btn-sm btn-primary mon-lotno-set-btn">Set</button>
@@ -1667,6 +1700,7 @@ function msBuildStart2DCommand(condition) {
     : START2D_LABELS.map(() => "");
   return `WX,Check2DCode5=${params.join(",")}`;
 }
+
 function msBuildRead2DCommand(condition) {
   const v = condition.read2dcode_detailed !== undefined && condition.read2dcode_detailed !== null
     ? condition.read2dcode_detailed : "0";
@@ -1686,7 +1720,7 @@ function msRenderDetail(pallet, condition) {
   <div class="ms-cond-edit-row ms-lotno-row">
     <div class="ms-cond-edit-meta">
       <span class="ms-cond-edit-name">Lot No.</span>
-      <span class="ms-cond-edit-blk mono">Not marked · logged only</span>
+      <span class="ms-cond-edit-blk mono">Not marked</span>
     </div>
     <input type="text" class="ms-cond-edit-input ms-lotno-input" value="${escapeHtml(condition.lot_no || "")}" />
     <button type="button" class="btn btn-sm btn-primary ms-lotno-set-btn">Set</button>
@@ -1871,6 +1905,7 @@ function msBuildStart2DGrid(values) {
       <input type="text" class="ms-start2d-input" data-index="${i}" value="${escapeHtml((values && values[i]) || "")}" />
     </div>`).join("");
 }
+
 function msCaptureStart2DValues() {
   return Array.from(document.querySelectorAll(".ms-start2d-input"))
     .sort((a, b) => Number(a.dataset.index) - Number(b.dataset.index))
@@ -2061,234 +2096,204 @@ PAGE_INIT.model_setting = function () {
     }
   });
 };
+
 /* ============================================================
-   FOR EQUIPMENT PAGE
+   FOR ADD NEW MODEL PAGE
+   ============================================================
+   Reuses Model Setting's modal helpers (same field IDs, see
+   add_new_model.html header comment) instead of duplicating
+   form logic. Only mode switching / model picking / save-delete
+   orchestration lives here.
    ============================================================ */
-const EQ = {
-  commandGroups: null,
-  currentGroup: null,
-  currentMode: null,
-  pollTimer: null,
+const ANM = {
+  mode: "add", // "add" | "editP1" | "editP2"
+  list: [],
 };
 
-function eqFormatParam(raw, fmt) {
-  raw = (raw || "").trim();
-  if (!fmt) return raw;
-  const m = fmt.match(/^(0)?(\d+)(?:\.(\d+))?([df])$/);
-  if (!m) return raw;
-  const zeroFlag = !!m[1];
-  const width = parseInt(m[2], 10);
-  const precision = m[3] !== undefined ? parseInt(m[3], 10) : 6;
-  const kind = m[4];
+function anmShowForm(show) {
+  document.getElementById("anm-form-wrap").style.display = show ? "" : "none";
+  document.getElementById("anm-edit-empty").style.display = show ? "none" : "";
+}
 
-  let num = kind === "d" ? parseInt(raw, 10) : parseFloat(raw);
-  if (Number.isNaN(num)) throw new Error(`invalid value`);
+function anmUpdateSaveBtnLabel() {
+  const btn = document.getElementById("anm-save-btn");
+  btn.textContent = MS.editingId ? "Save Changes" : "Add Model";
+}
 
-  const sign = num < 0 ? "-" : "";
-  let body = kind === "d" ? Math.abs(num).toString() : Math.abs(num).toFixed(precision);
+// Fills the shared form fields from a condition row (or blanks it for
+// a new one) — mirrors msOpenModal() minus the modal title/backdrop.
+function anmFillForm(condition) {
+  document.getElementById("ms-modal-alert").innerHTML = "";
+  document.getElementById("anm-model-form").reset();
 
-  if (zeroFlag) {
-    while (sign.length + body.length < width) body = "0" + body;
-    return sign + body;
+  MS.editingId = condition ? condition.id : null;
+  document.getElementById("ms-f-id").value = condition ? condition.id : "";
+  document.getElementById("ms-f-model").value = condition ? condition.model : "";
+  document.getElementById("ms-f-jobno").value = condition ? condition.job_no : "";
+  document.getElementById("ms-f-pallet").value = condition
+    ? condition.pallet_no
+    : (ANM.mode === "editP2" ? "Pallet2" : "Pallet1");
+
+  document.getElementById("ms-f-start2d").checked = condition ? !!condition.check_start2dcode : false;
+  msBuildStart2DGrid(condition ? condition.start2dcode_params : null);
+
+  document.getElementById("ms-f-read2d").checked = condition ? !!condition.check_read2dcode : false;
+  document.getElementById("ms-f-read2d-detailed").value =
+    condition && condition.read2dcode_detailed !== undefined ? condition.read2dcode_detailed : "0";
+
+  document.getElementById("ms-f-grade2d").checked = condition ? !!condition.check_grade2dcode : true;
+  document.getElementById("ms-f-grade").value = condition ? condition.control_grade || "" : "";
+
+  document.getElementById("ms-f-camera").checked = condition ? !!condition.check_camera : true;
+  document.getElementById("ms-f-lotno-value").value = condition && condition.lot_no ? condition.lot_no : "";
+
+  const photoInputEl = document.getElementById("ms-f-photo");
+  photoInputEl.value = "";
+  const photoPreviewEl = document.getElementById("ms-f-photo-preview");
+  if (condition && condition.photo_path) {
+    photoPreviewEl.src = condition.photo_path;
+    photoPreviewEl.style.display = "";
+  } else {
+    photoPreviewEl.style.display = "none";
   }
-  let full = sign + body;
-  while (full.length < width) full = " " + full;
-  return full;
+
+  document.getElementById("ms-modal-delete-btn").style.display = condition ? "" : "none";
+
+  msToggleCheckParams("ms-f-start2d", "ms-start2d-params-wrap");
+  msToggleCheckParams("ms-f-read2d", "ms-read2d-params-wrap");
+  msToggleCheckParams("ms-f-grade2d", "ms-grade2d-params-wrap");
+
+  MS.conditions = condition && condition.conditions && condition.conditions.length
+    ? condition.conditions.map((c) => ({ ...c }))
+    : [{ condition_name: "", condition_value: "", block_no: "" }];
+  msRebuildConditionRows();
+
+  anmUpdateSaveBtnLabel();
 }
 
-async function eqLoadCommands() {
-  const res = await apiFetch("/api/equipment/commands");
-  EQ.commandGroups = await res.json();
-  const catSelect = document.getElementById("eq-cat-select");
-  catSelect.innerHTML = Object.keys(EQ.commandGroups)
-    .map((cat) => `<option value="${cat}">${cat}</option>`)
-    .join("");
-  eqOnCategoryChange();
-}
-
-function eqFindGroup(cat, name) {
-  return (EQ.commandGroups[cat] || []).find((g) => g.name === name);
-}
-
-function eqOnCategoryChange() {
-  const cat = document.getElementById("eq-cat-select").value;
-  const names = (EQ.commandGroups[cat] || []).map((g) => g.name);
-  const cmdSelect = document.getElementById("eq-cmd-select");
-  cmdSelect.innerHTML = names.map((n) => `<option value="${n}">${n}</option>`).join("");
-  eqOnCommandChange();
-}
-
-function eqOnCommandChange() {
-  const cat = document.getElementById("eq-cat-select").value;
-  const cmdName = document.getElementById("eq-cmd-select").value;
-  const group = eqFindGroup(cat, cmdName);
-  if (!group) return;
-  EQ.currentGroup = group;
-
-  const hasWx = !!group.wx;
-  const hasRx = !!group.rx;
-  const wxBtn = document.getElementById("eq-mode-wx");
-  const rxBtn = document.getElementById("eq-mode-rx");
-
-  wxBtn.disabled = !hasWx;
-  rxBtn.disabled = !hasRx;
-
-  let mode = EQ.currentMode;
-  if (!mode || !group[mode]) mode = hasWx ? "wx" : "rx";
-  eqSetMode(mode);
-}
-
-function eqSetMode(mode) {
-  const group = EQ.currentGroup;
-  if (!group || !group[mode]) mode = group.wx ? "wx" : "rx";
-  EQ.currentMode = mode;
-
-  document.getElementById("eq-mode-wx").classList.toggle("active", mode === "wx");
-  document.getElementById("eq-mode-rx").classList.toggle("active", mode === "rx");
-
-  const tag = mode === "wx" ? "[WX / Set]" : "[RX / Get]";
-  document.getElementById("eq-cmd-desc").textContent = `${tag}  ${group.desc || ""}`;
-
-  eqRebuildParamGrid(group[mode].params || []);
-}
-
-function eqRebuildParamGrid(params) {
-  const grid = document.getElementById("eq-param-grid");
-  if (params.length === 0) {
-    grid.innerHTML = `<div class="eq-param-empty">(No parameters)</div>`;
-    eqUpdatePreview();
-    return;
-  }
-  grid.innerHTML = params
-    .map((p, i) => {
-      const [label, defaultVal, width] = p;
-      return `
-        <div class="field">
-          <label>${label}</label>
-          <input type="text" class="mono eq-param-input" data-index="${i}" value="${defaultVal}" size="${width}" />
-        </div>`;
-    })
-    .join("");
-  grid.querySelectorAll(".eq-param-input").forEach((inp) => {
-    inp.addEventListener("input", eqUpdatePreview);
-  });
-  eqUpdatePreview();
-}
-
-function eqUpdatePreview() {
-  const box = document.getElementById("eq-preview-box");
-  const group = EQ.currentGroup;
-  const mode = EQ.currentMode;
-  if (!group || !mode) return;
-  const entry = group[mode];
-  const params = entry.params || [];
-  const inputs = document.querySelectorAll(".eq-param-input");
-
+async function anmLoadEditListFor(pallet) {
+  const select = document.getElementById("anm-edit-select");
+  select.innerHTML = `<option value="">— select —</option>`;
+  anmShowForm(false);
   try {
-    let cmd = entry.template;
-    params.forEach((p, i) => {
-      const raw = inputs[i] ? inputs[i].value : p[1];
-      const fmt = p[3];
-      const value = eqFormatParam(raw, fmt);
-      cmd = cmd.replaceAll(`{p${i}}`, value);
-    });
-    box.textContent = cmd;
-    box.classList.remove("invalid");
+    const res = await apiFetch(`/api/models?pallet=${pallet}`);
+    const rows = await res.json();
+    ANM.list = rows;
+    select.innerHTML =
+      `<option value="">— select —</option>` +
+      rows.map((r) => `<option value="${r.id}">${escapeHtml(r.model)} · Job ${padJob(r.job_no)}</option>`).join("");
   } catch (err) {
-    box.textContent = "(invalid parameter value)";
-    box.classList.add("invalid");
+    showToast("Could not load models.");
   }
 }
 
-function eqGetIpPort() {
-  return {
-    ip: document.getElementById("eq-ip").value.trim(),
-    port: parseInt(document.getElementById("eq-port").value.trim(), 10),
-  };
-}
-
-function eqSetStatusPill(state) {
-  // state: 'ready' | 'busy' | 'error' | 'offline'
-  const pill = document.getElementById("eq-status-pill");
-  const labels = { ready: "Ready", busy: "Busy", error: "Error", offline: "Offline" };
-  pill.className = `status-pill ${state}`;
-  pill.innerHTML = `<span class="dot"></span> ${labels[state]}`;
-}
-
-function eqAppendLogLines(lines) {
-  const log = document.getElementById("eq-log");
-  if (!log) return;
-  log.innerHTML = lines
-    .map((line) => {
-      let cls = "";
-      if (line.includes("!!!")) cls = "line-err";
-      else if (line.includes("[retry") || line.includes("[warn")) cls = "line-warn";
-      else if (line.includes("<<<")) cls = "line-ok";
-      return `<div class="${cls}">${line.replace(/</g, "&lt;")}</div>`;
-    })
-    .join("");
-  log.scrollTop = log.scrollHeight;
-}
-
-function eqRenderQueue(items) {
-  const list = document.getElementById("eq-queue-list");
-  if (!items || items.length === 0) {
-    list.innerHTML = `<li class="eq-queue-empty">Queue is empty.</li>`;
-    return;
-  }
-  const icons = { pending: "\u23f3", processing: "\ud83d\udd04", failed: "\u274c" };
-  list.innerHTML = items
-    .map(
-      (it) => `
-      <li class="${it.status}">
-        <span>${icons[it.status] || "?"} Job ${String(it.program_no).padStart(4, "0")}
-          <span class="job-status">(${it.status})</span></span>
-        ${it.status !== "processing" ? `<button class="btn btn-sm btn-ghost" onclick="eqRemoveQueueItem(${it.id})">Remove</button>` : ""}
-      </li>`
-    )
-    .join("");
-}
-
-async function eqRemoveQueueItem(id) {
-  await apiFetch(`/api/equipment/queue/${id}`, { method: "DELETE" });
-  eqPollStatus();
-}
-window.eqRemoveQueueItem = eqRemoveQueueItem;
-
-async function eqPollStatus() {
-  try {
-    const res = await apiFetch("/api/equipment/status");
-    const data = await res.json();
-    eqAppendLogLines(data.log || []);
-    eqRenderQueue(data.queue || []);
-    if (data.connection) {
-      eqSetStatusPill(data.connection.connected ? "ready" : "offline");
+async function anmReloadEditList(clearSelection) {
+  const pallet = ANM.mode === "editP2" ? "Pallet2" : "Pallet1";
+  const keepId = clearSelection ? null : MS.editingId;
+  await anmLoadEditListFor(pallet);
+  if (keepId) {
+    const condition = ANM.list.find((r) => String(r.id) === String(keepId));
+    if (condition) {
+      document.getElementById("anm-edit-select").value = keepId;
+      anmFillForm(condition);
+      anmShowForm(true);
     }
-  } catch (err) {
-    // silent; next poll will retry
+  }
+  msLoadConditionNames();
+}
+
+function anmSetMode(mode) {
+  ANM.mode = mode;
+  document.querySelectorAll(".anm-mode-btn").forEach((b) => b.classList.toggle("active", b.dataset.mode === mode));
+  document.getElementById("anm-edit-select-wrap").style.display = mode === "add" ? "none" : "";
+
+  if (mode === "add") {
+    anmFillForm(null);
+    anmShowForm(true);
+  } else {
+    anmLoadEditListFor(mode === "editP2" ? "Pallet2" : "Pallet1");
   }
 }
 
-function eqBuildJobButtons() {
-  const wrap = document.getElementById("eq-job-buttons");
-  wrap.innerHTML = [1, 2, 3, 4]
-    .map((n) => `<button type="button" class="eq-job-btn" data-job="${n}">Job ${String(n).padStart(4, "0")}</button>`)
-    .join("");
-  wrap.querySelectorAll(".eq-job-btn").forEach((btn) => {
-    btn.addEventListener("click", () => eqAddJob(parseInt(btn.dataset.job, 10)));
-  });
-}
+PAGE_INIT.add_new_model = function () {
+  // ---- Column 1 (model form) setup — unchanged from before ----
+  ANM.mode = "add";
+  ANM.list = [];
+  msLoadConditionNames();
 
-async function eqAddJob(programNo) {
-  const { ip, port } = eqGetIpPort();
-  await apiFetch("/api/equipment/queue", {
-    method: "POST",
-    body: JSON.stringify({ ip, port, program_no: programNo }),
+  document.querySelectorAll(".anm-mode-btn").forEach((btn) => {
+    btn.addEventListener("click", () => anmSetMode(btn.dataset.mode));
   });
-  eqPollStatus();
-}
+  document.getElementById("anm-edit-select").addEventListener("change", () => {
+    const id = document.getElementById("anm-edit-select").value;
+    if (!id) { anmShowForm(false); return; }
+    const condition = ANM.list.find((r) => String(r.id) === id);
+    anmFillForm(condition || null);
+    anmShowForm(true);
+  });
+  document.getElementById("ms-f-photo").addEventListener("change", () => {
+    const file = document.getElementById("ms-f-photo").files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const img = document.getElementById("ms-f-photo-preview");
+      img.src = e.target.result;
+      img.style.display = "";
+    };
+    reader.readAsDataURL(file);
+  });
+  document.getElementById("ms-add-condition-btn").addEventListener("click", () => {
+    if (MS.conditions.length >= MS_MAX_CONDITIONS) return;
+    MS.conditions = msCaptureConditionsFromDom();
+    MS.conditions.push({ condition_name: "", condition_value: "", block_no: "" });
+    msRebuildConditionRows();
+  });
+  document.getElementById("ms-modal-delete-btn").addEventListener("click", async () => {
+    if (!isAdmin()) { showToast("Only admin can delete models."); return; }
+    if (!MS.editingId) return;
+    if (!confirm("Delete this model condition?")) return;
+    try {
+      const res = await apiFetch(`/api/models/${MS.editingId}`, { method: "DELETE" });
+      if (!res.ok) {
+        const data = await res.json();
+        msModalAlert(data.error || "Delete failed.");
+        return;
+      }
+      showToast("Model deleted.", "success");
+      await anmReloadEditList(true);
+    } catch (err) {
+      msModalAlert("Could not reach the server.");
+    }
+  });
+  document.getElementById("anm-model-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    if (!isAdmin()) { showToast("Only admin can save models."); return; }
+    document.getElementById("ms-modal-alert").innerHTML = "";
+    const fd = msCollectFormData();
+    try {
+      const res = MS.editingId
+        ? await apiFetch(`/api/models/${MS.editingId}`, { method: "PUT", body: fd })
+        : await apiFetch(`/api/models`, { method: "POST", body: fd });
+      const data = await res.json();
+      if (!res.ok) {
+        msModalAlert(data.error || "Save failed.");
+        return;
+      }
+      if (ANM.mode === "add") {
+        showToast("Model added.", "success");
+        anmFillForm(null);
+      } else {
+        showToast("Model updated.", "success");
+        await anmReloadEditList(false);
+      }
+      msLoadConditionNames();
+    } catch (err) {
+      msModalAlert("Could not reach the server.");
+    }
+  });
+  anmSetMode("add");
 
-PAGE_INIT.equipment = function () {
+  // ---- Column 2 (MD-X2520A) setup — moved from PAGE_INIT.equipment ----
   eqBuildJobButtons();
   eqLoadCommands();
 
@@ -2362,9 +2367,313 @@ PAGE_INIT.equipment = function () {
   EQ.pollTimer = setInterval(eqPollStatus, 1500);
 };
 
-PAGE_TEARDOWN.equipment = function () {
+PAGE_TEARDOWN.add_new_model = function () {
   if (EQ.pollTimer) clearInterval(EQ.pollTimer);
   EQ.pollTimer = null;
+};
+
+/* ============================================================
+   FOR EQUIPMENT PAGE
+   ============================================================ */
+const EQ = {
+  commandGroups: null,
+  currentGroup: null,
+  currentMode: "wx",
+  pollTimer: null,
+};
+
+function eqFindGroup(cat, name) {
+  if (!EQ.commandGroups || !cat || !name) return null;
+  return (EQ.commandGroups[cat] || []).find((g) => g.name === name) || null;
+}
+
+function eqSetStatusPill(mode) {
+  const pill = document.getElementById("eq-status-pill");
+  if (!pill) return;
+  const labelMap = { ready: "Ready", busy: "Busy", error: "Error", offline: "Offline" };
+  const classes = { ready: "ready", busy: "busy", error: "error", offline: "offline" };
+  pill.className = `status-pill ${classes[mode] || "offline"}`;
+  pill.innerHTML = `<span class="dot"></span> ${labelMap[mode] || "Offline"}`;
+}
+
+function eqGetIpPort() {
+  const ipInput = document.getElementById("eq-ip");
+  const portInput = document.getElementById("eq-port");
+  const ip = ipInput ? ipInput.value.trim() : "10.207.1.254";
+  const port = portInput ? Number(portInput.value || 50002) : 50002;
+  return { ip, port: Number.isFinite(port) ? port : 50002 };
+}
+
+function eqBuildJobButtons() {
+  const wrap = document.getElementById("eq-job-buttons");
+  if (!wrap) return;
+  wrap.innerHTML = [1, 2, 3, 4].map((n) => `
+    <button class="eq-job-btn" type="button" data-job="${n}">JOB ${String(n).padStart(4, "0")}</button>
+  `).join("");
+  wrap.querySelectorAll(".eq-job-btn").forEach((btn) => {
+    btn.addEventListener("click", () => eqAddJob(Number(btn.dataset.job)));
+  });
+}
+
+async function eqAddJob(programNo) {
+  const { ip, port } = eqGetIpPort();
+  try {
+    const res = await apiFetch("/api/equipment/queue", {
+      method: "POST",
+      body: JSON.stringify({ ip, port, program_no: programNo }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      showToast(data.error || "Could not add job to queue.", "error");
+      return;
+    }
+    showToast(`Job ${String(programNo).padStart(4, "0")} queued.`, "success");
+    eqPollStatus();
+  } catch (err) {
+    showToast("Could not reach the laser service.", "error");
+  }
+}
+
+function eqRenderQueue(queue) {
+  const list = document.getElementById("eq-queue-list");
+  if (!list) return;
+  if (!queue || queue.length === 0) {
+    list.innerHTML = '<li class="eq-queue-empty">Queue is empty.</li>';
+    return;
+  }
+  list.innerHTML = queue.map((item) => {
+    const statusClass = item.status || "pending";
+    const statusLabel = item.status ? item.status.charAt(0).toUpperCase() + item.status.slice(1) : "Pending";
+    return `
+      <li class="${statusClass}">
+        <span>JOB ${String(item.program_no).padStart(4, "0")}</span>
+        <span class="job-status">${statusLabel}</span>
+      </li>
+    `;
+  }).join("");
+}
+
+async function eqPollStatus() {
+  try {
+    const res = await apiFetch("/api/equipment/status");
+    if (!res.ok) {
+      eqSetStatusPill("offline");
+      return;
+    }
+    const data = await res.json();
+    eqSetStatusPill(data.connection && data.connection.connected ? "ready" : "offline");
+    eqRenderQueue(data.queue || []);
+  } catch (err) {
+    eqSetStatusPill("offline");
+    const list = document.getElementById("eq-queue-list");
+    if (list) list.innerHTML = '<li class="eq-queue-empty">Queue unavailable.</li>';
+  }
+}
+
+async function eqLoadCommands() {
+  try {
+    const res = await apiFetch("/api/equipment/commands");
+    if (!res.ok) return;
+    EQ.commandGroups = await res.json();
+    const catSelect = document.getElementById("eq-cat-select");
+    if (!catSelect) return;
+    const cats = Object.keys(EQ.commandGroups || {});
+    catSelect.innerHTML = cats.map((cat) => `<option value="${cat}">${cat}</option>`).join("");
+    if (cats.length) {
+      catSelect.value = cats[0];
+      eqOnCategoryChange();
+    }
+  } catch (err) {
+    if (document.getElementById("eq-cat-select")) {
+      document.getElementById("eq-cat-select").innerHTML = '<option value="">Unavailable</option>';
+    }
+  }
+}
+
+function eqOnCategoryChange() {
+  const cat = document.getElementById("eq-cat-select")?.value || "";
+  const cmdSelect = document.getElementById("eq-cmd-select");
+  if (!cmdSelect) return;
+  const commands = EQ.commandGroups && cat ? EQ.commandGroups[cat] || [] : [];
+  cmdSelect.innerHTML = commands.length
+    ? commands.map((cmd) => `<option value="${cmd.name}">${cmd.name}</option>`).join("")
+    : '<option value="">No commands</option>';
+  eqOnCommandChange();
+}
+
+function eqOnCommandChange() {
+  const cat = document.getElementById("eq-cat-select")?.value || "";
+  const cmdName = document.getElementById("eq-cmd-select")?.value || "";
+  const paramGrid = document.getElementById("eq-param-grid");
+  const descBox = document.getElementById("eq-cmd-desc");
+  const previewBox = document.getElementById("eq-preview-box");
+  if (!paramGrid || !descBox || !previewBox) return;
+
+  const command = eqFindGroup(cat, cmdName);
+  if (!command) {
+    descBox.textContent = "Select a category and command above.";
+    paramGrid.innerHTML = '<div class="eq-param-empty">No parameters for this command.</div>';
+    previewBox.textContent = "";
+    return;
+  }
+
+  const selectedMode = EQ.currentMode || "wx";
+  const variant = selectedMode === "rx" ? command.rx : command.wx;
+  descBox.textContent = command.desc || "";
+
+  if (!variant || !variant.params || variant.params.length === 0) {
+    paramGrid.innerHTML = '<div class="eq-param-empty">No parameters for this command.</div>';
+    previewBox.textContent = variant ? variant.template : "";
+    return;
+  }
+
+  const paramValues = {};
+  const inputs = variant.params.map((param, index) => {
+    const defaultValue = param[1] || "";
+    const label = param[0] || `Param ${index + 1}`;
+    const name = `eq-param-${index}`;
+    paramValues[name] = defaultValue;
+    return `
+      <div class="field">
+        <label for="${name}">${label}</label>
+        <input id="${name}" data-param-index="${index}" type="text" value="${escapeHtml(defaultValue)}" />
+      </div>
+    `;
+  }).join("");
+
+  paramGrid.innerHTML = inputs;
+  paramGrid.querySelectorAll("input").forEach((input) => {
+    input.addEventListener("input", () => {
+      const values = Array.from(paramGrid.querySelectorAll("input")).map((el) => el.value);
+      const template = variant.template || "";
+      const preview = template.replace(/\{p(\d+)\}/g, (_, i) => values[Number(i)] ?? "");
+      previewBox.textContent = preview;
+      previewBox.classList.toggle("invalid", preview.includes("(invalid") || preview.trim() === "");
+    });
+  });
+
+  const values = variant.params.map((param) => param[1] || "");
+  const template = variant.template || "";
+  previewBox.textContent = template.replace(/\{p(\d+)\}/g, (_, i) => values[Number(i)] ?? "");
+  previewBox.classList.remove("invalid");
+}
+
+function eqSetMode(mode) {
+  EQ.currentMode = mode;
+  document.querySelectorAll(".eq-mode-switch button").forEach((btn) => {
+    btn.classList.toggle("active", btn.dataset.mode === mode);
+  });
+  eqOnCommandChange();
+}
+
+function eqWirePageControls() {
+  const connectBtn = document.getElementById("eq-connect-btn");
+  if (connectBtn) {
+    connectBtn.addEventListener("click", async () => {
+      const { ip, port } = eqGetIpPort();
+      eqSetStatusPill("busy");
+      try {
+        const res = await apiFetch("/api/equipment/connect", {
+          method: "POST",
+          body: JSON.stringify({ ip, port }),
+        });
+        const data = await res.json();
+        eqSetStatusPill(res.ok && data.connected ? "ready" : "error");
+        eqPollStatus();
+      } catch (err) {
+        eqSetStatusPill("error");
+      }
+    });
+  }
+
+  const addCustomBtn = document.getElementById("eq-add-custom-btn");
+  if (addCustomBtn) {
+    addCustomBtn.addEventListener("click", () => {
+      const raw = document.getElementById("eq-custom-job").value.trim();
+      const n = parseInt(raw, 10);
+      if (Number.isNaN(n) || n < 0 || n > 1999) {
+        alert("Enter a job number between 0 and 1999.");
+        return;
+      }
+      eqAddJob(n);
+      document.getElementById("eq-custom-job").value = "";
+    });
+  }
+
+  const clearQueueBtn = document.getElementById("eq-clear-queue-btn");
+  if (clearQueueBtn) {
+    clearQueueBtn.addEventListener("click", async () => {
+      await apiFetch("/api/equipment/queue", { method: "DELETE" });
+      eqPollStatus();
+    });
+  }
+
+  const rawSendBtn = document.getElementById("eq-raw-send-btn");
+  if (rawSendBtn) {
+    rawSendBtn.addEventListener("click", async () => {
+      const { ip, port } = eqGetIpPort();
+      const command = document.getElementById("eq-raw-cmd").value.trim();
+      if (!command) return;
+      await apiFetch("/api/equipment/raw", {
+        method: "POST",
+        body: JSON.stringify({ ip, port, command }),
+      });
+      eqPollStatus();
+    });
+  }
+
+  const catSelect = document.getElementById("eq-cat-select");
+  if (catSelect) catSelect.addEventListener("change", eqOnCategoryChange);
+
+  const cmdSelect = document.getElementById("eq-cmd-select");
+  if (cmdSelect) cmdSelect.addEventListener("change", eqOnCommandChange);
+
+  const wxBtn = document.getElementById("eq-mode-wx");
+  if (wxBtn) wxBtn.addEventListener("click", () => eqSetMode("wx"));
+
+  const rxBtn = document.getElementById("eq-mode-rx");
+  if (rxBtn) rxBtn.addEventListener("click", () => eqSetMode("rx"));
+
+  const runBtn = document.getElementById("eq-run-cmd-btn");
+  if (runBtn) {
+    runBtn.addEventListener("click", async () => {
+      const { ip, port } = eqGetIpPort();
+      const command = document.getElementById("eq-preview-box").textContent.trim();
+      if (!command || command.startsWith("(invalid")) {
+        alert("Invalid or empty command.");
+        return;
+      }
+      await apiFetch("/api/equipment/raw", {
+        method: "POST",
+        body: JSON.stringify({ ip, port, command }),
+      });
+      eqPollStatus();
+    });
+  }
+
+  const copyBtn = document.getElementById("eq-copy-raw-btn");
+  if (copyBtn) {
+    copyBtn.addEventListener("click", () => {
+      document.getElementById("eq-raw-cmd").value = document.getElementById("eq-preview-box").textContent.trim();
+    });
+  }
+
+  const clearLogBtn = document.getElementById("eq-clear-log-btn");
+  if (clearLogBtn) {
+    clearLogBtn.addEventListener("click", () => {
+      const log = document.getElementById("eq-log");
+      if (log) log.innerHTML = "";
+    });
+  }
+}
+
+PAGE_INIT.equipment = function () {
+  eqSetStatusPill("offline");
+  eqBuildJobButtons();
+  eqWirePageControls();
+  eqLoadCommands();
+  eqPollStatus();
+  EQ.pollTimer = setInterval(eqPollStatus, 1500);
 };
 
 /* ============================================================

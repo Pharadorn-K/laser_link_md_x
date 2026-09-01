@@ -68,13 +68,6 @@ table.data-table tr:last-child td { border-bottom: none; }
    the whole thing never needs a page-level scrollbar, no matter
    how many jobs are queued or how many params a command has.
    --------------------------------------------------------- */
-.eq-page {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  height: calc(100vh - 56px - 40px);
-  min-height: 560px;
-}
 
 .eq-conn-card { flex: 0 0 auto; }
 
@@ -89,30 +82,7 @@ table.data-table tr:last-child td { border-bottom: none; }
 .eq-conn-row .field.ip input { width: 170px; }
 .eq-conn-row .status-pill { margin-left: auto; }
 
-/* -- two-column main area -- */
-.eq-main-grid {
-  display: flex;
-  gap: 16px;
-  flex: 1 1 auto;
-  min-height: 0;
-}
-.eq-col {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-  min-height: 0;
-}
-.eq-col-left { flex: 0 0 340px; }
-.eq-col-right { flex: 1 1 auto; min-width: 0; }
 
-/* -- job queue (grows to fill the left column) -- */
-.eq-jobs-card {
-  flex: 1 1 auto;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
 .eq-jobs-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 10px; flex: 0 0 auto; }
 .eq-job-btn {
   padding: 14px 8px;
@@ -156,11 +126,7 @@ table.data-table tr:last-child td { border-bottom: none; }
 
 /* -- command browser (capped so it can't crowd out the log; scrolls
       internally if a command has a lot of parameters, e.g. Check2DCode5) -- */
-.eq-browser-card {
-  flex: 0 0 auto;
-  max-height: 44%;
-  overflow-y: auto;
-}
+
 .eq-browser-top { display: flex; gap: 14px; flex-wrap: wrap; margin-bottom: 8px; }
 .eq-browser-top .field { margin-bottom: 0; min-width: 200px; }
 
@@ -183,13 +149,7 @@ table.data-table tr:last-child td { border-bottom: none; }
 .eq-preview-row .mono-box.invalid { color: #ffb199; }
 
 /* -- log console (fills whatever's left in the right column) -- */
-.eq-log-card {
-  flex: 1 1 auto;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
+
 .eq-log {
   background: #0e1117;
   color: #cfd8e3;
@@ -208,17 +168,24 @@ table.data-table tr:last-child td { border-bottom: none; }
 .eq-log .line-err  { color: #ff9d80; }
 .eq-log .line-warn { color: #f0c96b; }
 
-/* -- fall back to normal page scrolling on narrow/short screens -- */
-@media (max-width: 1100px) {
-  .eq-page { height: auto; min-height: 0; }
-  .eq-main-grid { flex-direction: column; }
-  .eq-col-left, .eq-col-right { flex: 0 0 auto; }
-  .eq-jobs-card, .eq-log-card { flex: 0 0 auto; }
-  .eq-queue-list { max-height: 240px; }
-  .eq-log { min-height: 220px; }
-  .eq-browser-card { max-height: none; }
+/* ---------------------------------------------------------
+   FOR ADD NEW MODEL PAGE — COLUMN 2 (MD-X2520A)
+   Stacked cards, natural page scroll (no fixed vh split —
+   that layout was for the old full-width Equipment page).
+   --------------------------------------------------------- */
+.mdx-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
 }
-
+.mdx-queue-list {
+  max-height: 220px;
+  overflow-y: auto;
+}
+.mdx-log-card .eq-log {
+  min-height: 220px;
+  max-height: 320px;
+}
 /* ---------------------------------------------------------
    FOR MONITOR PAGE — one-screen, two pallet blocks + sequence
    --------------------------------------------------------- */
@@ -391,7 +358,7 @@ table.data-table tr:last-child td { border-bottom: none; }
    --------------------------------------------------------- */
 .profile-header { display: flex; align-items: center; gap: 16px; margin-bottom: 20px; }
 .profile-header img {
-  width: 72px; height: 72px; border-radius: 50%;
+  width: 150px; height: 170px; border-radius: 10%;
   object-fit: cover; background: var(--line-soft); border: 1px solid var(--line);
 }
 .profile-header h2 { margin: 0 0 2px; font-size: 17px; }
@@ -632,6 +599,34 @@ table.data-table tr:last-child td { border-bottom: none; }
   margin-bottom: 10px;
   border: 1px solid var(--line-soft);
 }
+
+/* ---------------------------------------------------------
+   FOR ADD NEW MODEL PAGE  (pages/add_new_model.html)
+   --------------------------------------------------------- */
+.anm-grid { align-items: start; }
+.anm-col1 { display: flex; flex-direction: column; gap: 14px; }
+.anm-col2 { min-height: 200px; }
+
+.anm-mode-switch {
+  display: flex;
+  gap: 4px;
+  background: var(--line-soft);
+  padding: 3px;
+  border-radius: 999px;
+  width: fit-content;
+}
+.anm-mode-btn {
+  border: none;
+  background: transparent;
+  padding: 8px 16px;
+  border-radius: 999px;
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--ink-soft);
+}
+.anm-mode-btn.active { background: var(--bg-sidebar); color: #fff; }
+
+.anm-edit-select-wrap { max-width: 360px; margin-bottom: 0; }
 
 /* ---------------------------------------------------------
    FOR WORK MODE PAGE — one-screen layout

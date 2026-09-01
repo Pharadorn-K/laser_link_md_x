@@ -300,8 +300,34 @@ input, select, textarea {
   align-items: center;
   justify-content: space-between;
   padding: 0 20px;
+  position: relative;
 }
 .topbar-title { font-weight: 700; font-size: 14px; }
+
+/* NEW */
+.topbar-clock {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--ink-soft);
+  letter-spacing: .02em;
+  white-space: nowrap;
+}
+.topbar-clock::before {
+  content: "";
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--ok);
+  box-shadow: 0 0 6px var(--ok);
+}
+@media (max-width: 860px) {
+  .topbar-clock { display: none; } /* avoid crowding on narrow screens */
+}
 .topbar-right { display: flex; align-items: center; gap: 12px; }
 .topbar-user {
   display: flex; align-items: center; gap: 8px;

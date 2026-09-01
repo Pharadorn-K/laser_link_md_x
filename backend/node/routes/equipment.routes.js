@@ -8,7 +8,7 @@ const router = express.Router();
 const { requireRole } = require('../middleware/requireRole');
 const laser = require('../services/laserService');
 
-const guard = requireRole('admin');
+const guard = requireRole('admin', 'engineer');
 
 router.get('/commands', guard, async (req, res) => {
   const r = await laser.forward('get', '/api/commands');

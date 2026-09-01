@@ -1,0 +1,216 @@
+<!-- frontend/pages/add_new_model.html -->
+<!-- ============================================================
+     add_new_model.html — loaded into #content by dashboard.js
+     Logic lives in dashboard.js, section "FOR ADD NEW MODEL PAGE"
+
+     Column 1 reuses the exact same field IDs as the "+Add Model"
+     modal on Model Setting, so it can reuse that page's helper
+     functions unmodified (msCollectFormData, msRebuildConditionRows,
+     msBuildStart2DGrid, msCaptureConditionsFromDom, msToggleCheckParams,
+     msModalAlert, msLoadConditionNames — see dashboard.js "FOR MODEL
+     SETTING PAGE"). Only the mode switch / model picker / save-delete
+     wiring below is specific to this page.
+
+     Column 2: placeholder for now.
+     ============================================================ -->
+<div class="anm-page">
+  <div class="grid-2 anm-grid">
+
+    <!-- ================= COLUMN 1 ================= -->
+    <div class="card anm-col1">
+
+      <div class="anm-mode-switch">
+        <button type="button" class="anm-mode-btn active" data-mode="add">+ Add Model</button>
+        <button type="button" class="anm-mode-btn" data-mode="editP1">Edit Model P1</button>
+        <button type="button" class="anm-mode-btn" data-mode="editP2">Edit Model P2</button>
+      </div>
+
+      <div class="field anm-edit-select-wrap" id="anm-edit-select-wrap" style="display:none;">
+        <label for="anm-edit-select">Select model</label>
+        <select id="anm-edit-select">
+          <option value="">— select —</option>
+        </select>
+      </div>
+
+      <div id="ms-modal-alert"></div>
+
+      <div class="ms-empty" id="anm-edit-empty" style="display:none;">Select a model above to edit its condition.</div>
+
+      <div id="anm-form-wrap">
+        <form id="anm-model-form">
+          <input type="hidden" id="ms-f-id" />
+
+          <div class="grid-2">
+            <div class="field">
+              <label for="ms-f-model">Model</label>
+              <input type="text" id="ms-f-model" required />
+            </div>
+            <div class="field">
+              <label for="ms-f-jobno">Job No. (0-1999)</label>
+              <input type="number" id="ms-f-jobno" min="0" max="1999" required />
+            </div>
+          </div>
+
+          <div class="grid-2">
+            <div class="field">
+              <label for="ms-f-pallet">Pallet</label>
+              <select id="ms-f-pallet">
+                <option value="Pallet1">Pallet1</option>
+                <option value="Pallet2">Pallet2</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="ms-f-photo">Part photo (optional)</label>
+              <input type="file" id="ms-f-photo" accept="image/png,image/jpeg,image/webp" />
+              <img id="ms-f-photo-preview" class="ms-photo-preview" style="display:none;" />
+            </div>
+          </div>
+
+          <div class="field">
+            <label for="ms-f-lotno-value">Lot No. (starting value)</label>
+            <input type="text" id="ms-f-lotno-value" placeholder="e.g. L20260828-01" required />
+          </div>
+          <p class="field-hint" style="margin:-6px 0 10px;">Lot No. isn't marked on the part — it's only recorded when a part is counted, so it can be used to filter production history later. Update its value from the Monitor or Model Setting pallet card, the same way you update conditions, every 150 parts or less.</p>
+
+          <div class="ms-check-block">
+            <label><input type="checkbox" id="ms-f-start2d" /> Start 2D Code (Check2DCode5)</label>
+            <div class="ms-check-params" id="ms-start2d-params-wrap">
+              <p class="field-hint">17 parameters (A–Q), sent as WX,Check2DCode5=A,B,C,...,Q</p>
+              <div class="ms-start2d-grid" id="ms-start2d-grid"><!-- filled by JS --></div>
+            </div>
+          </div>
+
+          <div class="ms-check-block">
+            <label><input type="checkbox" id="ms-f-read2d" /> Check Read 2D Code (read last result)</label>
+            <div class="ms-check-params" id="ms-read2d-params-wrap">
+              <div class="field" style="max-width:220px;">
+                <label for="ms-f-read2d-detailed">Acquire Detailed (0/1)</label>
+                <input type="text" id="ms-f-read2d-detailed" maxlength="1" value="0" />
+              </div>
+              <p class="field-hint">Sends RX,CodeReadResult=&lt;value&gt;</p>
+            </div>
+          </div>
+
+          <div class="ms-check-block">
+            <label><input type="checkbox" id="ms-f-grade2d" checked /> Check Grade 2D Code</label>
+            <div class="ms-check-params" id="ms-grade2d-params-wrap">
+              <div class="field" style="max-width:260px;">
+                <label for="ms-f-grade">Control Grade</label>
+                <input type="text" id="ms-f-grade" placeholder="optional,C-V" />
+              </div>
+            </div>
+          </div>
+
+          <div class="ms-check-block">
+            <label><input type="checkbox" id="ms-f-camera" checked /> Check Camera</label>
+          </div>
+
+          <div class="card-title" style="margin-top:14px;">
+            Conditions
+            <button type="button" class="btn btn-sm" id="ms-add-condition-btn">+ Add Condition</button>
+          </div>
+          <p class="field-hint" style="margin:-6px 0 10px;">Each condition marks one CharacterString at one BLK No.</p>
+          <div id="ms-conditions-wrap"></div>
+          <datalist id="ms-condition-names-datalist"></datalist>
+
+          <div style="display:flex; gap:8px; margin-top:16px;">
+            <button type="submit" class="btn btn-primary" id="anm-save-btn">Add Model</button>
+            <button type="button" class="btn btn-danger" id="ms-modal-delete-btn" style="margin-left:auto; display:none;">Delete</button>
+          </div>
+        </form>
+      </div>
+
+    </div>
+
+    <!-- ================= COLUMN 2: MD-X2520A ================= -->
+    <div class="anm-col2 mdx-panel">
+
+    <div class="card">
+        <div class="card-title">MD-X2520A</div>
+        <div class="eq-conn-row">
+        <div class="field ip">
+            <label for="eq-ip">IP address</label>
+            <input type="text" id="eq-ip" value="10.207.1.254" />
+        </div>
+        <div class="field">
+            <label for="eq-port">Port</label>
+            <input type="text" id="eq-port" value="50002" />
+        </div>
+        <button class="btn btn-primary" id="eq-connect-btn">Test connection</button>
+        <span class="status-pill offline" id="eq-status-pill"><span class="dot"></span> Offline</span>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="card-title">Add job to queue</div>
+        <div class="eq-jobs-grid" id="eq-job-buttons"><!-- filled by JS: jobs 1-4 --></div>
+        <div class="eq-custom-row">
+        <span style="font-size:12px;color:var(--ink-soft);">Custom #</span>
+        <input type="text" id="eq-custom-job" placeholder="0001" />
+        <button class="btn btn-sm" id="eq-add-custom-btn">Add</button>
+        </div>
+
+        <div class="card-title eq-queue-title">
+        Play-next queue
+        <button class="btn btn-sm btn-ghost" id="eq-clear-queue-btn">Clear pending</button>
+        </div>
+        <ul class="eq-queue-list mdx-queue-list" id="eq-queue-list">
+        <li class="eq-queue-empty">Queue is empty.</li>
+        </ul>
+    </div>
+
+    <div class="card">
+        <div class="card-title">Raw command tester (debug)</div>
+        <div class="eq-raw-row">
+        <input type="text" class="mono" id="eq-raw-cmd" value="RX,Ready" />
+        <button class="btn btn-primary" id="eq-raw-send-btn">Send</button>
+        </div>
+        <p class="field-hint">Sends the exact string you type, terminated with \r.</p>
+    </div>
+
+    <div class="card">
+        <div class="card-title">Command browser (all commands)</div>
+
+        <div class="eq-browser-top">
+        <div class="field">
+            <label for="eq-cat-select">Category</label>
+            <select id="eq-cat-select"></select>
+        </div>
+        <div class="field">
+            <label for="eq-cmd-select">Command</label>
+            <select id="eq-cmd-select"></select>
+        </div>
+        </div>
+
+        <div class="eq-mode-switch">
+        <button type="button" data-mode="wx" id="eq-mode-wx">WX (Set)</button>
+        <button type="button" data-mode="rx" id="eq-mode-rx">RX (Get)</button>
+        </div>
+
+        <p class="eq-cmd-desc" id="eq-cmd-desc">Select a category and command above.</p>
+
+        <div class="eq-param-grid" id="eq-param-grid"></div>
+
+        <div class="eq-preview-row">
+        <span style="font-size:12px;color:var(--ink-soft);font-weight:700;">PREVIEW</span>
+        <div class="mono-box" id="eq-preview-box">&nbsp;</div>
+        </div>
+
+        <div style="display:flex; gap:8px;">
+        <button class="btn btn-primary" id="eq-run-cmd-btn">&#9654; Run command</button>
+        <button class="btn" id="eq-copy-raw-btn">Copy &rarr; Raw tester</button>
+        </div>
+    </div>
+
+    <div class="card mdx-log-card">
+        <div class="card-title">
+        Log
+        <button class="btn btn-sm btn-ghost" id="eq-clear-log-btn">Clear view</button>
+        </div>
+        <div class="eq-log" id="eq-log"></div>
+    </div>
+
+    </div>
+
+  </div>
+</div>
