@@ -365,10 +365,38 @@ table.data-table tr:last-child td { border-bottom: none; }
 .profile-header .eid { font-family: var(--font-mono); color: var(--ink-faint); font-size: 12px; }
 
 /* ---------------------------------------------------------
-   FOR MODEL SETTING PAGE  (pages/model_setting.html)
-   Each pallet card: inner col1 (photo row + basic-info row) |
-   inner col2 (model select + scrollable editable conditions).
+   FOR MODEL SETTING PAGE — embedded Work Mode (right column)
+   Former Work Mode page, moved into ms-col-right. Dropdown +
+   Set Mode button up top; only the block matching the active
+   mode is shown below it. This column scrolls internally
+   instead of being height-locked like ms-col-left.
    --------------------------------------------------------- */
+.ms-wm-card {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.ms-wm-card .wm-mode-row { flex: 0 0 auto; }
+.ms-wm-card .wm-active-mode { margin-left: auto; }
+
+.wm-mode-content {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+/* .wm-block used to be a standalone .card with a fixed-height flex
+   layout on the old full-page Work Mode screen; here it's nested
+   inside ms-wm-card (already a card), so drop the border/overflow
+   clipping and let content size naturally within the scroll area. */
+.wm-mode-content .wm-block {
+  border: none;
+  padding: 0;
+  overflow: visible;
+}
+
 .ms-empty {
   color: var(--ink-faint);
   font-size: 12px;

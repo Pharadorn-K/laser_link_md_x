@@ -3,10 +3,11 @@
      model_setting.html — loaded into #content by dashboard.js
      Logic lives in dashboard.js, section "FOR MODEL SET PAGE"
 
-     Each pallet card is split into two inner columns:
-       col1: photo (row1) + basic detail table (row2)
-       col2: model-select dropdown (top) + scrollable editable
-             conditions list (bottom)
+     ms-col-right now hosts the former Work Mode page (manual +
+     auto controls). Dropdown + "Set Mode" sit at the top of the
+     card; the block matching the active mode renders below it.
+     Logic lives in dashboard.js, section "FOR WORK MODE (embedded
+     in Model Setting)".
      ============================================================ -->
 <div id="ms-alert-box"></div>
 
@@ -75,11 +76,68 @@
 
   </div>
 
-  <!-- ================= RIGHT COLUMN: reserved for next feature ================= -->
+  <!-- ================= RIGHT COLUMN: Work Mode (manual/auto) ================= -->
   <div class="ms-col-right">
-    <div class="card ms-card ms-placeholder-card">
-      <div class="card-title">Reserved</div>
-      <div class="ms-empty">Coming soon.</div>
+    <div class="card ms-card ms-wm-card">
+      <div class="card-title">Work Mode</div>
+
+      <div class="wm-mode-row">
+        <div class="field wm-mode-field">
+          <select id="wm-mode-select">
+            <option value="">— select mode —</option>
+            <option value="MANUAL">MANUAL</option>
+            <option value="AUTO1-2">AUTO 1-2 (both pallets)</option>
+            <option value="AUTO1">AUTO 1 (Pallet 1 only)</option>
+            <option value="AUTO2">AUTO 2 (Pallet 2 only)</option>
+          </select>
+        </div>
+        <button class="btn btn-primary" id="wm-set-mode-btn">Set Mode</button>
+        <span class="wm-active-mode" id="wm-active-mode-pill">No mode active</span>
+      </div>
+
+      <div class="ms-empty" id="wm-mode-empty">Select a mode above and click "Set Mode" to see its controls.</div>
+
+      <div class="wm-mode-content" id="wm-mode-content" style="display:none;">
+
+        <!-- ================= MANUAL BLOCK ================= -->
+        <div class="wm-block" id="wm-manual-block" style="display:none;">
+          <div class="card-title">Manual Control</div>
+          <div class="wm-fn-groups" id="wm-fn-groups"><!-- filled by JS from WM_FUNCTIONS --></div>
+
+          <div class="wm-start-row">
+            <button class="btn btn-primary" id="wm-start-marking-btn">&#9654; Start Marking (2-hand start)</button>
+            <span class="wm-start-hint">Runs the semi-auto sequence below — not a single call.</span>
+          </div>
+
+          <div class="card-title" style="margin-top:12px;">Start Marking Sequence</div>
+          <ol class="wm-seq-list" id="wm-start-seq-list"><!-- filled by JS --></ol>
+
+          <div class="card-title" style="margin-top:10px;">
+            Output Log
+            <button class="btn btn-sm btn-ghost" id="wm-clear-log-btn">Clear</button>
+          </div>
+          <div class="wm-log" id="wm-manual-log"></div>
+        </div>
+
+        <!-- ================= AUTO BLOCK ================= -->
+        <div class="wm-block" id="wm-auto-block" style="display:none;">
+          <div class="card-title">Auto Sequence <span style="font-weight:400;color:var(--ink-faint);font-size:11px;">— generated from functions, same concept as Start Marking</span></div>
+          <div class="alert alert-info wm-interlock-note">
+            ⚠ Interlock signals from equipment are not connected yet — this runs in simulation mode only.
+          </div>
+
+          <div class="wm-pallet-status-row" id="wm-pallet-status-row"><!-- filled by JS --></div>
+
+          <div class="wm-auto-note" id="wm-auto-activation-note">
+            On <strong>Set</strong>: front door opens automatically, then you're taken to <strong>Monitor</strong> to push the 2‑hand start signal.
+          </div>
+
+          <div id="wm-auto-seq-wrap"><!-- filled by JS: differs by mode --></div>
+
+          <p class="field-hint" style="margin-top:8px;">Live execution and the 2‑hand start button are on the <strong>Monitor</strong> page — a queued start's front door closes as soon as its cycle's turn comes up.</p>
+        </div>
+
+      </div>
     </div>
   </div>
 

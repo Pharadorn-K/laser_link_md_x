@@ -63,7 +63,6 @@ const PAGE_TITLES = {
   monitor: "Monitor",
   model_setting: "Model Setting",
   add_new_model: "Add New Model",
-  work_mode: "Work Mode",
   alarm_center: "Alarm Center",
   profile: "Profile",
   all_user: "Users",
@@ -77,6 +76,7 @@ const PAGE_TEARDOWN = {};
 let activePage = null;
 
 const PAGE_ROLES = {
+  model_setting: ["admin", "engineer", "machine_controller"],
   add_new_model: ["admin", "engineer"],
   all_user: ["admin"],
 };
@@ -657,10 +657,10 @@ function monApplyModeView() {
   const banner = document.getElementById("mon-mode-banner");
   if (mode) {
     banner.className = `mon-mode-banner ${isAuto ? "auto" : "manual"}`;
-    banner.innerHTML = `<i class="fa-solid ${isAuto ? "fa-gears" : "fa-hand"}"></i> Current mode: <strong>${mode}</strong>${isAuto ? "" : " — set an AUTO mode on Work Mode to run the live sequence here."}`;
+    banner.innerHTML = `<i class="fa-solid ${isAuto ? "fa-gears" : "fa-hand"}"></i> Current mode: <strong>${mode}</strong>${isAuto ? "" : " — set an AUTO mode on Model Setting to run the live sequence here."}`;
   } else {
     banner.className = "mon-mode-banner none";
-    banner.innerHTML = `<i class="fa-solid fa-circle-question"></i> No mode set yet — go to <strong>Work Mode</strong> to choose MANUAL or an AUTO mode.`;
+    banner.innerHTML = `<i class="fa-solid fa-circle-question"></i> No mode set yet — go to <strong>Model Setting</strong> to choose MANUAL or an AUTO mode.`;
   }
 
   document.getElementById("mon-auto-block").style.display = isAuto ? "" : "none";
@@ -681,8 +681,8 @@ PAGE_INIT.monitor = function () {
   monApplyModeView();
 
   document.getElementById("mon-simulate-btn").addEventListener("click", monHandleStartSignal);
-  const gotoBtn = document.getElementById("mon-goto-workmode-btn");
-  if (gotoBtn) gotoBtn.addEventListener("click", () => loadPage("work_mode"));
+  const gotoBtn = document.getElementById("mon-goto-modelsetting-btn");
+  if (gotoBtn) gotoBtn.addEventListener("click", () => loadPage("model_setting"));
 
   document.getElementById("mon-confirm-yes-btn").addEventListener("click", monConfirmSetValue);
   document.getElementById("mon-confirm-no-btn").addEventListener("click", () => {
@@ -766,20 +766,36 @@ function wmApplyMode(mode) {
   wmSaveMode(mode);
 
   const pill = document.getElementById("wm-active-mode-pill");
-  pill.textContent = mode ? `Active: ${mode}` : "No mode active";
-  pill.classList.toggle("set", !!mode);
+  if (pill) {
+    pill.textContent = mode ? `Active: ${mode}` : "No mode active";
+    pill.classList.toggle("set", !!mode);
+  }
 
-  const manualLock = document.getElementById("wm-manual-lock");
-  const autoLock = document.getElementById("wm-auto-lock");
   const isManual = mode === "MANUAL";
   const isAuto = mode === "AUTO1-2" || mode === "AUTO1" || mode === "AUTO2";
 
-  manualLock.classList.toggle("show", !isManual);
-  autoLock.classList.toggle("show", !isAuto);
+  const contentWrap = document.getElementById("wm-mode-content");
+  const emptyMsg = document.getElementById("wm-mode-empty");
+  const manualBlock = document.getElementById("wm-manual-block");
+  const autoBlock = document.getElementById("wm-auto-block");
+  if (!contentWrap || !emptyMsg || !manualBlock || !autoBlock) return;
+
+  if (!mode) {
+    contentWrap.style.display = "none";
+    emptyMsg.style.display = "";
+    manualBlock.style.display = "none";
+    autoBlock.style.display = "none";
+    return;
+  }
+
+  contentWrap.style.display = "";
+  emptyMsg.style.display = "none";
+  manualBlock.style.display = isManual ? "" : "none";
+  autoBlock.style.display = isAuto ? "" : "none";
 
   if (isAuto) {
-      wmRenderPalletStatus();
-      wmRenderAutoSequenceContent(mode);
+    wmRenderPalletStatus();
+    wmRenderAutoSequenceContent(mode);
   }
 }
 
@@ -1184,51 +1200,6 @@ async function wmRunStartSequence() {
   wmSetStartBtnState("idle");
 }
 
-PAGE_INIT.work_mode = function () {
-  const savedMode = wmLoadMode();
-  document.getElementById("wm-mode-select").value = savedMode || "";
-  wmApplyMode(savedMode);
-
-  document.getElementById("wm-set-mode-btn").addEventListener("click", () => {
-      const value = document.getElementById("wm-mode-select").value;
-      if (!value) { showToast("Choose a mode first."); return; }
-      const isAuto = value === "AUTO1-2" || value === "AUTO1" || value === "AUTO2";
-
-      wmApplyMode(value); // renders pallet-status row / lock overlays either way
-
-      if (!isAuto) {
-        showToast(`Mode set to ${value}.`, "success");
-        return;
-      }
-
-      const readiness = wmCheckPalletsReady(value);
-      if (!readiness.ok) {
-        showToast(
-          `Select a model for ${readiness.missing.join(" and ")} on Model Setting before activating ${value}.`,
-          "error"
-        );
-        // Don't run activation steps or navigate — stay on Work Mode so the
-        // "⚠ No model selected" pallet-status card stays visible.
-        return;
-      }
-
-      wmActivateAutoMode(value);
-  });
-
-  wmRenderFnGroups();
-  wmRenderStartSeqList(-1, -1);
-  document.getElementById("wm-start-marking-btn").addEventListener("click", wmRunStartSequence);
-
-  document.getElementById("wm-clear-log-btn").addEventListener("click", () => {
-    document.getElementById("wm-manual-log").innerHTML = "";
-  });
-
-};
-
-PAGE_TEARDOWN.work_mode = function () {
-  WM.manualRunning = false;
-  wmStopSequence();
-};
 
 /* ============================================================
    FOR ALARM CENTER PAGE
@@ -1998,6 +1969,50 @@ PAGE_INIT.model_setting = function () {
       MS.pendingSet = null;
     }
   });
+
+  // ---- Work Mode (moved in from the former Work Mode page) ----
+  const savedMode = wmLoadMode();
+  document.getElementById("wm-mode-select").value = savedMode || "";
+  wmApplyMode(savedMode);
+
+  document.getElementById("wm-set-mode-btn").addEventListener("click", () => {
+    const value = document.getElementById("wm-mode-select").value;
+    if (!value) { showToast("Choose a mode first."); return; }
+    const isAuto = value === "AUTO1-2" || value === "AUTO1" || value === "AUTO2";
+
+    wmApplyMode(value); // renders pallet-status row / block visibility either way
+
+    if (!isAuto) {
+      showToast(`Mode set to ${value}.`, "success");
+      return;
+    }
+
+    const readiness = wmCheckPalletsReady(value);
+    if (!readiness.ok) {
+      showToast(
+        `Select a model for ${readiness.missing.join(" and ")} before activating ${value}.`,
+        "error"
+      );
+      // Don't run activation steps or navigate — stay here so the
+      // "⚠ No model selected" pallet-status card stays visible.
+      return;
+    }
+
+    wmActivateAutoMode(value);
+  });
+
+  wmRenderFnGroups();
+  wmRenderStartSeqList(-1, -1);
+  document.getElementById("wm-start-marking-btn").addEventListener("click", wmRunStartSequence);
+
+  document.getElementById("wm-clear-log-btn").addEventListener("click", () => {
+    document.getElementById("wm-manual-log").innerHTML = "";
+  });
+};
+
+PAGE_TEARDOWN.model_setting = function () {
+  WM.manualRunning = false;
+  wmStopSequence();
 };
 
 /* ============================================================
