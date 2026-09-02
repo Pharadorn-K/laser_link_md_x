@@ -1,141 +1,60 @@
 <!-- frontend/pages/model_setting.html -->
 <!-- ============================================================
-     model_set.html — loaded into #content by dashboard.js
+     model_setting.html — loaded into #content by dashboard.js
      Logic lives in dashboard.js, section "FOR MODEL SET PAGE"
-     ============================================================ -->
-<div class="page-header ms-page-header">
-  <div>
-    <p>Create and edit marking conditions per Job No., grouped by pallet.</p>
-  </div>
-  <button class="btn btn-primary" id="ms-add-model-btn">+ Add Model</button>
-</div>
 
+     Add/Edit model now lives on the "Add New Model" page — this
+     page is select-and-monitor only: pick the active job per
+     pallet, update condition/lot-no values during production.
+     No command strings are shown here — those are internal and
+     only matter once they're sent to the laser.
+     ============================================================ -->
 <div id="ms-alert-box"></div>
 
-<div class="grid-2 ms-grid">
-  <!-- ---- Pallet 1 ---- -->
-  <div class="card ms-card">
-    <div class="card-title">Pallet 1</div>
-    <div class="field">
-      <label for="ms-select-Pallet1">Current job</label>
-      <select class="ms-pallet-select" id="ms-select-Pallet1" data-pallet="Pallet1">
-        <option value="">— select —</option>
-      </select>
-    </div>
-    <div class="ms-detail" id="ms-detail-Pallet1">
-      <div class="ms-empty">Select a job to see its condition.</div>
-    </div>
-  </div>
+<div class="ms-page-grid">
 
-  <!-- ---- Pallet 2 ---- -->
-  <div class="card ms-card">
-    <div class="card-title">Pallet 2</div>
-    <div class="field">
-      <label for="ms-select-Pallet2">Current job</label>
-      <select class="ms-pallet-select" id="ms-select-Pallet2" data-pallet="Pallet2">
-        <option value="">— select —</option>
-      </select>
-    </div>
-    <div class="ms-detail" id="ms-detail-Pallet2">
-      <div class="ms-empty">Select a job to see its condition.</div>
-    </div>
-  </div>
-</div>
+  <!-- ================= LEFT COLUMN: pallet rows ================= -->
+  <div class="ms-col-left">
 
-<!-- ================= Add / Edit Model modal ================= -->
-<div class="ms-modal-backdrop" id="ms-modal-backdrop">
-  <div class="ms-modal">
-    <div class="ms-modal-title" id="ms-modal-title">Add Model</div>
-    <div id="ms-modal-alert"></div>
-
-    <form id="ms-model-form">
-      <input type="hidden" id="ms-f-id" />
-
-      <div class="grid-2">
-        <div class="field">
-          <label for="ms-f-model">Model</label>
-          <input type="text" id="ms-f-model" required />
-        </div>
-        <div class="field">
-          <label for="ms-f-jobno">Job No. (0-1999)</label>
-          <input type="number" id="ms-f-jobno" min="0" max="1999" required />
-        </div>
-      </div>
-
-      <div class="grid-2">
-        <div class="field">
-          <label for="ms-f-pallet">Pallet</label>
-          <select id="ms-f-pallet">
-            <option value="Pallet1">Pallet1</option>
-            <option value="Pallet2">Pallet2</option>
-          </select>
-        </div>
-        <div class="field">
-          <label for="ms-f-photo">Part photo (optional)</label>
-          <input type="file" id="ms-f-photo" accept="image/png,image/jpeg,image/webp" />
-          <img id="ms-f-photo-preview" class="ms-photo-preview" style="display:none;" />
-        </div>
-      </div>
-
-      <!-- ---- Lot No. — required on every model, updated later like a condition.
-           Not marked on the part: recorded on production_log only. ---- -->
+    <!-- ---- Row 1: Pallet 1 ---- -->
+    <div class="card ms-card">
       <div class="field">
-        <label for="ms-f-lotno-value">Lot No. (starting value)</label>
-        <input type="text" id="ms-f-lotno-value" placeholder="e.g. L20260828-01" required />
+        <label for="ms-select-Pallet1">Pallet 1</label>
+        <select class="ms-pallet-select" id="ms-select-Pallet1" data-pallet="Pallet1">
+          <option value="">— select —</option>
+        </select>
       </div>
-      <p class="field-hint" style="margin:-6px 0 10px;">Lot No. isn't marked on the part — it's only recorded when a part is counted, so it can be used to filter production history later. Update its value from the pallet card, the same way you update conditions, every 150 parts or less.</p>
-      <!-- ---- Start 2D Code ---- -->
-      <div class="ms-check-block">
-        <label><input type="checkbox" id="ms-f-start2d" /> Start 2D Code (Check2DCode5)</label>
-        <div class="ms-check-params" id="ms-start2d-params-wrap">
-          <p class="field-hint">17 parameters (A–Q), sent as WX,Check2DCode5=A,B,C,...,Q</p>
-          <div class="ms-start2d-grid" id="ms-start2d-grid"><!-- filled by JS --></div>
-        </div>
+      <div class="ms-detail" id="ms-detail-Pallet1">
+        <select class="ms-pallet-select" id="ms-select-Pallet1" data-pallet="Pallet1">
+          <option value="">— select —</option>
+        </select>
+        <div class="ms-empty">Select a job to see its condition.</div>
       </div>
+    </div>
 
-      <!-- ---- Check Read 2D Code ---- -->
-      <div class="ms-check-block">
-        <label><input type="checkbox" id="ms-f-read2d" /> Check Read 2D Code (read last result)</label>
-        <div class="ms-check-params" id="ms-read2d-params-wrap">
-          <div class="field" style="max-width:220px;">
-            <label for="ms-f-read2d-detailed">Acquire Detailed (0/1)</label>
-            <input type="text" id="ms-f-read2d-detailed" maxlength="1" value="0" />
-          </div>
-          <p class="field-hint">Sends RX,CodeReadResult=&lt;value&gt;</p>
-        </div>
+    <!-- ---- Row 2: Pallet 2 ---- -->
+    <div class="card ms-card">
+      <div class="field">
+        <label for="ms-select-Pallet2">Pallet 2</label>
+        <select class="ms-pallet-select" id="ms-select-Pallet2" data-pallet="Pallet2">
+          <option value="">— select —</option>
+        </select>
       </div>
+      <div class="ms-detail" id="ms-detail-Pallet2">
+        <div class="ms-empty">Select a job to see its condition.</div>
+      </div>
+    </div>
 
-      <!-- ---- Check Grade 2D Code ---- -->
-      <div class="ms-check-block">
-        <label><input type="checkbox" id="ms-f-grade2d" checked /> Check Grade 2D Code</label>
-        <div class="ms-check-params" id="ms-grade2d-params-wrap">
-          <div class="field" style="max-width:260px;">
-            <label for="ms-f-grade">Control Grade</label>
-            <input type="text" id="ms-f-grade" placeholder="optional,C-V" />
-          </div>
-        </div>
-      </div>
-
-      <!-- ---- Check Camera ---- -->
-      <div class="ms-check-block">
-        <label><input type="checkbox" id="ms-f-camera" checked /> Check Camera</label>
-      </div>
-
-      <div class="card-title" style="margin-top:14px;">
-        Conditions
-        <button type="button" class="btn btn-sm" id="ms-add-condition-btn">+ Add Condition</button>
-      </div>
-      <p class="field-hint" style="margin:-6px 0 10px;">Each condition marks one CharacterString at one BLK No.</p>
-      <div id="ms-conditions-wrap"></div>
-      <datalist id="ms-condition-names-datalist"></datalist>
-
-      <div style="display:flex; gap:8px; margin-top:16px;">
-        <button type="submit" class="btn btn-primary">Save</button>
-        <button type="button" class="btn" id="ms-modal-cancel-btn">Cancel</button>
-        <button type="button" class="btn btn-danger" id="ms-modal-delete-btn" style="margin-left:auto; display:none;">Delete</button>
-      </div>
-    </form>
   </div>
+
+  <!-- ================= RIGHT COLUMN: reserved for next feature ================= -->
+  <div class="ms-col-right">
+    <div class="card ms-card ms-placeholder-card">
+      <div class="card-title">Reserved</div>
+      <div class="ms-empty">Coming soon.</div>
+    </div>
+  </div>
+
 </div>
 
 <!-- ================= Confirm "Set value" modal (operators) ================= -->

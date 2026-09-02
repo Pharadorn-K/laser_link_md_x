@@ -1738,26 +1738,13 @@ function msRenderDetail(pallet, condition) {
       </div>`).join("")
     : `<div class="eq-queue-empty">No conditions set.</div>`;
 
-  const extras = [];
-  if (condition.check_start2dcode) {
-    extras.push(`
-      <div class="ms-preview-row">
-        <span class="ms-preview-label">START 2D CODE COMMAND</span>
-        <div class="mono-box">${msBuildStart2DCommand(condition)}</div>
-      </div>`);
-  }
-  if (condition.check_read2dcode) {
-    extras.push(`
-      <div class="ms-preview-row">
-        <span class="ms-preview-label">READ 2D CODE COMMAND</span>
-        <div class="mono-box">${msBuildRead2DCommand(condition)}</div>
-      </div>`);
-  }
-
   const photoHtml = condition.photo_path
     ? `<img src="${condition.photo_path}" alt="${escapeHtml(condition.model)}" />`
     : `<div class="ms-photo-placeholder"><i class="fa-regular fa-image"></i><span>No photo yet</span></div>`;
 
+  // NOTE: no BASE COMMAND / START 2D CODE COMMAND / READ 2D CODE COMMAND
+  // previews here anymore — those are internal strings only, prepared
+  // and sent to the laser; operators don't need to see them.
   wrap.innerHTML = `
     <div class="ms-detail-layout">
       <div class="ms-detail-photo-col">
@@ -1773,26 +1760,14 @@ function msRenderDetail(pallet, condition) {
             <tr><td>Camera</td><td>${condition.check_camera ? "Yes" : "No"}</td></tr>
           </tbody>
         </table>
-        <button type="button" class="btn btn-sm ms-edit-model-btn" data-edit-id="${condition.id}">Edit Model</button>
       </div>
 
       <div class="ms-detail-info-col">
-        <div class="ms-preview-row">
-          <span class="ms-preview-label">BASE COMMAND</span>
-          <div class="mono-box">${buildBaseCommand(condition)}</div>
-        </div>
-        ${extras.join("")}
-
-        <div class="card-title" style="margin-top:8px;">Conditions <span style="font-weight:400;color:var(--ink-faint);font-size:11px;">(operators can update values)</span></div>
+        <div class="card-title" style="margin-top:0;">Conditions <span style="font-weight:400;color:var(--ink-faint);font-size:11px;">(operators can update values)</span></div>
         <div class="ms-cond-edit-list">${lotNoRow}${editableRows}</div>
       </div>
     </div>
   `;
-
-  wrap.querySelector(".ms-edit-model-btn").addEventListener("click", () => {
-    if (!isAdmin()) { showToast("Only admin can edit models."); return; }
-    msOpenModal(condition);
-  });
 
   wrap.querySelectorAll(".ms-cond-set-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
@@ -2015,26 +1990,6 @@ PAGE_INIT.model_setting = function () {
     });
   });
 
-  document.getElementById("ms-add-model-btn").addEventListener("click", () => {
-    if (!isAdmin()) { showToast("Only admin can add models."); return; }
-    msOpenModal(null);
-  });
-  document.getElementById("ms-f-photo").addEventListener("change", () => {
-    const file = document.getElementById("ms-f-photo").files[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      const img = document.getElementById("ms-f-photo-preview");
-      img.src = e.target.result;
-      img.style.display = "";
-    };
-    reader.readAsDataURL(file);
-  });
-  document.getElementById("ms-modal-cancel-btn").addEventListener("click", msCloseModal);
-  document.getElementById("ms-modal-backdrop").addEventListener("click", (e) => {
-    if (e.target.id === "ms-modal-backdrop") msCloseModal();
-  });
-
   document.getElementById("ms-confirm-yes-btn").addEventListener("click", msConfirmSetValue);
   document.getElementById("ms-confirm-no-btn").addEventListener("click", () => {
     document.getElementById("ms-confirm-backdrop").classList.remove("open");
@@ -2044,55 +1999,6 @@ PAGE_INIT.model_setting = function () {
     if (e.target.id === "ms-confirm-backdrop") {
       document.getElementById("ms-confirm-backdrop").classList.remove("open");
       MS.pendingSet = null;
-    }
-  });
-
-  document.getElementById("ms-add-condition-btn").addEventListener("click", () => {
-    if (MS.conditions.length >= MS_MAX_CONDITIONS) return;
-    MS.conditions = msCaptureConditionsFromDom();
-    MS.conditions.push({ condition_name: "", condition_value: "", block_no: "" });
-    msRebuildConditionRows();
-  });
-
-  document.getElementById("ms-modal-delete-btn").addEventListener("click", async () => {
-    if (!isAdmin()) { showToast("Only admin can delete models."); return; }
-    if (!MS.editingId) return;
-    if (!confirm("Delete this model condition?")) return;
-    try {
-      const res = await apiFetch(`/api/models/${MS.editingId}`, { method: "DELETE" });
-      if (!res.ok) {
-        const data = await res.json();
-        msModalAlert(data.error || "Delete failed.");
-        return;
-      }
-      msCloseModal();
-      await msRefreshBothPallets();
-    } catch (err) {
-      msModalAlert("Could not reach the server.");
-    }
-  });
-
-  document.getElementById("ms-model-form").addEventListener("submit", async (e) => {
-    e.preventDefault();
-    if (!isAdmin()) { showToast("Only admin can save models."); return; }
-    document.getElementById("ms-modal-alert").innerHTML = "";
-    const fd = msCollectFormData();
-
-    try {
-      const res = MS.editingId
-        ? await apiFetch(`/api/models/${MS.editingId}`, { method: "PUT", body: fd })
-        : await apiFetch(`/api/models`, { method: "POST", body: fd });
-      const data = await res.json();
-      if (!res.ok) {
-        msModalAlert(data.error || "Save failed.");
-        return;
-      }
-      msCloseModal();
-      await msRefreshBothPallets();
-      await msLoadConditionNames();
-      msShowAlert("Model condition saved.", "success");
-    } catch (err) {
-      msModalAlert("Could not reach the server.");
     }
   });
 };

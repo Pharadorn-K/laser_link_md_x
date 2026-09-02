@@ -120,7 +120,7 @@ input, select, textarea {
 /* ============================================================
    Form controls
    ============================================================ */
-.field { margin-bottom: 14px; }
+.field { margin-bottom: 12px; }
 .field label {
   display: block;
   margin-bottom: 5px;
