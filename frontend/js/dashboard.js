@@ -356,12 +356,7 @@ async function monAutoRunOneCycle(mode) {
     monResetPreviewStepState("mon-preview-loop-list", AUTO_SINGLE_LOOP_STEPS);
     for (let i = 0; i < AUTO_SINGLE_LOOP_STEPS.length; i++) {
       monSetPreviewStepState("mon-preview-loop-list", AUTO_SINGLE_LOOP_STEPS, i);
-      try {
-        await AUTO_SINGLE_LOOP_STEPS[i].fn();
-      } catch (err) {
-        showToast(`Auto cycle error: ${err}`);
-        break;
-      }
+      try {await AUTO_SINGLE_LOOP_STEPS[i].fn();} catch (err) {showToast(`Auto cycle error: ${err}`);break;}
     }
     monSetPreviewStepState("mon-preview-loop-list", AUTO_SINGLE_LOOP_STEPS, AUTO_SINGLE_LOOP_STEPS.length);
 
@@ -1708,14 +1703,41 @@ function msBuildRead2DCommand(condition) {
 }
 
 function msRenderDetail(pallet, condition) {
-  const wrap = document.getElementById(`ms-detail-${pallet}`);
+  const photoWrap = document.getElementById(`ms-photo-${pallet}`);
+  const infoWrap = document.getElementById(`ms-info-${pallet}`);
+  const condWrap = document.getElementById(`ms-cond-${pallet}`);
+  if (!photoWrap || !infoWrap || !condWrap) return;
+
   if (!condition) {
-    wrap.innerHTML = `<div class="ms-empty">Select a job to see its condition.</div>`;
+    photoWrap.innerHTML = `<div class="ms-photo-placeholder"><i class="fa-regular fa-image"></i><span>No model selected</span></div>`;
+    infoWrap.innerHTML = `<div class="ms-empty">Select a job to see its details.</div>`;
+    condWrap.innerHTML = `<div class="ms-empty">Select a job to see its conditions.</div>`;
     return;
   }
 
   const items = condition.conditions || [];
 
+  // ---- inner col1 / row1: photo ----
+  photoWrap.innerHTML = condition.photo_path
+    ? `<img src="${condition.photo_path}" alt="${escapeHtml(condition.model)}" />`
+    : `<div class="ms-photo-placeholder"><i class="fa-regular fa-image"></i><span>No photo yet</span></div>`;
+
+  // ---- inner col1 / row2: basic detail table ----
+  infoWrap.innerHTML = `
+    <table class="data-table ms-detail-table compact">
+      <tbody>
+        <tr><td>Model</td><td>${escapeHtml(condition.model)}</td></tr>
+        <tr><td>Job No.</td><td class="mono">${padJob(condition.job_no)}</td></tr>
+        <tr><td>Start 2D Code</td><td>${condition.check_start2dcode ? "Yes" : "No"}</td></tr>
+        <tr><td>Read 2D Code</td><td>${condition.check_read2dcode ? "Yes" : "No"}</td></tr>
+        <tr><td>Grade 2D Code</td><td>${condition.check_grade2dcode ? "Yes" : "No"}</td></tr>
+        <tr><td>Control Grade</td><td>${escapeHtml(condition.control_grade) || "—"}</td></tr>
+        <tr><td>Camera</td><td>${condition.check_camera ? "Yes" : "No"}</td></tr>
+      </tbody>
+    </table>
+  `;
+
+  // ---- inner col2: scrollable editable conditions (select is already in the HTML above this block) ----
   const lotNoRow = `
   <div class="ms-cond-edit-row ms-lotno-row">
     <div class="ms-cond-edit-meta">
@@ -1738,38 +1760,12 @@ function msRenderDetail(pallet, condition) {
       </div>`).join("")
     : `<div class="eq-queue-empty">No conditions set.</div>`;
 
-  const photoHtml = condition.photo_path
-    ? `<img src="${condition.photo_path}" alt="${escapeHtml(condition.model)}" />`
-    : `<div class="ms-photo-placeholder"><i class="fa-regular fa-image"></i><span>No photo yet</span></div>`;
-
-  // NOTE: no BASE COMMAND / START 2D CODE COMMAND / READ 2D CODE COMMAND
-  // previews here anymore — those are internal strings only, prepared
-  // and sent to the laser; operators don't need to see them.
-  wrap.innerHTML = `
-    <div class="ms-detail-layout">
-      <div class="ms-detail-photo-col">
-        <div class="ms-detail-photo-frame">${photoHtml}</div>
-        <table class="data-table ms-detail-table compact">
-          <tbody>
-            <tr><td>Model</td><td>${escapeHtml(condition.model)}</td></tr>
-            <tr><td>Job No.</td><td class="mono">${padJob(condition.job_no)}</td></tr>
-            <tr><td>Start 2D Code</td><td>${condition.check_start2dcode ? "Yes" : "No"}</td></tr>
-            <tr><td>Read 2D Code</td><td>${condition.check_read2dcode ? "Yes" : "No"}</td></tr>
-            <tr><td>Grade 2D Code</td><td>${condition.check_grade2dcode ? "Yes" : "No"}</td></tr>
-            <tr><td>Control Grade</td><td>${escapeHtml(condition.control_grade) || "—"}</td></tr>
-            <tr><td>Camera</td><td>${condition.check_camera ? "Yes" : "No"}</td></tr>
-          </tbody>
-        </table>
-      </div>
-
-      <div class="ms-detail-info-col">
-        <div class="card-title" style="margin-top:0;">Conditions <span style="font-weight:400;color:var(--ink-faint);font-size:11px;">(operators can update values)</span></div>
-        <div class="ms-cond-edit-list">${lotNoRow}${editableRows}</div>
-      </div>
-    </div>
+  condWrap.innerHTML = `
+    <div class="card-title" style="margin-top:0;">Conditions <span style="font-weight:400;color:var(--ink-faint);font-size:11px;">(operators can update values)</span></div>
+    <div class="ms-cond-edit-list">${lotNoRow}${editableRows}</div>
   `;
 
-  wrap.querySelectorAll(".ms-cond-set-btn").forEach((btn) => {
+  condWrap.querySelectorAll(".ms-cond-set-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
       const row = btn.closest(".ms-cond-edit-row");
       const itemId = row.dataset.itemId;
@@ -1785,10 +1781,11 @@ function msRenderDetail(pallet, condition) {
       document.getElementById("ms-confirm-backdrop").classList.add("open");
     });
   });
-  const lotNoBtn = wrap.querySelector(".ms-lotno-set-btn");
+
+  const lotNoBtn = condWrap.querySelector(".ms-lotno-set-btn");
   if (lotNoBtn) {
     lotNoBtn.addEventListener("click", () => {
-      const input = wrap.querySelector(".ms-lotno-input");
+      const input = condWrap.querySelector(".ms-lotno-input");
       const newValue = input.value.trim();
       if (!newValue) { showToast("Lot No. cannot be empty."); return; }
       if (newValue === condition.lot_no) { showToast("No change.", "info"); return; }
@@ -2638,16 +2635,6 @@ async function userSetStatus(id, status) {
   userFetchAndRender(activeFilter ? activeFilter.dataset.filter : "pending");
 }
 window.userSetStatus = userSetStatus;
-
-// async function userSetRole(id, role) {
-//   await apiFetch(`/api/users/${id}/role`, {
-//     method: "PATCH",
-//     body: JSON.stringify({ role }),
-//   });
-//   const activeFilter = document.querySelector(".user-filter-bar button.active");
-//   userFetchAndRender(activeFilter ? activeFilter.dataset.filter : "pending");
-// }
-// window.userSetRole = userSetRole;
 
 async function userChangeRole(id) {
   const select = document.querySelector(`.role-select[data-user-id="${id}"]`);

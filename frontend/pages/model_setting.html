@@ -3,11 +3,10 @@
      model_setting.html — loaded into #content by dashboard.js
      Logic lives in dashboard.js, section "FOR MODEL SET PAGE"
 
-     Add/Edit model now lives on the "Add New Model" page — this
-     page is select-and-monitor only: pick the active job per
-     pallet, update condition/lot-no values during production.
-     No command strings are shown here — those are internal and
-     only matter once they're sent to the laser.
+     Each pallet card is split into two inner columns:
+       col1: photo (row1) + basic detail table (row2)
+       col2: model-select dropdown (top) + scrollable editable
+             conditions list (bottom)
      ============================================================ -->
 <div id="ms-alert-box"></div>
 
@@ -18,30 +17,59 @@
 
     <!-- ---- Row 1: Pallet 1 ---- -->
     <div class="card ms-card">
-      <div class="field">
-        <label for="ms-select-Pallet1">Pallet 1</label>
-        <select class="ms-pallet-select" id="ms-select-Pallet1" data-pallet="Pallet1">
-          <option value="">— select —</option>
-        </select>
-      </div>
-      <div class="ms-detail" id="ms-detail-Pallet1">
-        <select class="ms-pallet-select" id="ms-select-Pallet1" data-pallet="Pallet1">
-          <option value="">— select —</option>
-        </select>
-        <div class="ms-empty">Select a job to see its condition.</div>
+      <div class="ms-pallet-grid">
+
+        <!-- ---- inner column 1: photo (row1) + basic info (row2) ---- -->
+        <div class="ms-pallet-col1">
+          <div class="ms-pallet-photo-frame" id="ms-photo-Pallet1">
+            <div class="ms-photo-placeholder"><i class="fa-regular fa-image"></i><span>No model selected</span></div>
+          </div>
+          <div class="ms-pallet-info" id="ms-info-Pallet1">
+            <div class="ms-empty">Select a job to see its details.</div>
+          </div>
+        </div>
+
+        <!-- ---- inner column 2: select model + scrollable conditions ---- -->
+        <div class="ms-pallet-col2">
+          <div class="field">
+            <label for="ms-select-Pallet1">Pallet 1</label>
+            <select class="ms-pallet-select" id="ms-select-Pallet1" data-pallet="Pallet1">
+              <option value="">— select —</option>
+            </select>
+          </div>
+          <div class="ms-pallet-conditions" id="ms-cond-Pallet1">
+            <div class="ms-empty">Select a job to see its conditions.</div>
+          </div>
+        </div>
+
       </div>
     </div>
 
     <!-- ---- Row 2: Pallet 2 ---- -->
     <div class="card ms-card">
-      <div class="field">
-        <label for="ms-select-Pallet2">Pallet 2</label>
-        <select class="ms-pallet-select" id="ms-select-Pallet2" data-pallet="Pallet2">
-          <option value="">— select —</option>
-        </select>
-      </div>
-      <div class="ms-detail" id="ms-detail-Pallet2">
-        <div class="ms-empty">Select a job to see its condition.</div>
+      <div class="ms-pallet-grid">
+
+        <div class="ms-pallet-col1">
+          <div class="ms-pallet-photo-frame" id="ms-photo-Pallet2">
+            <div class="ms-photo-placeholder"><i class="fa-regular fa-image"></i><span>No model selected</span></div>
+          </div>
+          <div class="ms-pallet-info" id="ms-info-Pallet2">
+            <div class="ms-empty">Select a job to see its details.</div>
+          </div>
+        </div>
+
+        <div class="ms-pallet-col2">
+          <div class="field">
+            <label for="ms-select-Pallet2">Pallet 2</label>
+            <select class="ms-pallet-select" id="ms-select-Pallet2" data-pallet="Pallet2">
+              <option value="">— select —</option>
+            </select>
+          </div>
+          <div class="ms-pallet-conditions" id="ms-cond-Pallet2">
+            <div class="ms-empty">Select a job to see its conditions.</div>
+          </div>
+        </div>
+
       </div>
     </div>
 
