@@ -535,7 +535,7 @@ table.data-table tr:last-child td { border-bottom: none; }
   gap: 16px;
   min-height: 0;
 }
-.ms-col-left .ms-card { flex: 1 1 0; min-height: 405px; }
+.ms-col-left .ms-card { flex: 1 1 0; min-height: 0; }
 
 .ms-col-right {
   display: flex;
