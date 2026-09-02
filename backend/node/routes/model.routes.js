@@ -19,4 +19,5 @@ router.put('/:id', requireRole('admin'), uploadModelPhoto.single('photo'), ctrl.
 router.delete('/:id', requireRole('admin'), ctrl.deleteModel);
 router.patch('/:id/conditions/:itemId', requireAuth, ctrl.updateConditionValue);
 router.patch('/:id/lotno', requireAuth, ctrl.updateLotNo);
+router.patch('/:id/camera', requireAuth, ctrl.updateCameraCheck); // NEW
 module.exports = router;

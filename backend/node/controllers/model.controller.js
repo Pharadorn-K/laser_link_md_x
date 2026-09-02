@@ -316,6 +316,22 @@ async function updateLotNo(req, res) {
   return res.json(full);
 }
 
+async function updateCameraCheck(req, res) {
+  const { id } = req.params;
+  const { check_camera } = req.body;
+  if (check_camera === undefined || check_camera === null) {
+    return res.status(400).json({ error: 'check_camera is required.' });
+  }
+  const value = toBool(check_camera);
+  const [result] = await pool.query(
+    'UPDATE model_condition SET check_camera = ? WHERE id = ?',
+    [value, id]
+  );
+  if (result.affectedRows === 0) return res.status(404).json({ error: 'Model condition not found.' });
+  const full = await getFullModel(id);
+  return res.json(full);
+}
+
 module.exports = {
   listModels,
   getModel,
@@ -324,6 +340,7 @@ module.exports = {
   deleteModel,
   updateConditionValue,
   updateLotNo,
+  updateCameraCheck, // NEW
   listConditionNames,
   MAX_CONDITIONS,
 };

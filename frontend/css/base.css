@@ -172,6 +172,54 @@ input, select, textarea {
 }
 
 /* ============================================================
+   Photo Lightbox — click any pallet/profile photo to view full size
+   ============================================================ */
+.ms-pallet-photo-frame img,
+.mon-photo-frame img,
+#pf-avatar,
+#ms-f-photo-preview {
+  cursor: zoom-in;
+}
+
+.lightbox-backdrop {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(10, 12, 16, 0.86);
+  align-items: center;
+  justify-content: center;
+  z-index: 300;
+  padding: 40px;
+}
+.lightbox-backdrop.open { display: flex; }
+
+.lightbox-img {
+  max-width: min(90vw, 900px);
+  max-height: 88vh;
+  object-fit: contain;
+  border-radius: var(--radius);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+}
+
+.lightbox-close {
+  position: absolute;
+  top: 18px;
+  right: 24px;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+  font-size: 22px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.lightbox-close:hover { background: rgba(255, 255, 255, 0.22); }
+
+/* ============================================================
    Status pill — mirrors RX,Ready: 0 ready / 1 error / 2 busy
    ============================================================ */
 .status-pill {

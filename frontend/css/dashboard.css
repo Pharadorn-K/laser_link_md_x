@@ -657,6 +657,7 @@ table.data-table tr:last-child td { border-bottom: none; }
 
 .ms-modal-sm { max-width: 380px; }
 .ms-lotno-row { border-color: var(--accent-strong); background: var(--accent-soft); }
+.ms-camera-row { border-color: var(--info); background: var(--info-soft); }
 /* global toast (permission / notice popups) */
 .global-toast {
   position: fixed; top: 18px; left: 50%;

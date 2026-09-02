@@ -114,7 +114,8 @@ function initShell() {
     localStorage.removeItem("nlm_user");
     window.location.href = "login.html";
   });
-  startTopbarClock(); // NEW
+  startTopbarClock();
+  initLightbox(); // NEW
 }
 
 function applyUserToChrome(user) {
@@ -127,6 +128,53 @@ function applyUserToChrome(user) {
   document.querySelectorAll(".nav-link[data-roles]").forEach((el) => {
     const allowed = el.dataset.roles.split(",").map((r) => r.trim());
     el.style.display = allowed.includes(user.role) ? "" : "none";
+  });
+}
+
+/* ============================================================
+   PHOTO LIGHTBOX — click any pallet/profile photo to view full size
+   ============================================================ */
+const PHOTO_CLICK_SELECTOR =
+  ".ms-pallet-photo-frame img, .mon-photo-frame img, #pf-avatar, #ms-f-photo-preview";
+
+function isPlaceholderImg(src) {
+  return !src || src.startsWith("data:image/svg+xml");
+}
+
+function openLightbox(src, alt) {
+  const backdrop = document.getElementById("lightbox-backdrop");
+  const img = document.getElementById("lightbox-img");
+  if (!backdrop || !img) return;
+  img.src = src;
+  img.alt = alt || "";
+  backdrop.classList.add("open");
+}
+
+function closeLightbox() {
+  const backdrop = document.getElementById("lightbox-backdrop");
+  const img = document.getElementById("lightbox-img");
+  if (backdrop) backdrop.classList.remove("open");
+  if (img) img.src = "";
+}
+
+function initLightbox() {
+  document.addEventListener("click", (e) => {
+    const img = e.target.closest(PHOTO_CLICK_SELECTOR);
+    if (img && img.tagName === "IMG" && !isPlaceholderImg(img.src)) {
+      openLightbox(img.src, img.alt);
+    }
+  });
+
+  const backdrop = document.getElementById("lightbox-backdrop");
+  const closeBtn = document.getElementById("lightbox-close-btn");
+  if (closeBtn) closeBtn.addEventListener("click", closeLightbox);
+  if (backdrop) {
+    backdrop.addEventListener("click", (e) => {
+      if (e.target.id === "lightbox-backdrop") closeLightbox();
+    });
+  }
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") closeLightbox();
   });
 }
 
@@ -439,6 +487,18 @@ function monActivePallets() {
 // values (e.g. every ≤150 pcs) without leaving Monitor.
 function monConditionEditRowsHtml(job, pallet) {
   const items = job.conditions || [];
+
+  const cameraRow = `
+    <div class="ms-cond-edit-row mon-cond-edit-row ms-camera-row" data-pallet="${pallet}">
+      <div class="ms-cond-edit-meta">
+        <span class="ms-cond-edit-name">Camera Check</span>
+        <span class="ms-cond-edit-blk mono">${job.check_camera ? "Enabled" : "Disabled — bypassed"}</span>
+      </div>
+      <button type="button" class="btn btn-sm ${job.check_camera ? "btn-danger" : "btn-primary"} mon-camera-toggle-btn" data-current="${job.check_camera ? "1" : "0"}">
+        ${job.check_camera ? "Turn OFF" : "Turn ON"}
+      </button>
+    </div>`;
+
   const lotRow = job.check_lot_no
     ? `<div class="ms-cond-edit-row mon-cond-edit-row ms-lotno-row" data-pallet="${pallet}">
         <div class="ms-cond-edit-meta">
@@ -462,7 +522,7 @@ function monConditionEditRowsHtml(job, pallet) {
       </div>`).join("")
     : `<div class="eq-queue-empty">No conditions set.</div>`;
 
-  return lotRow + condRows;
+  return cameraRow + lotRow + condRows;
 }
 
 function monCheckBadgesHtml(job) {
@@ -562,6 +622,18 @@ function monRenderPalletBlock(pallet) {
       document.getElementById("mon-confirm-backdrop").classList.add("open");
     });
   }
+
+  const cameraBtn = body.querySelector(".mon-camera-toggle-btn");
+  if (cameraBtn) {
+    cameraBtn.addEventListener("click", () => {
+      const newValue = cameraBtn.dataset.current !== "1"; // toggle
+      MON.pendingSet = { pallet, modelId: job.id, itemId: null, newValue, oldValue: job.check_camera, name: "Camera Check", isCamera: true };
+      document.getElementById("mon-confirm-text").textContent = newValue
+        ? "Re-enable Camera Check for this pallet?"
+        : "Disable Camera Check for this pallet? Marking will proceed without a camera check until an Engineer re-enables it.";
+      document.getElementById("mon-confirm-backdrop").classList.add("open");
+    });
+  }
 }
 
 function monRenderAll() {
@@ -609,8 +681,16 @@ async function monConfirmSetValue() {
   document.getElementById("mon-confirm-backdrop").classList.remove("open");
   if (!p) return;
   try {
-    const url = p.isLotNo ? `/api/models/${p.modelId}/lotno` : `/api/models/${p.modelId}/conditions/${p.itemId}`;
-    const body = p.isLotNo ? { lot_no: p.newValue } : { condition_value: p.newValue };
+    const url = p.isCamera
+      ? `/api/models/${p.modelId}/camera`
+      : p.isLotNo
+      ? `/api/models/${p.modelId}/lotno`
+      : `/api/models/${p.modelId}/conditions/${p.itemId}`;
+    const body = p.isCamera
+      ? { check_camera: p.newValue }
+      : p.isLotNo
+      ? { lot_no: p.newValue }
+      : { condition_value: p.newValue };
     const res = await apiFetch(url, { method: "PATCH", body: JSON.stringify(body) });
     if (!res.ok) {
       const data = await res.json().catch(() => ({}));
@@ -1709,6 +1789,17 @@ function msRenderDetail(pallet, condition) {
   `;
 
   // ---- inner col2: scrollable editable conditions (select is already in the HTML above this block) ----
+  const cameraRow = `
+  <div class="ms-cond-edit-row ms-camera-row">
+    <div class="ms-cond-edit-meta">
+      <span class="ms-cond-edit-name">Camera Check</span>
+      <span class="ms-cond-edit-blk mono">${condition.check_camera ? "Enabled" : "Disabled — bypassed"}</span>
+    </div>
+    <button type="button" class="btn btn-sm ${condition.check_camera ? "btn-danger" : "btn-primary"} ms-camera-toggle-btn" data-current="${condition.check_camera ? "1" : "0"}">
+      ${condition.check_camera ? "Turn OFF" : "Turn ON"}
+    </button>
+  </div>`;
+
   const lotNoRow = `
   <div class="ms-cond-edit-row ms-lotno-row">
     <div class="ms-cond-edit-meta">
@@ -1733,7 +1824,7 @@ function msRenderDetail(pallet, condition) {
 
   condWrap.innerHTML = `
     <div class="card-title" style="margin-top:0;">Conditions <span style="font-weight:400;color:var(--ink-faint);font-size:11px;">(operators can update values)</span></div>
-    <div class="ms-cond-edit-list">${lotNoRow}${editableRows}</div>
+    <div class="ms-cond-edit-list">${cameraRow}${lotNoRow}${editableRows}</div>
   `;
 
   condWrap.querySelectorAll(".ms-cond-set-btn").forEach((btn) => {
@@ -1766,6 +1857,18 @@ function msRenderDetail(pallet, condition) {
       document.getElementById("ms-confirm-backdrop").classList.add("open");
     });
   }
+
+  const cameraBtn = condWrap.querySelector(".ms-camera-toggle-btn");
+  if (cameraBtn) {
+    cameraBtn.addEventListener("click", () => {
+      const newValue = cameraBtn.dataset.current !== "1"; // toggle
+      MS.pendingSet = { pallet, modelId: condition.id, itemId: null, newValue, oldValue: condition.check_camera, name: "Camera Check", isCamera: true };
+      document.getElementById("ms-confirm-text").textContent = newValue
+        ? "Re-enable Camera Check for this model?"
+        : "Disable Camera Check for this model? Marking will proceed without a camera check until an Engineer re-enables it.";
+      document.getElementById("ms-confirm-backdrop").classList.add("open");
+    });
+  }
 }
 
 async function msConfirmSetValue() {
@@ -1773,8 +1876,16 @@ async function msConfirmSetValue() {
   document.getElementById("ms-confirm-backdrop").classList.remove("open");
   if (!p) return;
   try {
-    const url = p.isLotNo ? `/api/models/${p.modelId}/lotno` : `/api/models/${p.modelId}/conditions/${p.itemId}`;
-    const body = p.isLotNo ? { lot_no: p.newValue } : { condition_value: p.newValue };
+    const url = p.isCamera
+      ? `/api/models/${p.modelId}/camera`
+      : p.isLotNo
+      ? `/api/models/${p.modelId}/lotno`
+      : `/api/models/${p.modelId}/conditions/${p.itemId}`;
+    const body = p.isCamera
+      ? { check_camera: p.newValue }
+      : p.isLotNo
+      ? { lot_no: p.newValue }
+      : { condition_value: p.newValue };
     const res = await apiFetch(url, { method: "PATCH", body: JSON.stringify(body) });
     if (!res.ok) {
       const data = await res.json().catch(() => ({}));
