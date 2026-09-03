@@ -18,17 +18,17 @@
       <nav class="sidebar">
         <div class="sidebar-brand"><span class="beam"></span> LASER LINK MD-X</div>
 
-        <div class="nav-section-label">Overview</div>
-        <button class="nav-link" data-page="monitor"><span class="ic"><i class="fa-solid fa-desktop" style="color: rgb(255, 255, 255);"></i></span> Monitor</button>
+        <div class="nav-section-label" data-i18n="nav.section.overview">Overview</div>
+        <button class="nav-link" data-page="monitor"><span class="ic"><i class="fa-solid fa-desktop" style="color: rgb(255, 255, 255);"></i></span> <span data-i18n="nav.monitor">Monitor</span></button>
 
-        <div class="nav-section-label">Marking</div>
-        <button class="nav-link" data-page="model_setting" data-roles="admin,engineer,machine_controller"><span class="ic"><i class="fa-solid fa-sliders" style="color: rgb(255, 255, 255);"></i></span> Model Setting</button>
-        <button class="nav-link" data-page="add_new_model" data-roles="admin,engineer"><span class="ic"><i class="fa-solid fa-circle-plus" style="color: rgb(255, 255, 255);"></i></span> Add New Model</button>
-        <button class="nav-link" data-page="alarm_center"><span class="ic"><i class="fa-solid fa-bell" style="color: rgb(255, 255, 255);"></i></span> Alarm Center</button>
+        <div class="nav-section-label" data-i18n="nav.section.marking">Marking</div>
+        <button class="nav-link" data-page="model_setting" data-roles="admin,engineer,machine_controller"><span class="ic"><i class="fa-solid fa-sliders" style="color: rgb(255, 255, 255);"></i></span> <span data-i18n="nav.model_setting">Model Setting</span></button>
+        <button class="nav-link" data-page="add_new_model" data-roles="admin,engineer"><span class="ic"><i class="fa-solid fa-circle-plus" style="color: rgb(255, 255, 255);"></i></span> <span data-i18n="nav.add_new_model">Add New Model</span></button>
+        <button class="nav-link" data-page="alarm_center"><span class="ic"><i class="fa-solid fa-bell" style="color: rgb(255, 255, 255);"></i></span> <span data-i18n="nav.alarm_center">Alarm Center</span></button>
 
-        <div class="nav-section-label">Account</div>
-        <button class="nav-link" data-page="profile"><span class="ic"><i class="fa-solid fa-address-card" style="color: rgb(255, 255, 255);"></i></span> Profile</button>
-        <button class="nav-link" data-page="all_user" data-roles="admin"><span class="ic"><i class="fa-solid fa-users" style="color: rgb(255, 255, 255);"></i></span> All User</button>
+        <div class="nav-section-label" data-i18n="nav.section.account">Account</div>
+        <button class="nav-link" data-page="profile"><span class="ic"><i class="fa-solid fa-address-card" style="color: rgb(255, 255, 255);"></i></span> <span data-i18n="nav.profile">Profile</span></button>
+        <button class="nav-link" data-page="all_user" data-roles="admin"><span class="ic"><i class="fa-solid fa-users" style="color: rgb(255, 255, 255);"></i></span> <span data-i18n="nav.all_user">All User</span></button>
 
         <div class="sidebar-footer">v0.4 · laser_link_md_x</div>
       </nav>
@@ -38,12 +38,13 @@
         <div class="topbar-title" id="topbar-title">Monitor</div>
         <div class="topbar-clock mono" id="topbar-clock">--/--/---- --:--:--</div>
         <div class="topbar-right">
+          <button class="btn btn-sm" id="lang-toggle-btn" title="Switch language / เปลี่ยนภาษา">ไทย</button>
           <div class="topbar-user">
             <img id="topbar-avatar" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3C/svg%3E" alt="" />
             <span id="topbar-username">—</span>
             <span class="role-badge" id="topbar-role">USER</span>
           </div>
-          <button class="btn btn-sm" id="logout-btn">Sign out</button>
+          <button class="btn btn-sm" id="logout-btn" data-i18n="common.signout">Sign out</button>
         </div>
       </header>
 
@@ -59,6 +60,7 @@
       <button type="button" class="lightbox-close" id="lightbox-close-btn" aria-label="Close">&times;</button>
     </div>
 
+    <script src="js/i18n.js"></script>
     <script src="js/dashboard.js"></script>
   </body>
 </html>

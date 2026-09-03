@@ -1,8 +1,4 @@
 <!-- frontend/pages/profile.html -->
-<!-- ============================================================
-     profile.html — loaded into #content by dashboard.js
-     Logic lives in dashboard.js, section "FOR PROFILE PAGE"
-     ============================================================ -->
 <div class="profile-header">
   <img id="pf-avatar" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3C/svg%3E" alt="" />
   <div>
@@ -14,20 +10,20 @@
 <div id="pf-alert-box"></div>
 
 <div class="card" style="max-width:480px;">
-  <div class="card-title">Edit profile</div>
+  <div class="card-title" data-i18n="profile.edit_title">Edit profile</div>
   <form id="pf-form">
     <div class="field">
-      <label for="pf-photo">Photo</label>
+      <label for="pf-photo" data-i18n="profile.field.photo">Photo</label>
       <input type="file" id="pf-photo" accept="image/png,image/jpeg,image/webp" />
     </div>
     <div class="field">
-      <label for="pf-name-input">Full name</label>
+      <label for="pf-name-input" data-i18n="profile.field.name">Full name</label>
       <input type="text" id="pf-name-input" />
     </div>
     <div class="field">
-      <label for="pf-password-input">New password</label>
-      <input type="password" id="pf-password-input" placeholder="Leave blank to keep current password" autocomplete="new-password" />
+      <label for="pf-password-input" data-i18n="profile.field.new_password">New password</label>
+      <input type="password" id="pf-password-input" data-i18n-placeholder="profile.field.new_password_placeholder" placeholder="Leave blank to keep current password" autocomplete="new-password" />
     </div>
-    <button type="submit" class="btn btn-primary">Save changes</button>
+    <button type="submit" class="btn btn-primary" data-i18n="profile.save_btn">Save changes</button>
   </form>
 </div>

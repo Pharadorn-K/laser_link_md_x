@@ -91,13 +91,14 @@ async function loadPage(page) {
   document.querySelectorAll(".nav-link").forEach((el) => {
     el.classList.toggle("active", el.dataset.page === page);
   });
-  document.getElementById("topbar-title").textContent = PAGE_TITLES[page] || page;
+  document.getElementById("topbar-title").textContent = t(`page.title.${page}`, PAGE_TITLES[page] || page);
 
   const content = document.getElementById("content");
   content.innerHTML = `<div class="page-placeholder">Loading…</div>`;
   try {
     const res = await fetch(`pages/${page}.html`);
     content.innerHTML = await res.text();
+    I18N.applyTranslations(content); // NEW — translate the freshly injected fragment
   } catch (err) {
     content.innerHTML = `<div class="alert alert-error">Could not load this page.</div>`;
     return;
@@ -115,7 +116,21 @@ function initShell() {
     window.location.href = "login.html";
   });
   startTopbarClock();
-  initLightbox(); // NEW
+  initLightbox();
+
+  I18N.applyTranslations(document); // NEW — translate sidebar/topbar chrome
+  const langBtn = document.getElementById("lang-toggle-btn");
+  if (langBtn) {
+    langBtn.addEventListener("click", () => {
+      I18N.toggleLang();
+      // re-localize whatever's currently in #content and the topbar title
+      if (activePage) {
+        I18N.applyTranslations(document.getElementById("content"));
+        document.getElementById("topbar-title").textContent =
+          t(`page.title.${activePage}`, PAGE_TITLES[activePage] || activePage);
+      }
+    });
+  }
 }
 
 function applyUserToChrome(user) {
@@ -1622,11 +1637,11 @@ function acRenderTable() {
   title.textContent = isCurrent ? "Current Alarms" : "History Alarms";
 
   head.innerHTML = isCurrent
-    ? `<tr><th>#</th><th>Tag</th><th>Source</th><th>Description</th><th>Severity</th><th>Occurred</th></tr>`
-    : `<tr><th>#</th><th>Tag</th><th>Source</th><th>Description</th><th>Occurred</th><th>Resolved</th></tr>`;
-
+    ? `<tr><th>${t("alarm.col.no")}</th><th>${t("alarm.col.tag")}</th><th>${t("alarm.col.source")}</th><th>${t("alarm.col.description")}</th><th>${t("alarm.col.severity")}</th><th>${t("alarm.col.occurred")}</th></tr>`
+    : `<tr><th>${t("alarm.col.no")}</th><th>${t("alarm.col.tag")}</th><th>${t("alarm.col.source")}</th><th>${t("alarm.col.description")}</th><th>${t("alarm.col.occurred")}</th><th>${t("alarm.col.resolved")}</th></tr>`;
+  
   if (rows.length === 0) {
-    body.innerHTML = `<tr><td colspan="6" class="eq-queue-empty">${isCurrent ? "No active alarms. All clear." : "No alarm history yet."}</td></tr>`;
+    body.innerHTML = `<tr><td colspan="6" class="eq-queue-empty">${isCurrent ? t("alarm.no_active") : t("alarm.no_history")}</td></tr>`;
     return;
   }
 
@@ -2310,7 +2325,7 @@ function anmShowForm(show) {
 
 function anmUpdateSaveBtnLabel() {
   const btn = document.getElementById("anm-save-btn");
-  btn.textContent = MS.editingId ? "Save Changes" : "Add Model";
+  btn.textContent = MS.editingId ? t("anm.save_btn") : t("anm.add_btn");
 }
 
 // Fills the shared form fields from a condition row (or blanks it for

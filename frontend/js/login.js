@@ -3,7 +3,9 @@
 // login.js — sign in / sign up screen
 // ============================================================
 const API_BASE = ""; // same-origin (Node gateway serves this file too)
-
+I18N.applyTranslations(document);
+const langBtn = document.getElementById("lang-toggle-btn");
+if (langBtn) langBtn.addEventListener("click", () => I18N.toggleLang());
 // ---------------- COMMON: tab switching + alert helper ----------------
 const tabs = document.querySelectorAll(".login-tab");
 const forms = document.querySelectorAll(".login-form");

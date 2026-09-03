@@ -17,20 +17,22 @@
       <!-- ---- left: brand panel ---- -->
       <div class="login-brand">
         <div class="beam-line"></div>
-        <div class="login-brand-mark"><span class="beam"></span> LASER LINK MD-X</div>
-        <h1>Job queueing and full command control for the MD‑X2520A.</h1>
-        <p>Queue marking jobs, run any command from the full protocol reference, and keep a live log
+        <div class="login-brand-mark">
+          <span class="beam"></span> LASER LINK MD-X
+        </div>
+        <h1 data-i18n="login.brand.headline">Job queueing and full command control for the MD‑X2520A.</h1>
+        <p data-i18n="login.brand.desc">Queue marking jobs, run any command from the full protocol reference, and keep a live log
           of everything sent to the marker — from one browser tab.</p>
         <div class="login-brand-meta">
-          <div><div class="k">Protocol</div><div class="v">ASCII / \r delimited</div></div>
-          <div><div class="k">Marker</div><div class="v">MD-X2000 / 2500 series</div></div>
-          <div><div class="k">Access</div><div class="v">Admin-approved accounts</div></div>
+          <div><div class="k" data-i18n="login.brand.meta.protocol">Protocol</div><div class="v">ASCII / \r delimited</div></div>
+          <div><div class="k" data-i18n="login.brand.meta.marker">Marker</div><div class="v">MD-X2000 / 2500 series</div></div>
+          <div><div class="k" data-i18n="login.brand.meta.access">Access</div><div class="v" data-i18n="login.brand.meta.access_value">Admin-approved accounts</div></div>
         </div>
         <div class="login-brand-meta">
           <div><div class="k">Admin</div><div class="v">`admin` / `Admin@123`</div></div>
-          <div><div class="k">Engineer</div><div class="v">`60014` / `ENG123`</div></div>
-          <div><div class="k">Machine Controller</div><div class="v">`64036` / `MCC123`</div></div>
-          <div><div class="k">Operator</div><div class="v">`66005` / `OPT123`</div></div>
+          <div><div class="k" data-i18n="login.role.engineer">Engineer</div><div class="v">`60014` / `ENG123`</div></div>
+          <div><div class="k" data-i18n="login.role.machine_controller">Machine Controller</div><div class="v">`64036` / `MCC123`</div></div>
+          <div><div class="k" data-i18n="login.role.operator">Operator</div><div class="v">`66005` / `OPT123`</div></div>
         </div>
       </div>
 
@@ -39,8 +41,8 @@
         <div class="login-box">
 
           <div class="login-tabs">
-            <button class="login-tab active" data-tab="signin" type="button">Sign in</button>
-            <button class="login-tab" data-tab="signup" type="button">Sign up</button>
+            <button class="login-tab active" data-tab="signin" type="button" data-i18n="login.tab.signin">Sign in</button>
+            <button class="login-tab" data-tab="signup" type="button" data-i18n="login.tab.signup">Sign up</button>
           </div>
 
           <div id="alert-box"></div>
@@ -48,16 +50,16 @@
           <!-- ================= SIGN IN ================= -->
           <form class="login-form active" id="signin-form" data-tab="signin">
             <div class="field">
-              <label for="si-employee-id">Employee ID</label>
+              <label for="si-employee-id" data-i18n="login.field.employee_id">Employee ID</label>
               <input type="text" id="si-employee-id" name="employee_id" autocomplete="username" required />
             </div>
 
             <div class="field">
-              <label for="si-password">Password</label>
+              <label for="si-password" data-i18n="login.field.password">Password</label>
               <input type="password" id="si-password" name="password" autocomplete="current-password" required />
             </div>
-            <button type="submit" class="btn btn-primary btn-block">Sign in</button>
-            <p class="login-submit-note">Only approved accounts can sign in. New accounts need admin approval first.</p>
+            <button type="submit" class="btn btn-primary btn-block" data-i18n="login.btn.signin">Sign in</button>
+            <p class="login-submit-note" data-i18n="login.note.signin">Only approved accounts can sign in. New accounts need admin approval first.</p>
           </form>
 
           <!-- ================= SIGN UP ================= -->
@@ -65,44 +67,46 @@
             <div class="login-photo-row">
               <img id="su-photo-preview" class="login-photo-preview" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3C/svg%3E" alt="" />
               <div class="field" style="margin-bottom:0; flex:1;">
-                <label for="su-photo">Photo (optional)</label>
+                <label for="su-photo" data-i18n="login.field.photo">Photo (optional)</label>
                 <input type="file" id="su-photo" name="photo" accept="image/png,image/jpeg,image/webp" />
               </div>
             </div>
             <div class="field">
-              <label for="su-name">Full name</label>
+              <label for="su-name" data-i18n="login.field.name">Full name</label>
               <input type="text" id="su-name" name="name" required />
             </div>
             <div class="field">
-              <label for="su-employee-id">Employee ID</label>
+              <label for="su-employee-id" data-i18n="login.field.employee_id">Employee ID</label>
               <input type="text" id="su-employee-id" name="employee_id" required />
             </div>
             <div class="field">
-              <label for="su-role">Role</label>
+              <label for="su-role" data-i18n="login.field.role">Role</label>
               <select id="su-role" name="role" required>
-                <option value="" disabled selected>— select role —</option>
-                <option value="operator">Operator</option>
-                <option value="machine_controller">Machine Controller</option>
-                <option value="engineer">Engineer</option>
+                <option value="" disabled selected data-i18n="login.role.placeholder">— select role —</option>
+                <option value="operator" data-i18n="login.role.operator">Operator</option>
+                <option value="machine_controller" data-i18n="login.role.machine_controller">Machine Controller</option>
+                <option value="engineer" data-i18n="login.role.engineer">Engineer</option>
               </select>
             </div>
             <div class="field">
-              <label for="su-password">Password</label>
+              <label for="su-password" data-i18n="login.field.password">Password</label>
               <input type="password" id="su-password" name="password" autocomplete="new-password" required minlength="6" />
             </div>
             <div class="field">
-              <label for="su-password2">Confirm password</label>
+              <label for="su-password2" data-i18n="login.field.confirm_password">Confirm password</label>
               <input type="password" id="su-password2" name="password2" autocomplete="new-password" required minlength="6" />
             </div>
-            <button type="submit" class="btn btn-primary btn-block">Create account</button>
-            <p class="login-submit-note">An admin must approve your account before you can sign in.</p>
+            <button type="submit" class="btn btn-primary btn-block" data-i18n="login.btn.signup">Create account</button>
+            <p class="login-submit-note" data-i18n="login.note.signup">An admin must approve your account before you can sign in.</p>
 
           </form>
-
+          <button class="btn btn-sm" id="lang-toggle-btn" style="margin-left:auto;" title="Switch language / เปลี่ยนภาษา">ไทย</button>
         </div>
+
       </div>
     </div>
 
+    <script src="js/i18n.js"></script>
     <script src="js/login.js"></script>
   </body>
 </html>

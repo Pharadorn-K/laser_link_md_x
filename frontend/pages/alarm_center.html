@@ -1,29 +1,24 @@
 <!-- frontend/pages/alarm_center.html -->
-<!-- ============================================================
-     alarm_center.html — loaded into #content by dashboard.js
-     Logic lives in dashboard.js, section "FOR ALARM CENTER PAGE"
-     ============================================================ -->
 <div class="ac-tab-bar">
   <button class="ac-tab active" data-tab="current">
-    Current Alarms <span class="ac-tab-count" id="ac-count-current">0</span>
+    <span data-i18n="alarm.tab.current">Current Alarms</span> <span class="ac-tab-count" id="ac-count-current">0</span>
   </button>
   <button class="ac-tab" data-tab="history">
-    History Alarms <span class="ac-tab-count" id="ac-count-history">0</span>
+    <span data-i18n="alarm.tab.history">History Alarms</span> <span class="ac-tab-count" id="ac-count-history">0</span>
   </button>
   <div class="ac-refresh-row">
-    <button class="btn btn-sm" id="ac-refresh-btn"><i class="fa-solid fa-rotate"></i> Refresh</button>
+    <button class="btn btn-sm" id="ac-refresh-btn"><i class="fa-solid fa-rotate"></i> <span data-i18n="alarm.refresh">Refresh</span></button>
     <span class="ac-updated" id="ac-last-updated"></span>
-  </div>  
+  </div>
 </div>
 
 <div class="grid-2 ac-grid">
 
-  <!-- ---- LEFT: alarm table ---- -->
   <div class="card ac-list-card">
-    <div class="card-title" id="ac-list-title">Current Alarms</div>
+    <div class="card-title" id="ac-list-title" data-i18n="alarm.tab.current">Current Alarms</div>
     <div class="ac-table-wrap">
       <table class="data-table ac-table">
-        <thead id="ac-table-head"><!-- filled by JS depending on active tab --></thead>
+        <thead id="ac-table-head"></thead>
         <tbody id="ac-table-body">
           <tr><td colspan="6" class="eq-queue-empty">Loading…</td></tr>
         </tbody>
@@ -31,14 +26,13 @@
     </div>
   </div>
 
-  <!-- ---- RIGHT: instructions / detail panel ---- -->
   <div class="card ac-detail-card">
-    <div class="card-title">Alarm Details &amp; Instructions</div>
+    <div class="card-title" data-i18n="alarm.details_title">Alarm Details &amp; Instructions</div>
     <div class="ac-detail-empty" id="ac-detail-empty">
       <i class="fa-regular fa-hand-point-left"></i>
-      Select an alarm from the list to see details and recovery steps.
+      <span data-i18n="alarm.detail.empty">Select an alarm from the list to see details and recovery steps.</span>
     </div>
-    <div class="ac-detail-body" id="ac-detail-body" style="display:none;"><!-- filled by JS --></div>
+    <div class="ac-detail-body" id="ac-detail-body" style="display:none;"></div>
   </div>
 
 </div>
