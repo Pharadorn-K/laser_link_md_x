@@ -223,6 +223,17 @@ function padBlk(n) {
   return String(n).padStart(3, "0");
 }
 
+// Shared by both MANUAL (WM_START_SEQUENCE) and AUTO (AUTO_SEQUENCE_STEPS /
+// AUTO_SINGLE_LOOP_STEPS) sequences: stamps a `.skipped` flag onto each step
+// based on the currently selected model's check_* flags. job may be null
+// (no model selected yet) — skipIf always guards with `!!job &&`, so nothing
+// is marked skipped until a real model is selected.
+function applySkipFlags(steps, job) {
+  return steps.map((s) => ({
+    ...s,
+    skipped: typeof s.skipIf === "function" ? !!s.skipIf(job) : false,
+  }));
+}
 // Builds the base command string for a model_condition row, e.g.
 // "JobNo=0001,BLK=001,CharacterString=G,BLK=002,CharacterString=K9L"
 function buildBaseCommand(condition) {
@@ -318,6 +329,14 @@ function monAutoNextPallet(mode) {
   return p;
 }
 
+// Same lookup as monAutoNextPallet but read-only — used to preview which
+// pallet/model the *next* cycle will run against, without consuming a turn.
+function monPeekNextAutoPallet(mode) {
+  const pallets = monAutoActivePallets(mode);
+  if (pallets.length === 1) return pallets[0];
+  return pallets[MON_AUTO.palletCycleIndex % pallets.length];
+}
+
 // Animates step state (pending/active/done) directly on the already-visible
 // First Cycle / Loop Cycle lists built by monRenderSeqPreview(), instead of
 // swapping to a separate flat list. activeIndex === steps.length -> all done.
@@ -326,10 +345,17 @@ function monSetPreviewStepState(listId, steps, activeIndex) {
   if (!list) return;
   const items = list.querySelectorAll("li");
   items.forEach((li, i) => {
-    li.classList.remove("pending", "active", "done");
-    if (i < activeIndex) li.classList.add("done");
-    else if (i === activeIndex) li.classList.add("active");
-    else li.classList.add("pending");
+    li.classList.remove("pending", "active", "done", "skipped");
+    const skipped = steps[i] && steps[i].skipped;
+    if (skipped && i <= activeIndex) {
+      li.classList.add("skipped");
+    } else if (i < activeIndex) {
+      li.classList.add("done");
+    } else if (i === activeIndex) {
+      li.classList.add(skipped ? "skipped" : "active");
+    } else {
+      li.classList.add("pending");
+    }
   });
 }
 
@@ -342,8 +368,9 @@ function monRenderSeqPreviewList(elId, steps, round) {
   if (!list) return;
   list.innerHTML = steps.map((s, i) => {
     const label = s.firstLabel ? (round === "first" ? s.firstLabel : s.loopLabel) : s.label;
-    const tooltip = wmTooltipText({ ...s, label });
-    return `<li class="wm-seq-step pending" title="${escapeHtml(tooltip)}"><span class="wm-seq-num">${i + 1}</span>${label}</li>`;
+    const tooltip = wmTooltipText({ ...s, label }) + (s.skipped ? " — Skipped (not required for this model)" : "");
+    const skipTag = s.skipped ? ` <span class="wm-seq-skip-tag">(skipped)</span>` : "";
+    return `<li class="wm-seq-step pending" title="${escapeHtml(tooltip)}"><span class="wm-seq-num">${i + 1}</span>${label}${skipTag}</li>`;
   }).join("");
 }
 
@@ -353,11 +380,16 @@ function monRenderSeqPreview(mode) {
   const info = wmAutoModeInfo(mode);
 
   if (info.kind === "single") {
+    const job = getSelectedJob(info.pallet);
+    const steps = applySkipFlags(AUTO_SINGLE_LOOP_STEPS, job);
     wrap.innerHTML = `
       <div class="card-title" style="margin-top:0;">Loop Cycle <span style="font-weight:400;color:var(--ink-faint);font-size:11px;">(repeats every 2-hand start)</span></div>
       <ol class="wm-seq-list" id="mon-preview-loop-list"></ol>`;
-    monRenderSeqPreviewList("mon-preview-loop-list", AUTO_SINGLE_LOOP_STEPS);
+    monRenderSeqPreviewList("mon-preview-loop-list", steps);
   } else {
+    const nextPallet = monPeekNextAutoPallet(mode);
+    const job = getSelectedJob(nextPallet);
+    const steps = applySkipFlags(AUTO_SEQUENCE_STEPS, job);
     wrap.innerHTML = `
       <div class="wm-auto-seq-cols">
         <div class="wm-auto-seq-col">
@@ -369,8 +401,8 @@ function monRenderSeqPreview(mode) {
           <ol class="wm-seq-list" id="mon-preview-loop-list"></ol>
         </div>
       </div>`;
-    monRenderSeqPreviewList("mon-preview-first-list", AUTO_SEQUENCE_STEPS, "first");
-    monRenderSeqPreviewList("mon-preview-loop-list", AUTO_SEQUENCE_STEPS, "loop");
+    monRenderSeqPreviewList("mon-preview-first-list", steps, "first");
+    monRenderSeqPreviewList("mon-preview-loop-list", steps, "loop");
   }
 }
 
@@ -401,14 +433,20 @@ async function monAutoRunOneCycle(mode) {
     MON.activePallet = pallet;
     monRenderPalletBlock(pallet);
 
-    monResetPreviewStepState("mon-preview-loop-list", AUTO_SINGLE_LOOP_STEPS);
-    for (let i = 0; i < AUTO_SINGLE_LOOP_STEPS.length; i++) {
-      monSetPreviewStepState("mon-preview-loop-list", AUTO_SINGLE_LOOP_STEPS, i);
-      try {await AUTO_SINGLE_LOOP_STEPS[i].fn();} catch (err) {showToast(`Auto cycle error: ${err}`);break;}
-    }
-    monSetPreviewStepState("mon-preview-loop-list", AUTO_SINGLE_LOOP_STEPS, AUTO_SINGLE_LOOP_STEPS.length);
-
     const job = getSelectedJob(pallet);
+    const steps = applySkipFlags(AUTO_SINGLE_LOOP_STEPS, job);
+    monRenderSeqPreviewList("mon-preview-loop-list", steps);
+    monResetPreviewStepState("mon-preview-loop-list", steps);
+    for (let i = 0; i < steps.length; i++) {
+      monSetPreviewStepState("mon-preview-loop-list", steps, i);
+      if (steps[i].skipped) {
+        await new Promise((r) => setTimeout(r, 150)); // brief pause so the yellow state is visible
+        continue;
+      }
+      try { await steps[i].fn(); } catch (err) { showToast(`Auto cycle error: ${err}`); break; }
+    }
+    monSetPreviewStepState("mon-preview-loop-list", steps, steps.length);
+
     if (job) monReportCount(pallet, job);
     return;
   }
@@ -419,20 +457,26 @@ async function monAutoRunOneCycle(mode) {
   MON.activePallet = pallet;
   monRenderPalletBlock(pallet);
 
-  monResetPreviewStepState(activeListId, AUTO_SEQUENCE_STEPS);
-  for (let i = 0; i < AUTO_SEQUENCE_STEPS.length; i++) {
-    monSetPreviewStepState(activeListId, AUTO_SEQUENCE_STEPS, i);
+  const job = getSelectedJob(pallet);
+  const steps = applySkipFlags(AUTO_SEQUENCE_STEPS, job);
+  monRenderSeqPreviewList(activeListId, steps, round);
+  monResetPreviewStepState(activeListId, steps);
+  for (let i = 0; i < steps.length; i++) {
+    monSetPreviewStepState(activeListId, steps, i);
+    if (steps[i].skipped) {
+      await new Promise((r) => setTimeout(r, 150));
+      continue;
+    }
     try {
-      await AUTO_SEQUENCE_STEPS[i].fn(round);
+      await steps[i].fn(round);
     } catch (err) {
       showToast(`Auto cycle error: ${err}`);
       break;
     }
   }
-  monSetPreviewStepState(activeListId, AUTO_SEQUENCE_STEPS, AUTO_SEQUENCE_STEPS.length);
+  monSetPreviewStepState(activeListId, steps, steps.length);
   MON_AUTO.roundCount[pallet] += 1;
 
-  const job = getSelectedJob(pallet);
   if (job) monReportCount(pallet, job);
 }
 
@@ -791,9 +835,20 @@ const WM_MODE_KEY = "nlm_work_mode";
 const WM = {
   mode: null,       // "MANUAL" | "AUTO1-2" | "AUTO1" | "AUTO2" | null
   manualRunning: false,
+  runningPallet: null,
   seqRunning: false,
   seqTimer: null,
   seqIndex: -1,
+};
+
+// In-memory ONLY — intentionally not persisted to localStorage or the
+// backend. This is a UI convenience so the two Start Marking buttons
+// reflect "who's currently in the Operator Room" during this session.
+// Any function that needs to make a REAL decision about equipment state
+// must read the live sensor/signal at that moment — this value is never
+// a substitute for that, and it resets on every full page reload.
+const WM_PALLET_STATE = {
+  operatorRoomPallet: "Pallet1", // default — no real signal wired up yet
 };
 
 function wmLoadMode() {
@@ -915,20 +970,36 @@ const WM_FUNCTIONS = {
   CHANGE_PALLET: {
     label: "Change Pallet",
     group: "pallet",
-    desc: "Swaps Pallet1/Pallet2. Interlocks TBD: front door closed, side door closed.",
-    run: () => wmStub("CHANGE_PALLET", 900),
+    desc: "Swaps Pallet1/Pallet2 via the middle door. Interlocks TBD: front door closed, side door closed.",
+    run: async () => {
+      const result = await wmStub("CHANGE_PALLET", 900);
+      WM_PALLET_STATE.operatorRoomPallet =
+        WM_PALLET_STATE.operatorRoomPallet === "Pallet1" ? "Pallet2" : "Pallet1";
+      wmUpdatePalletLocationUI();
+      return result;
+    },
   },
   CALL_PALLET1: {
     label: "Call Pallet 1",
     group: "pallet",
     desc: "IAI EC-S7H-500-3-WA #2 — bring Pallet 1 to the operator-side load position.",
-    run: () => wmStub("CALL_PALLET1", 900),
+    run: async () => {
+      const result = await wmStub("CALL_PALLET1", 900);
+      WM_PALLET_STATE.operatorRoomPallet = "Pallet1";
+      wmUpdatePalletLocationUI();
+      return result;
+    },
   },
   CALL_PALLET2: {
     label: "Call Pallet 2",
     group: "pallet",
     desc: "IAI EC-S7H-500-3-WA #3 — bring Pallet 2 to the operator-side load position.",
-    run: () => wmStub("CALL_PALLET2", 900),
+    run: async () => {
+      const result = await wmStub("CALL_PALLET2", 900);
+      WM_PALLET_STATE.operatorRoomPallet = "Pallet2";
+      wmUpdatePalletLocationUI();
+      return result;
+    },
   },
   CAMERA_TRIGGER: {
     label: "Camera Trigger",
@@ -982,7 +1053,8 @@ const AUTO_SEQUENCE_STEPS = [
     fn: () => wmStub("QUEUE_LOOP_CONTROL", 200),
   },
   { id: "close_front", label: "Close Front Door", fn: () => WM_FUNCTIONS.CLOSE_FRONT_DOOR.run() },
-  { id: "camera_check", label: "Camera Check", fn: () => WM_FUNCTIONS.CAMERA_TRIGGER.run() },
+  { id: "camera_check", label: "Camera Check", fn: () => WM_FUNCTIONS.CAMERA_TRIGGER.run(),
+    skipIf: (job) => !!job && !job.check_camera },
   { id: "change_pallet", label: "Change Pallet", fn: () => WM_FUNCTIONS.CHANGE_PALLET.run() },
   {
     id: "open_front",
@@ -992,8 +1064,12 @@ const AUTO_SEQUENCE_STEPS = [
   },
   { id: "start_marking", label: "Start Marking", fn: () => WM_FUNCTIONS.START_MARKING.run() },
   { id: "count_auto", label: "Count Part (Auto)", fn: () => wmStub("COUNT_AUTO", 300) },
-  { id: "code_result", label: "2D Code: Read Result", fn: () => WM_FUNCTIONS.CODE2D_RESULT_READER.run() },
-  { id: "code_grade", label: "2D Code: Grade Result", fn: () => WM_FUNCTIONS.CODE2D_GRADE_RESULT.run() },
+  { id: "code_start", label: "2D Code: Start Reader", fn: () => WM_FUNCTIONS.CODE2D_START_READER.run(),
+    skipIf: (job) => !!job && !job.check_start2dcode },
+  { id: "code_result", label: "2D Code: Read Result", fn: () => WM_FUNCTIONS.CODE2D_RESULT_READER.run(),
+    skipIf: (job) => !!job && !job.check_read2dcode },
+  { id: "code_grade", label: "2D Code: Grade Result", fn: () => WM_FUNCTIONS.CODE2D_GRADE_RESULT.run(),
+    skipIf: (job) => !!job && !job.check_grade2dcode },
   {
     id: "confirm_end",
     label: "Confirm End Loop",
@@ -1028,12 +1104,17 @@ const AUTO_SINGLE_LOOP_STEPS = [
   { id: "cond_start", label: "Condition Start", note: "D001 ON, D002 ON — 2-hand start pushed", fn: () => wmStub("CONDITION_START", 200) },
   { id: "queue_loop", label: "Queue Loop Control", note: "Holds this cycle until the previous one confirms done", fn: () => wmStub("QUEUE_LOOP_CONTROL", 200) },
   { id: "close_front", label: "Close Front Door", fn: () => WM_FUNCTIONS.CLOSE_FRONT_DOOR.run() },
-  { id: "camera_check", label: "Camera Check", fn: () => WM_FUNCTIONS.CAMERA_TRIGGER.run() },
+  { id: "camera_check", label: "Camera Check", fn: () => WM_FUNCTIONS.CAMERA_TRIGGER.run(),
+    skipIf: (job) => !!job && !job.check_camera },
   { id: "change_pallet_in", label: "Change Pallet (into machine room)", fn: () => WM_FUNCTIONS.CHANGE_PALLET.run() },
   { id: "start_marking", label: "Start Marking", fn: () => WM_FUNCTIONS.START_MARKING.run() },
   { id: "count_auto", label: "Count Part (Auto)", fn: () => wmStub("COUNT_AUTO", 300) },
-  { id: "code_result", label: "2D Code: Read Result", fn: () => WM_FUNCTIONS.CODE2D_RESULT_READER.run() },
-  { id: "code_grade", label: "2D Code: Grade Result", fn: () => WM_FUNCTIONS.CODE2D_GRADE_RESULT.run() },
+  { id: "code_start", label: "2D Code: Start Reader", fn: () => WM_FUNCTIONS.CODE2D_START_READER.run(),
+    skipIf: (job) => !!job && !job.check_start2dcode },
+  { id: "code_result", label: "2D Code: Read Result", fn: () => WM_FUNCTIONS.CODE2D_RESULT_READER.run(),
+    skipIf: (job) => !!job && !job.check_read2dcode },
+  { id: "code_grade", label: "2D Code: Grade Result", fn: () => WM_FUNCTIONS.CODE2D_GRADE_RESULT.run(),
+    skipIf: (job) => !!job && !job.check_grade2dcode },
   {
     id: "confirm_end",
     label: "Confirm End Loop",
@@ -1062,19 +1143,23 @@ function wmRenderStepsList(elId, steps, completedCount = 0) {
   const list = document.getElementById(elId);
   if (!list) return;
   list.innerHTML = steps.map((s, i) => {
-    const tooltip = wmTooltipText(s);
-    const cls = i < completedCount ? "done" : "pending";
-    return `<li class="wm-seq-step ${cls}" title="${escapeHtml(tooltip)}"><span class="wm-seq-num">${i + 1}</span>${s.label}</li>`;
+    const tooltip = wmTooltipText(s) + (s.skipped ? " — Skipped (not required for this model)" : "");
+    const skipTag = s.skipped ? ` <span class="wm-seq-skip-tag">(skipped)</span>` : "";
+    let cls = "pending";
+    if (s.skipped && i < completedCount) cls = "skipped";
+    else if (i < completedCount) cls = "done";
+    return `<li class="wm-seq-step ${cls}" title="${escapeHtml(tooltip)}"><span class="wm-seq-num">${i + 1}</span>${s.label}${skipTag}</li>`;
   }).join("");
 }
 
-function wmRenderAutoSeqPreviewList(elId, round) {
+function wmRenderAutoSeqPreviewList(elId, steps, round) {
   const list = document.getElementById(elId);
   if (!list) return;
-  list.innerHTML = AUTO_SEQUENCE_STEPS.map((s, i) => {
+  list.innerHTML = steps.map((s, i) => {
     const label = s.firstLabel ? (round === "first" ? s.firstLabel : s.loopLabel) : s.label;
-    const tooltip = wmTooltipText({ ...s, label });
-    return `<li class="wm-seq-step pending" title="${escapeHtml(tooltip)}"><span class="wm-seq-num">${i + 1}</span>${label}</li>`;
+    const tooltip = wmTooltipText({ ...s, label }) + (s.skipped ? " — Skipped (not required for this model)" : "");
+    const skipTag = s.skipped ? ` <span class="wm-seq-skip-tag">(skipped)</span>` : "";
+    return `<li class="wm-seq-step pending" title="${escapeHtml(tooltip)}"><span class="wm-seq-num">${i + 1}</span>${label}${skipTag}</li>`;
   }).join("");
 }
 
@@ -1091,8 +1176,9 @@ function wmRenderAutoSequenceContent(mode) {
         <div class="card-title" style="margin-top:10px;">Loop Cycle <span style="font-weight:400;color:var(--ink-faint);font-size:11px;">(repeats every 2-hand start — pallet swaps in to mark, then back out)</span></div>
         <ol class="wm-seq-list" id="wm-auto-loop-list"></ol>
       </div>`;
+    const job = getSelectedJob(info.pallet);
     wmRenderStepsList("wm-auto-activation-list", AUTO_SINGLE_ACTIVATION_STEPS(info.palletNum));
-    wmRenderStepsList("wm-auto-loop-list", AUTO_SINGLE_LOOP_STEPS);
+    wmRenderStepsList("wm-auto-loop-list", applySkipFlags(AUTO_SINGLE_LOOP_STEPS, job));
   } else {
     wrap.innerHTML = `
       <div class="wm-auto-seq-dual">
@@ -1109,9 +1195,12 @@ function wmRenderAutoSequenceContent(mode) {
           </div>
         </div>
       </div>`;
+    const nextPallet = monPeekNextAutoPallet(mode);
+    const job = getSelectedJob(nextPallet);
+    const steps = applySkipFlags(AUTO_SEQUENCE_STEPS, job);
     wmRenderStepsList("wm-auto-activation-list", AUTO_DUAL_ACTIVATION_STEPS);
-    wmRenderAutoSeqPreviewList("wm-auto-first-list", "first");
-    wmRenderAutoSeqPreviewList("wm-auto-loop-list", "loop");
+    wmRenderAutoSeqPreviewList("wm-auto-first-list", steps, "first");
+    wmRenderAutoSeqPreviewList("wm-auto-loop-list", steps, "loop");
   }
 }
 
@@ -1199,87 +1288,160 @@ async function wmRunSingleFunction(key, btn) {
   }
 }
 
-/* ------------------------------------------------------------
-   Start Marking sequence — the semi-auto flow behind the
-   "2-hand start" / "Start Marking" button, exactly as spec'd:
-   CONDITION_START_LOOP -> ... -> CONDITION_END_LOOP. A step that
-   returns ok:false stops the run; alarm:true also raises a toast.
-   ------------------------------------------------------------ */
+// skipIf(job): when true for the pallet's currently selected model, the
+// step renders yellow ("skipped") and its fn is NOT called — it counts
+// as passed instead of run. job may be null if no model is selected.
 const WM_START_SEQUENCE = [
   { id: "cond_start", label: "Condition Start Loop", note: "D001 ON, D002 ON — 2-hand start pushed", fn: () => wmStub("CONDITION_START_LOOP", 200) },
   { id: "close_front", label: "Close Front Door", fn: WM_FUNCTIONS.CLOSE_FRONT_DOOR.run },
-  { id: "camera_check", label: "Camera Check", fn: WM_FUNCTIONS.CAMERA_TRIGGER.run },
+  { id: "camera_check", label: "Camera Check", fn: WM_FUNCTIONS.CAMERA_TRIGGER.run,
+    skipIf: (job) => !!job && !job.check_camera },
   { id: "change_pallet", label: "Change Pallet", fn: WM_FUNCTIONS.CHANGE_PALLET.run },
   { id: "open_front", label: "Open Front Door", fn: WM_FUNCTIONS.OPEN_FRONT_DOOR.run },
   { id: "start_marking", label: "Start Marking", fn: WM_FUNCTIONS.START_MARKING.run },
-  { id: "code_start", label: "2D Code: Start Reader", fn: WM_FUNCTIONS.CODE2D_START_READER.run },
-  { id: "code_result", label: "2D Code: Read Result", fn: WM_FUNCTIONS.CODE2D_RESULT_READER.run },
-  { id: "code_grade", label: "2D Code: Grade Result", fn: WM_FUNCTIONS.CODE2D_GRADE_RESULT.run },
+  { id: "code_start", label: "2D Code: Start Reader", fn: WM_FUNCTIONS.CODE2D_START_READER.run,
+    skipIf: (job) => !!job && !job.check_start2dcode },
+  { id: "code_result", label: "2D Code: Read Result", fn: WM_FUNCTIONS.CODE2D_RESULT_READER.run,
+    skipIf: (job) => !!job && !job.check_read2dcode },
+  { id: "code_grade", label: "2D Code: Grade Result", fn: WM_FUNCTIONS.CODE2D_GRADE_RESULT.run,
+    skipIf: (job) => !!job && !job.check_grade2dcode },
   { id: "cond_end", label: "Condition End Loop", fn: () => wmStub("CONDITION_END_LOOP", 200) },
 ];
 
-function wmRenderStartSeqList(activeIndex = -1, doneUpTo = -1, failState = null) {
+function wmComputeStepsForJob(job) {
+  return WM_START_SEQUENCE.map((s) => ({
+    ...s,
+    skipped: typeof s.skipIf === "function" ? !!s.skipIf(job) : false,
+  }));
+}
+
+function wmRenderStartSeqList(steps, activeIndex = -1, doneUpTo = -1, failState = null) {
   const list = document.getElementById("wm-start-seq-list");
   if (!list) return;
-  list.innerHTML = WM_START_SEQUENCE.map((s, i) => {
+  list.innerHTML = steps.map((s, i) => {
     let cls = "pending";
-    if (failState && i === activeIndex) cls = failState; // 'alarm' | 'blocked'
-    else if (i <= doneUpTo) cls = "done";
-    else if (i === activeIndex) cls = "active";
-    const tooltip = wmTooltipText(s);
-    return `<li class="wm-seq-step ${cls}" title="${escapeHtml(tooltip)}"><span class="wm-seq-num">${i + 1}</span>${s.label}</li>`;
+    if (failState && i === activeIndex) {
+      cls = failState; // 'alarm' | 'blocked'
+    } else if (s.skipped && i <= Math.max(doneUpTo, activeIndex)) {
+      cls = "skipped";
+    } else if (i <= doneUpTo) {
+      cls = "done";
+    } else if (i === activeIndex) {
+      cls = "active";
+    }
+    const tooltip = wmTooltipText(s) + (s.skipped ? " — Skipped (not required for this model)" : "");
+    const skipTag = s.skipped ? ` <span class="wm-seq-skip-tag">(skipped)</span>` : "";
+    return `<li class="wm-seq-step ${cls}" title="${escapeHtml(tooltip)}"><span class="wm-seq-num">${i + 1}</span>${s.label}${skipTag}</li>`;
   }).join("");
 }
 
-function wmSetStartBtnState(state) {
-  const btn = document.getElementById("wm-start-marking-btn");
-  if (!btn) return;
+function wmRenderStartButtonsEnabled() {
+  const p1Btn = document.getElementById("wm-start-marking-p1-btn");
+  const p2Btn = document.getElementById("wm-start-marking-p2-btn");
+  if (!p1Btn || !p2Btn) return;
+  if (WM.manualRunning) return; // don't fight the running/disabled state
+  p1Btn.disabled = WM_PALLET_STATE.operatorRoomPallet !== "Pallet1";
+  p2Btn.disabled = WM_PALLET_STATE.operatorRoomPallet !== "Pallet2";
+}
+
+function wmUpdatePalletLocationUI() {
+  const valueEl = document.getElementById("wm-pallet-location-value");
+  if (valueEl) {
+    valueEl.textContent = WM_PALLET_STATE.operatorRoomPallet === "Pallet1" ? "Pallet 1" : "Pallet 2";
+  }
+  wmRenderStartButtonsEnabled();
+  // Keep the sequence preview in sync with whichever pallet is reachable
+  // right now, and with its currently selected model's checks.
+  if (!WM.manualRunning) {
+    const job = getSelectedJob(WM_PALLET_STATE.operatorRoomPallet);
+    wmRenderStartSeqList(wmComputeStepsForJob(job), -1, -1);
+  }
+}
+
+function wmSetStartButtonsState(state, activePallet) {
+  const p1Btn = document.getElementById("wm-start-marking-p1-btn");
+  const p2Btn = document.getElementById("wm-start-marking-p2-btn");
+  if (!p1Btn || !p2Btn) return;
+
   if (state === "running") {
-    btn.disabled = true;
-    btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Running…';
+    p1Btn.disabled = true;
+    p2Btn.disabled = true;
+    const runningBtn = activePallet === "Pallet1" ? p1Btn : p2Btn;
+    runningBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Running…';
   } else {
-    btn.disabled = false;
-    btn.innerHTML = "&#9654; Start Marking (2-hand start)";
+    p1Btn.innerHTML = "&#9654; Start Marking Pallet 1";
+    p2Btn.innerHTML = "&#9654; Start Marking Pallet 2";
+    wmRenderStartButtonsEnabled();
   }
 }
 
 function wmStopSequence() {
   WM.manualRunning = false;
-  wmSetStartBtnState("idle");
-  wmRenderStartSeqList(-1, -1);
+  WM.runningPallet = null;
+  wmSetStartButtonsState("idle");
+  const job = getSelectedJob(WM_PALLET_STATE.operatorRoomPallet);
+  wmRenderStartSeqList(wmComputeStepsForJob(job), -1, -1);
 }
 
-async function wmRunStartSequence() {
+async function wmRunStartSequenceForPallet(pallet) {
   if (WM.manualRunning) return;
-  WM.manualRunning = true;
-  wmSetStartBtnState("running");
-  wmRenderStartSeqList(-1, -1);
 
-  for (let i = 0; i < WM_START_SEQUENCE.length; i++) {
+  // Real-time gate — WM_PALLET_STATE stands in for a live sensor read
+  // per the "memory only, for now" note. Once real I/O exists, swap this
+  // check for the actual "pallet in operator room" signal, not a cached
+  // value.
+  if (WM_PALLET_STATE.operatorRoomPallet !== pallet) {
+    showToast(`${pallet === "Pallet1" ? "Pallet 1" : "Pallet 2"} is not in the Operator Room. Use Call Pallet / Change Pallet first.`);
+    return;
+  }
+
+  const job = getSelectedJob(pallet);
+  if (!job) {
+    showToast(`Select a model for ${pallet === "Pallet1" ? "Pallet 1" : "Pallet 2"} on Model Setting first.`);
+    return;
+  }
+
+  WM.manualRunning = true;
+  WM.runningPallet = pallet;
+  wmSetStartButtonsState("running", pallet);
+
+  const steps = wmComputeStepsForJob(job);
+  wmRenderStartSeqList(steps, -1, -1);
+  wmLog(`>>> Start Marking (${pallet}) — ${job.model} / Job ${padJob(job.job_no)}`);
+
+  for (let i = 0; i < steps.length; i++) {
     if (!WM.manualRunning) return; // stopped externally (e.g. page navigation)
-    wmRenderStartSeqList(i, i - 1);
-    const step = WM_START_SEQUENCE[i];
+    wmRenderStartSeqList(steps, i, i - 1);
+
+    if (steps[i].skipped) {
+      wmLog(`--- ${steps[i].label}: skipped (not required for this model) ---`, "warn");
+      await new Promise((r) => setTimeout(r, 150));
+      continue;
+    }
+
     let verdict;
     try {
-      verdict = await step.fn();
+      verdict = await steps[i].fn();
     } catch (err) {
       verdict = { ok: false, alarm: true, message: String(err) };
     }
     if (!verdict.ok) {
       WM.manualRunning = false;
-      wmRenderStartSeqList(i, i - 1, verdict.alarm ? "alarm" : "blocked");
-      wmLog(`!!! ${step.label} failed: ${verdict.message}`, "error");
-      wmSetStartBtnState("idle");
-      if (verdict.alarm) showToast(`Alarm: ${step.label} — ${verdict.message}`);
+      WM.runningPallet = null;
+      wmRenderStartSeqList(steps, i, i - 1, verdict.alarm ? "alarm" : "blocked");
+      wmLog(`!!! ${steps[i].label} failed: ${verdict.message}`, "error");
+      wmSetStartButtonsState("idle");
+      if (verdict.alarm) showToast(`Alarm: ${steps[i].label} — ${verdict.message}`);
       return;
     }
   }
-  WM.manualRunning = false;
-  wmRenderStartSeqList(-1, WM_START_SEQUENCE.length - 1);
-  wmLog("--- Start Marking sequence complete ---", "ok");
-  wmSetStartBtnState("idle");
-}
 
+  WM.manualRunning = false;
+  WM.runningPallet = null;
+  wmRenderStartSeqList(steps, -1, steps.length - 1);
+  wmLog(`--- Start Marking sequence complete (${pallet}) ---`, "ok");
+  wmSetStartButtonsState("idle");
+}
 
 /* ============================================================
    FOR ALARM CENTER PAGE
@@ -2066,6 +2228,7 @@ PAGE_INIT.model_setting = function () {
       const condition = MS.data[pallet].find((r) => String(r.id) === id) || null;
       setSelectedJob(pallet, condition);
       msRenderDetail(pallet, condition);
+      wmUpdatePalletLocationUI(); // refresh Start Marking preview if this pallet is currently in the Operator Room
     });
   });
 
@@ -2113,8 +2276,9 @@ PAGE_INIT.model_setting = function () {
   });
 
   wmRenderFnGroups();
-  wmRenderStartSeqList(-1, -1);
-  document.getElementById("wm-start-marking-btn").addEventListener("click", wmRunStartSequence);
+  wmUpdatePalletLocationUI(); // sets pill text, button enable/disable, initial seq preview
+  document.getElementById("wm-start-marking-p1-btn").addEventListener("click", () => wmRunStartSequenceForPallet("Pallet1"));
+  document.getElementById("wm-start-marking-p2-btn").addEventListener("click", () => wmRunStartSequenceForPallet("Pallet2"));
 
   document.getElementById("wm-clear-log-btn").addEventListener("click", () => {
     document.getElementById("wm-manual-log").innerHTML = "";

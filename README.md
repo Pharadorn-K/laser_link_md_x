@@ -48,7 +48,30 @@ laser_link_md_x/
 │   ├── index.html              SPA shell: side bar + top bar + #content
 │   ├── css/
 │   │   ├── fontawesome/
+│   │   │   ├── all.css
+│   │   │   ├── all.min.css
+│   │   │   ├── brand.css
+│   │   │   ├── brand.min.css
+│   │   │   ├── fontawesome.css
+│   │   │   ├── fontawesome.min.css
+│   │   │   └── ...
 │   │   ├── webfonts/
+│   │   │   ├── fa-brands-400.woff2
+│   │   │   ├── fa-regular-400.woff2
+│   │   │   ├── fa-solid-900.woff2
+│   │   │   ├── fa-v4compatibility.woff2
+│   │   │   ├── inter-latin-400-normal.woff2
+│   │   │   ├── inter-latin-500-normal.woff2
+│   │   │   ├── inter-latin-600-normal.woff2
+│   │   │   ├── inter-latin-700-normal.woff2
+│   │   │   ├── inter-latin-800-normal.woff2
+│   │   │   ├── JetBrainsMono-Regular.woff2
+│   │   │   ├── JetBrainsMono-Medium.woff2
+│   │   │   ├── JetBrainsMono-Bold.woff2
+│   │   │   ├── NotoSansThai-Bold.ttf
+│   │   │   ├── NotoSansThai-Light.ttf
+│   │   │   ├── NotoSansThai-Medium.ttf
+│   │   │   └── NotoSansThai-Regular.ttf
 │   │   ├── base.css
 │   │   ├── login.css
 │   │   └── dashboard.css
