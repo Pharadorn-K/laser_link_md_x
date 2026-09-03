@@ -276,6 +276,104 @@ function getSelectedJobCommand(station) {
   return buildBaseCommand(getSelectedJob(station));
 }
 
+/* ---- Check-result status (Camera / 2D Read / 2D Grade) per pallet ----
+   Simulated for now — no equipment signal wired up yet. Persisted so
+   Monitor reflects the latest result even if the sequence that produced
+   it ran on the Model Setting page (manual mode). ---- */
+function getCheckStatus(pallet) {
+  try {
+    const all = JSON.parse(localStorage.getItem("nlm_check_status") || "{}");
+    return all[pallet] || null;
+  } catch (err) {
+    return null;
+  }
+}
+
+function setCheckStatus(pallet, status) {
+  let all;
+  try {
+    all = JSON.parse(localStorage.getItem("nlm_check_status") || "{}");
+  } catch (err) {
+    all = {};
+  }
+  if (status) all[pallet] = status;
+  else delete all[pallet];
+  localStorage.setItem("nlm_check_status", JSON.stringify(all));
+}
+
+// Resets a pallet's status block to reflect the currently selected job:
+// "Skipped" for any check disabled on that job, "—" (pending) otherwise.
+// Call this whenever a new cycle starts, so stale results don't linger.
+function monInitCheckStatusForJob(pallet, job) {
+  const status = {
+    jobId: job ? job.id : null,
+    camera: job && !job.check_camera ? "Skipped" : "—",
+    code2dRead: job && !job.check_read2dcode ? "Skipped" : "—",
+    code2dGrade: job && !job.check_grade2dcode ? "Skipped" : "—",
+  };
+  setCheckStatus(pallet, status);
+  return status;
+}
+
+// Used by render: reuse the stored status if it still belongs to the
+// same job, otherwise (job changed, or nothing stored yet) reinit it.
+function monGetOrInitCheckStatus(pallet, job) {
+  const existing = getCheckStatus(pallet);
+  if (!job) {
+    setCheckStatus(pallet, null);
+    return { camera: "—", code2dRead: "—", code2dGrade: "—" };
+  }
+  if (existing && existing.jobId === job.id) return existing;
+  return monInitCheckStatusForJob(pallet, job);
+}
+
+function monStatusClass(value) {
+  if (value === "Correct" || value === "Pass" || value === "OK") return "good";
+  if (value === "Skipped") return "skip";
+  if (value === "—") return "pending";
+  return "bad"; // Incorrect / Not Pass / Error / R / S / T
+}
+
+// Updates the stored value AND the live DOM (if the Monitor page's
+// pallet block happens to be mounted right now).
+function monSetCheckStatus(pallet, field, value) {
+  const current = getCheckStatus(pallet) || {};
+  current[field] = value;
+  setCheckStatus(pallet, current);
+
+  const idMap = { camera: "camera", code2dRead: "code2dread", code2dGrade: "code2dgrade" };
+  const el = document.getElementById(`mon-chk-${idMap[field]}-${pallet}`);
+  if (!el) return;
+  el.textContent = value;
+  el.className = `mon-chkval mon-chkval-${monStatusClass(value)}`;
+}
+
+// Maps a sequence step's id to the field it should update, and derives
+// the simulated result value. `ok` is the step's success/failure.
+function monApplyStepResult(pallet, step, ok) {
+  const fieldByStepId = {
+    camera_check: "camera",
+    code_result: "code2dRead",
+    code_grade: "code2dGrade",
+  };
+  const field = fieldByStepId[step.id];
+  if (!field) return;
+
+  let value;
+  if (step.skipped) {
+    value = "Skipped";
+  } else if (!ok) {
+    value = "Error";
+  } else if (field === "camera") {
+    value = "Correct";
+  } else if (field === "code2dRead") {
+    value = "OK";
+  } else {
+    value = "Pass";
+  }
+  monSetCheckStatus(pallet, field, value);
+}
+
 /* ============================================================
    FOR MONITOR PAGE
    ============================================================
@@ -431,19 +529,29 @@ async function monAutoRunOneCycle(mode) {
   if (info.kind === "single") {
     const pallet = info.pallet;
     MON.activePallet = pallet;
-    monRenderPalletBlock(pallet);
 
     const job = getSelectedJob(pallet);
+    monInitCheckStatusForJob(pallet, job); // reset to pending/skipped for this cycle
+    monRenderPalletBlock(pallet);
+
     const steps = applySkipFlags(AUTO_SINGLE_LOOP_STEPS, job);
     monRenderSeqPreviewList("mon-preview-loop-list", steps);
     monResetPreviewStepState("mon-preview-loop-list", steps);
     for (let i = 0; i < steps.length; i++) {
       monSetPreviewStepState("mon-preview-loop-list", steps, i);
       if (steps[i].skipped) {
+        monApplyStepResult(pallet, steps[i], true);
         await new Promise((r) => setTimeout(r, 150)); // brief pause so the yellow state is visible
         continue;
       }
-      try { await steps[i].fn(); } catch (err) { showToast(`Auto cycle error: ${err}`); break; }
+      try {
+        await steps[i].fn();
+        monApplyStepResult(pallet, steps[i], true);
+      } catch (err) {
+        monApplyStepResult(pallet, steps[i], false);
+        showToast(`Auto cycle error: ${err}`);
+        break;
+      }
     }
     monSetPreviewStepState("mon-preview-loop-list", steps, steps.length);
 
@@ -455,21 +563,26 @@ async function monAutoRunOneCycle(mode) {
   const round = MON_AUTO.roundCount[pallet] === 0 ? "first" : "loop";
   const activeListId = round === "first" ? "mon-preview-first-list" : "mon-preview-loop-list";
   MON.activePallet = pallet;
-  monRenderPalletBlock(pallet);
 
   const job = getSelectedJob(pallet);
+  monInitCheckStatusForJob(pallet, job); // reset to pending/skipped for this cycle
+  monRenderPalletBlock(pallet);
+
   const steps = applySkipFlags(AUTO_SEQUENCE_STEPS, job);
   monRenderSeqPreviewList(activeListId, steps, round);
   monResetPreviewStepState(activeListId, steps);
   for (let i = 0; i < steps.length; i++) {
     monSetPreviewStepState(activeListId, steps, i);
     if (steps[i].skipped) {
+      monApplyStepResult(pallet, steps[i], true);
       await new Promise((r) => setTimeout(r, 150));
       continue;
     }
     try {
       await steps[i].fn(round);
+      monApplyStepResult(pallet, steps[i], true);
     } catch (err) {
+      monApplyStepResult(pallet, steps[i], false);
       showToast(`Auto cycle error: ${err}`);
       break;
     }
@@ -589,6 +702,7 @@ function monRenderPalletBlock(pallet) {
   if (!job) {
     lock.classList.add("show");
     body.innerHTML = "";
+    setCheckStatus(pallet, null);
     return;
   }
   lock.classList.remove("show");
@@ -597,10 +711,17 @@ function monRenderPalletBlock(pallet) {
   const statusClass = running ? "busy" : "ready";
   const statusLabel = running ? "Running" : "Idle";
   const lastMarked = MON.lastMarked[pallet];
+  const checkStatus = monGetOrInitCheckStatus(pallet, job);
 
   const photoHtml = job.photo_path
     ? `<img src="${job.photo_path}" alt="${escapeHtml(job.model)}" />`
     : `<div class="ms-photo-placeholder"><i class="fa-regular fa-image"></i><span>No photo</span></div>`;
+
+  const chkRow = (label, field, idSuffix) => `
+    <div class="mon-chk-item">
+      <span class="mon-chk-label">${label}</span>
+      <span class="mon-chkval mon-chkval-${monStatusClass(checkStatus[field])}" id="mon-chk-${idSuffix}-${pallet}">${escapeHtml(checkStatus[field])}</span>
+    </div>`;
 
   body.innerHTML = `
     <div class="mon-model-row">
@@ -620,9 +741,19 @@ function monRenderPalletBlock(pallet) {
     </div>
 
     <div class="mon-count-block">
-      <div class="mon-count-label">Count Part</div>
-      <div class="mon-count-value" id="mon-count-${pallet}">${MON.counts[pallet]}</div>
-      <div class="mon-count-sub">${lastMarked ? `Last: ${new Date(lastMarked).toLocaleTimeString()}` : "No parts marked yet"}</div>
+      <div class="mon-count-col mon-checks-col">
+        <div class="mon-count-label">Check Results</div>
+        <div class="mon-chk-list">
+          ${chkRow("Camera Check", "camera", "camera")}
+          ${chkRow("2D Code Read", "code2dRead", "code2dread")}
+          ${chkRow("2D Code Grade", "code2dGrade", "code2dgrade")}
+        </div>
+      </div>
+      <div class="mon-count-col mon-count-num-col">
+        <div class="mon-count-label">Count Part</div>
+        <div class="mon-count-value" id="mon-count-${pallet}">${MON.counts[pallet]}</div>
+        <div class="mon-count-sub">${lastMarked ? `Last: ${new Date(lastMarked).toLocaleTimeString()}` : "No parts marked yet"}</div>
+      </div>
     </div>
 
     <div class="mon-dev-row">
@@ -1386,10 +1517,6 @@ function wmStopSequence() {
 async function wmRunStartSequenceForPallet(pallet) {
   if (WM.manualRunning) return;
 
-  // Real-time gate — WM_PALLET_STATE stands in for a live sensor read
-  // per the "memory only, for now" note. Once real I/O exists, swap this
-  // check for the actual "pallet in operator room" signal, not a cached
-  // value.
   if (WM_PALLET_STATE.operatorRoomPallet !== pallet) {
     showToast(`${pallet === "Pallet1" ? "Pallet 1" : "Pallet 2"} is not in the Operator Room. Use Call Pallet / Change Pallet first.`);
     return;
@@ -1404,6 +1531,7 @@ async function wmRunStartSequenceForPallet(pallet) {
   WM.manualRunning = true;
   WM.runningPallet = pallet;
   wmSetStartButtonsState("running", pallet);
+  monInitCheckStatusForJob(pallet, job); // reset to pending/skipped for this run
 
   const steps = wmComputeStepsForJob(job);
   wmRenderStartSeqList(steps, -1, -1);
@@ -1414,6 +1542,7 @@ async function wmRunStartSequenceForPallet(pallet) {
     wmRenderStartSeqList(steps, i, i - 1);
 
     if (steps[i].skipped) {
+      monApplyStepResult(pallet, steps[i], true);
       wmLog(`--- ${steps[i].label}: skipped (not required for this model) ---`, "warn");
       await new Promise((r) => setTimeout(r, 150));
       continue;
@@ -1426,6 +1555,7 @@ async function wmRunStartSequenceForPallet(pallet) {
       verdict = { ok: false, alarm: true, message: String(err) };
     }
     if (!verdict.ok) {
+      monApplyStepResult(pallet, steps[i], false);
       WM.manualRunning = false;
       WM.runningPallet = null;
       wmRenderStartSeqList(steps, i, i - 1, verdict.alarm ? "alarm" : "blocked");
@@ -1434,6 +1564,7 @@ async function wmRunStartSequenceForPallet(pallet) {
       if (verdict.alarm) showToast(`Alarm: ${steps[i].label} — ${verdict.message}`);
       return;
     }
+    monApplyStepResult(pallet, steps[i], true);
   }
 
   WM.manualRunning = false;
