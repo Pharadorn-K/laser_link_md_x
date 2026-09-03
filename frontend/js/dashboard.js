@@ -125,7 +125,7 @@ function applyUserToChrome(user) {
   if (user.photo_path) {
     document.getElementById("topbar-avatar").src = user.photo_path;
   }
-  document.querySelectorAll(".nav-link[data-roles]").forEach((el) => {
+  document.querySelectorAll("[data-roles]").forEach((el) => {
     const allowed = el.dataset.roles.split(",").map((r) => r.trim());
     el.style.display = allowed.includes(user.role) ? "" : "none";
   });
