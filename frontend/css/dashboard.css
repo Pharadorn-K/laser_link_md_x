@@ -256,7 +256,7 @@ table.data-table tr:last-child td { border-bottom: none; }
 }
 .mon-count-num-col {
   flex: 0 0 auto;
-  min-width: 480px;
+  min-width: 390px;
   align-items: center;
   text-align: center;
   border-left: 1px solid var(--line-soft);
