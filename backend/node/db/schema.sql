@@ -158,3 +158,40 @@ CREATE TABLE IF NOT EXISTS system_log (
 CREATE INDEX idx_system_log_created_at ON system_log (created_at);
 CREATE INDEX idx_system_log_action     ON system_log (action);
 CREATE INDEX idx_system_log_user       ON system_log (user_id);
+
+-- backend/node/db/migrate_production_log.sql
+-- ============================================================
+-- Adds actor/type/traceability columns to production_log, and a
+-- tiny table to support "reset displayed count without deleting
+-- history" per (model_condition_id, lot_no).
+-- ============================================================
+USE laser_link_md_x;
+
+ALTER TABLE production_log
+  ADD COLUMN model_condition_id INT NULL DEFAULT NULL AFTER pallet_no,
+  ADD COLUMN user_id       INT NULL DEFAULT NULL,
+  ADD COLUMN employee_id   VARCHAR(32) NULL DEFAULT NULL,
+  ADD COLUMN user_name     VARCHAR(100) NULL DEFAULT NULL,
+  ADD COLUMN user_role     VARCHAR(32) NULL DEFAULT NULL,
+  ADD COLUMN type          ENUM('mass','setting') NOT NULL DEFAULT 'setting',
+  ADD COLUMN conditions    JSON NULL DEFAULT NULL,
+  ADD COLUMN code2d_result ENUM('R','S','T') NULL DEFAULT NULL;
+
+CREATE INDEX idx_production_log_model_lot ON production_log (model_condition_id, lot_no);
+CREATE INDEX idx_production_log_user      ON production_log (user_id);
+
+CREATE TABLE IF NOT EXISTS production_count_reset (
+    model_condition_id INT NOT NULL,
+    lot_no             VARCHAR(255) NOT NULL,
+    reset_at           TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    reset_by_user_id   INT NULL DEFAULT NULL,
+    PRIMARY KEY (model_condition_id, lot_no)
+) ENGINE=InnoDB;
+
+
+-- backend/node/db/migrate_complete_setting.sql
+USE laser_link_md_x;
+
+ALTER TABLE production_count_reset
+  ADD COLUMN base_count   INT NOT NULL DEFAULT 0,
+  ADD COLUMN reset_reason ENUM('manual_reset','setting_complete') NOT NULL DEFAULT 'manual_reset';

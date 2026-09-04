@@ -1,11 +1,4 @@
 // backend/node/server.js
-// ============================================================
-// laser_link_md_x API gateway
-//   - Serves the frontend (static files)
-//   - Handles auth / user approval (MySQL, this file's own domain)
-//   - Proxies equipment/laser calls to the Python service
-//   - Serves the System Log (admin-only audit trail)
-// ============================================================
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
@@ -16,31 +9,29 @@ const usersRoutes = require('./routes/users.routes');
 const equipmentRoutes = require('./routes/equipment.routes');
 const modelRoutes = require('./routes/model.routes');
 const systemLogRoutes = require('./routes/systemLog.routes');
+const productionRoutes = require('./routes/production.routes'); // NEW
 
 const app = express();
 
 app.use(cors());
 app.use(express.json());
 
-// Uploaded profile / signup photos
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
-// ---- API routes ----
 app.use('/api/auth', authRoutes);
 app.use('/api/users', usersRoutes);
 app.use('/api/equipment', equipmentRoutes);
 app.use('/api/models', modelRoutes);
 app.use('/api/system-log', systemLogRoutes);
+app.use('/api/production', productionRoutes); // NEW
 
 app.get('/api/health', (req, res) => res.json({ ok: true }));
 
-// ---- Serve frontend (SPA) ----
 const frontendDir = path.join(__dirname, '..', '..', 'frontend');
 app.use(express.static(frontendDir));
 
 app.get('/', (req, res) => res.sendFile(path.join(frontendDir, 'login.html')));
 
-// Fallback 404 for unknown API routes
 app.use('/api', (req, res) => res.status(404).json({ error: 'Not found.' }));
 
 const PORT = process.env.PORT || 4000;

@@ -121,23 +121,27 @@ async function loadPage(page) {
   if (PAGE_INIT[page]) PAGE_INIT[page]();
 }
 
+async function performSignOut() {
+  try {
+    await apiFetch("/api/auth/signout", { method: "POST" });
+  } catch (err) {
+    // still sign out locally even if the log call fails
+  }
+  localStorage.removeItem("nlm_token");
+  localStorage.removeItem("nlm_user");
+  window.location.href = "login.html";
+}
+
 function initShell() {
   document.querySelectorAll(".nav-link").forEach((btn) => {
     btn.addEventListener("click", () => loadPage(btn.dataset.page));
   });
-  document.getElementById("logout-btn").addEventListener("click", async () => {
-    try {
-      await apiFetch("/api/auth/signout", { method: "POST" });
-    } catch (err) {
-      // still sign out locally even if the log call fails
-    }
-    localStorage.removeItem("nlm_token");
-    localStorage.removeItem("nlm_user");
-    window.location.href = "login.html";
-  });
+  document.getElementById("logout-btn").addEventListener("click", performSignOut);
+  
   startTopbarClock();
   initLightbox(); // NEW
 }
+
 
 function applyUserToChrome(user) {
   CURRENT_USER = user;
@@ -395,6 +399,35 @@ function monApplyStepResult(pallet, step, ok) {
   monSetCheckStatus(pallet, field, value);
 }
 
+
+// Maps your existing check-status tracking to the R/S/T result code.
+// ASSUMPTION: S = both 2D checks skipped for this model, T = read or
+// grade came back Error, R = otherwise (read+grade OK or not tracked).
+// Adjust this mapping if R/S/T means something specific in your process.
+function monDeriveCode2DResult(pallet, job) {
+  if (!job.check_read2dcode && !job.check_grade2dcode) return null;
+  const status = getCheckStatus(pallet) || {};
+  if (status.code2dRead === "Skipped" && status.code2dGrade === "Skipped") return "S";
+  if (status.code2dRead === "Error" || status.code2dGrade === "Error") return "T";
+  return "R";
+}
+
+// Fetches the true, database-backed count for a pallet's current
+// (model, lot_no) and updates both MON.counts and the DOM if mounted.
+async function monRefreshCount(pallet, job) {
+  if (!job) return;
+  try {
+    const res = await apiFetch(`/api/production/count?model_condition_id=${job.id}`);
+    if (!res.ok) return;
+    const data = await res.json();
+    MON.counts[pallet] = data.count;
+    const el = document.getElementById(`mon-count-${pallet}`);
+    if (el) el.textContent = MON.counts[pallet];
+  } catch (err) {
+    // keep last known value on failure
+  }
+}
+
 /* ============================================================
    FOR MONITOR PAGE
    ============================================================
@@ -576,7 +609,7 @@ async function monAutoRunOneCycle(mode) {
     }
     monSetPreviewStepState("mon-preview-loop-list", steps, steps.length);
 
-    if (job) monReportCount(pallet, job);
+    if (job) await monReportCount(pallet, job);
     return;
   }
 
@@ -727,7 +760,7 @@ function monRenderPalletBlock(pallet) {
     return;
   }
   lock.classList.remove("show");
-
+  monRefreshCount(pallet, job); // fire-and-forget, updates DOM once resolved
   const running = MON.running && MON.activePallet === pallet;
   const statusClass = running ? "busy" : "ready";
   const statusLabel = running ? "Running" : "Idle";
@@ -782,9 +815,31 @@ function monRenderPalletBlock(pallet) {
     </div>
   `;
 
-  body.querySelector(`[data-reset="${pallet}"]`).addEventListener("click", () => {
-    MON.counts[pallet] = 0;
-    monRenderPalletBlock(pallet);
+  body.querySelector(`[data-reset="${pallet}"]`).addEventListener("click", async () => {
+    const allowedRoles = ["admin", "engineer", "machine_controller"];
+    if (!CURRENT_USER || !allowedRoles.includes(CURRENT_USER.role)) {
+      showToast("Only Admin, Engineer or Machine Controller can reset the count.");
+      return;
+    }
+    if (!confirm(`Reset the displayed count for ${job.model} (Lot ${job.lot_no})? Past production records are kept for traceability — only the running count goes back to 0.`)) {
+      return;
+    }
+    try {
+      const res = await apiFetch("/api/production/reset", {
+        method: "POST",
+        body: JSON.stringify({ model_condition_id: job.id }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        showToast(data.error || "Could not reset count.");
+        return;
+      }
+      MON.counts[pallet] = data.count;
+      monRenderPalletBlock(pallet);
+      showToast("Count reset.", "success");
+    } catch (err) {
+      showToast("Could not reach the server.");
+    }
   });
 
   body.querySelectorAll(".mon-cond-set-btn").forEach((btn) => {
@@ -852,10 +907,29 @@ function monRenderSeqList(steps, activeIndex, palletTag) {
     .join("");
 }
 
-function monReportCount(pallet, job) {
-  MON.counts[pallet] += 1;
-  MON.lastMarked[pallet] = new Date().toISOString();
-  monRenderPalletBlock(pallet);
+async function monReportCount(pallet, job) {
+  const code2d_result = monDeriveCode2DResult(pallet, job);
+  try {
+    const res = await apiFetch("/api/production/log", {
+      method: "POST",
+      body: JSON.stringify({
+        model_condition_id: job.id,
+        pallet_no: pallet,
+        code2d_result,
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      showToast(data.error || "Could not log production count.");
+      return;
+    }
+    MON.counts[pallet] = data.count;
+    MON.lastMarked[pallet] = data.marked_at || new Date().toISOString();
+  } catch (err) {
+    showToast("Could not reach the server to log production count.");
+  } finally {
+    if (document.getElementById(`mon-body-${pallet}`)) monRenderPalletBlock(pallet);
+  }
 }
 
 async function monRefetchJob(pallet) {
@@ -900,6 +974,105 @@ async function monConfirmSetValue() {
   } finally {
     MON.pendingSet = null;
   }
+}
+
+const MON_COMPLETE_SETTING_ROLES = ["admin", "engineer", "machine_controller"];
+
+function monConditionSummaryHtml(conditions) {
+  const items = conditions || [];
+  if (!items.length) return `<div class="eq-queue-empty">No conditions set.</div>`;
+  return items.map((it) => `
+    <div class="ms-cond-edit-row" style="grid-template-columns: 1fr auto;">
+      <div class="ms-cond-edit-meta">
+        <span class="ms-cond-edit-name">${escapeHtml(it.condition_name)}</span>
+        <span class="ms-cond-edit-blk mono">BLK ${padBlk(it.block_no)}</span>
+      </div>
+      <span class="mono">${escapeHtml(it.condition_value)}</span>
+    </div>`).join("");
+}
+
+async function monOpenCompleteSettingModal() {
+  const pallets = ["Pallet1", "Pallet2"].filter((p) => !!getSelectedJob(p));
+  if (pallets.length === 0) {
+    showToast("Select a model for at least one pallet on Model Setting first.");
+    return;
+  }
+
+  const body = document.getElementById("mon-complete-setting-body");
+  body.innerHTML = `<div class="eq-queue-empty">Loading…</div>`;
+  document.getElementById("mon-complete-setting-backdrop").classList.add("open");
+
+  MON.completeSettingTargets = [];
+  const cards = [];
+
+  for (const pallet of pallets) {
+    const job = getSelectedJob(pallet);
+    try {
+      const res = await apiFetch(`/api/production/setting-summary?model_condition_id=${job.id}`);
+      const data = await res.json();
+      if (!res.ok) {
+        cards.push(`<div class="alert alert-error">${pallet}: ${escapeHtml(data.error || "Could not load summary.")}</div>`);
+        continue;
+      }
+      MON.completeSettingTargets.push({ pallet, modelId: data.model_condition_id });
+      cards.push(`
+        <div class="mon-setting-summary-card">
+          <div class="card-title" style="margin-top:0;">${pallet} — ${escapeHtml(data.model)}</div>
+          <table class="data-table ms-detail-table compact">
+            <tbody>
+              <tr><td>Job No.</td><td class="mono">${padJob(data.job_no)}</td></tr>
+              <tr><td>Lot No.</td><td class="mono">${escapeHtml(data.lot_no)}</td></tr>
+            </tbody>
+          </table>
+          <div class="card-title" style="margin-top:10px;">Value Parameters</div>
+          <div class="ms-cond-edit-list">${monConditionSummaryHtml(data.conditions)}</div>
+          <div class="mon-setting-count-row">
+            <label for="mon-setting-count-${pallet}" style="font-size:12.5px;font-weight:700;">Count Setting</label>
+            <input type="number" min="0" id="mon-setting-count-${pallet}" data-pallet="${pallet}" value="${data.setting_count}" />
+            <span class="field-hint" style="margin:0;">Parts used for setting/testing. Operators will continue counting from this number.</span>
+          </div>
+        </div>`);
+    } catch (err) {
+      cards.push(`<div class="alert alert-error">${pallet}: could not reach the server.</div>`);
+    }
+  }
+
+  body.innerHTML = cards.join("");
+}
+
+async function monConfirmCompleteSetting() {
+  const targets = MON.completeSettingTargets || [];
+  if (targets.length === 0) {
+    document.getElementById("mon-complete-setting-backdrop").classList.remove("open");
+    return;
+  }
+
+  for (const t of targets) {
+    const input = document.getElementById(`mon-setting-count-${t.pallet}`);
+    const value = input ? parseInt(input.value, 10) : NaN;
+    if (Number.isNaN(value) || value < 0) {
+      showToast(`${t.pallet}: enter a valid, non-negative count setting.`);
+      return;
+    }
+    try {
+      const res = await apiFetch("/api/production/complete-setting", {
+        method: "POST",
+        body: JSON.stringify({ model_condition_id: t.modelId, base_count: value }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        showToast(`${t.pallet}: ${data.error || "Could not complete setting."}`);
+        return;
+      }
+    } catch (err) {
+      showToast(`${t.pallet}: could not reach the server.`);
+      return;
+    }
+  }
+
+  document.getElementById("mon-complete-setting-backdrop").classList.remove("open");
+  showToast("Setting complete. Signing out…", "success", 1500);
+  setTimeout(performSignOut, 800);
 }
 
 function monRunSequenceForPallet(pallet, onDone) {
@@ -955,6 +1128,22 @@ PAGE_INIT.monitor = function () {
   MON.pendingSet = null;
   monRenderAll();
   monApplyModeView();
+
+  const completeBtn = document.getElementById("mon-complete-setting-btn");
+  if (completeBtn) {
+    const canComplete = CURRENT_USER && MON_COMPLETE_SETTING_ROLES.includes(CURRENT_USER.role);
+    completeBtn.style.display = canComplete ? "" : "none";
+    completeBtn.addEventListener("click", monOpenCompleteSettingModal);
+  }
+  document.getElementById("mon-complete-setting-finish-btn").addEventListener("click", monConfirmCompleteSetting);
+  document.getElementById("mon-complete-setting-cancel-btn").addEventListener("click", () => {
+    document.getElementById("mon-complete-setting-backdrop").classList.remove("open");
+  });
+  document.getElementById("mon-complete-setting-backdrop").addEventListener("click", (e) => {
+    if (e.target.id === "mon-complete-setting-backdrop") {
+      document.getElementById("mon-complete-setting-backdrop").classList.remove("open");
+    }
+  });
 
   document.getElementById("mon-simulate-btn").addEventListener("click", monHandleStartSignal);
   const gotoBtn = document.getElementById("mon-goto-modelsetting-btn");
@@ -1549,13 +1738,13 @@ async function wmRunStartSequenceForPallet(pallet) {
     return;
   }
 
+  const steps = wmComputeStepsForJob(job);
   WM.manualRunning = true;
   WM.runningPallet = pallet;
   wmSetStartButtonsState("running", pallet);
-  monInitCheckStatusForJob(pallet, job); // reset to pending/skipped for this run
-
-  const steps = wmComputeStepsForJob(job);
   wmRenderStartSeqList(steps, -1, -1);
+
+  if (job) await monReportCount(pallet, job); // log the completed part to production_log
   wmLog(`>>> Start Marking (${pallet}) — ${job.model} / Job ${padJob(job.job_no)}`);
 
   for (let i = 0; i < steps.length; i++) {

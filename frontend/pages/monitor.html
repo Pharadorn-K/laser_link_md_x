@@ -5,7 +5,12 @@
      ============================================================ -->
 <div class="mon-page">
 
-  <div class="mon-mode-banner" id="mon-mode-banner"><!-- filled by JS --></div>
+  <div class="mon-mode-row">
+    <div class="mon-mode-banner" id="mon-mode-banner" style="flex:1;"><!-- filled by JS --></div>
+    <button class="btn btn-primary" id="mon-complete-setting-btn" style="display:none;">
+      <i class="fa-solid fa-clipboard-check"></i> Complete Setting
+    </button>
+  </div>
 
   <div class="mon-grid">
 
@@ -74,6 +79,18 @@
       <div style="display:flex; gap:8px; margin-top:14px;">
         <button type="button" class="btn btn-primary" id="mon-confirm-yes-btn">Yes, set it</button>
         <button type="button" class="btn" id="mon-confirm-no-btn">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= Complete Setting summary modal ================= -->
+  <div class="ms-modal-backdrop" id="mon-complete-setting-backdrop">
+    <div class="ms-modal" style="max-width:640px;">
+      <div class="ms-modal-title">Complete Setting — Summary</div>
+      <div id="mon-complete-setting-body"><!-- filled by JS --></div>
+      <div style="display:flex; gap:8px; margin-top:16px;">
+        <button type="button" class="btn btn-primary" id="mon-complete-setting-finish-btn">Finish &amp; Sign Out</button>
+        <button type="button" class="btn" id="mon-complete-setting-cancel-btn">Cancel</button>
       </div>
     </div>
   </div>
