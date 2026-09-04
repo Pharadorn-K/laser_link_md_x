@@ -59,6 +59,20 @@ async function apiFetch(path, options = {}) {
   return res;
 }
 
+// Fire-and-forget logger for actions that have no other backend call to
+// hang the system-log entry off of (e.g. work-mode change). Failures here
+// must never interrupt the UI.
+async function logClientEvent(action, description, details) {
+  try {
+    await apiFetch("/api/system-log/event", {
+      method: "POST",
+      body: JSON.stringify({ action, description, details }),
+    });
+  } catch (err) {
+    // swallow — logging must not break the UI
+  }
+}
+
 const PAGE_TITLES = {
   monitor: "Monitor",
   model_setting: "Model Setting",
@@ -66,6 +80,7 @@ const PAGE_TITLES = {
   alarm_center: "Alarm Center",
   profile: "Profile",
   all_user: "Users",
+  system_log: "System Log",   // NEW
 };
 
 // Per-page init hooks, filled in by each section below.
@@ -79,6 +94,7 @@ const PAGE_ROLES = {
   model_setting: ["admin", "engineer", "machine_controller"],
   add_new_model: ["admin", "engineer"],
   all_user: ["admin"],
+  system_log: ["admin"],   // NEW
 };
 
 async function loadPage(page) {
@@ -109,7 +125,12 @@ function initShell() {
   document.querySelectorAll(".nav-link").forEach((btn) => {
     btn.addEventListener("click", () => loadPage(btn.dataset.page));
   });
-  document.getElementById("logout-btn").addEventListener("click", () => {
+  document.getElementById("logout-btn").addEventListener("click", async () => {
+    try {
+      await apiFetch("/api/auth/signout", { method: "POST" });
+    } catch (err) {
+      // still sign out locally even if the log call fails
+    }
     localStorage.removeItem("nlm_token");
     localStorage.removeItem("nlm_user");
     window.location.href = "login.html";
@@ -2386,7 +2407,8 @@ PAGE_INIT.model_setting = function () {
     const isAuto = value === "AUTO1-2" || value === "AUTO1" || value === "AUTO2";
 
     wmApplyMode(value); // renders pallet-status row / block visibility either way
-
+    logClientEvent("workmode.mode_change", `Mode set to ${value}`, { mode: value });
+    
     if (!isAuto) {
       showToast(`Mode set to ${value}.`, "success");
       return;
@@ -3121,5 +3143,180 @@ PAGE_INIT.profile = function () {
     alertBox.innerHTML = `<div class="alert alert-success">Profile updated.</div>`;
     document.getElementById("pf-name").textContent = data.name;
     document.getElementById("pf-password-input").value = "";
+  });
+};
+
+
+/* ============================================================
+   FOR SYSTEM LOG PAGE (admin only)
+   ============================================================ */
+const SYSLOG = {
+  page: 1,
+  pageSize: 50,
+  total: 0,
+  filters: { action: "", status: "", q: "" },
+};
+
+function syslogStatusBadge(status) {
+  const cls = status === "failed" ? "rejected" : "approved";
+  return `<span class="tag ${cls}">${escapeHtml(status)}</span>`;
+}
+
+function syslogFormatDate(iso) {
+  if (!iso) return "—";
+  return new Date(iso).toLocaleString([], {
+    year: "numeric", month: "short", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", second: "2-digit",
+  });
+}
+
+async function syslogLoadActions() {
+  try {
+    const res = await apiFetch("/api/system-log/actions");
+    const actions = await res.json();
+    const select = document.getElementById("syslog-action-filter");
+    if (!select) return;
+    select.innerHTML =
+      `<option value="">All actions</option>` +
+      actions.map((a) => `<option value="${escapeHtml(a)}">${escapeHtml(a)}</option>`).join("");
+  } catch (err) {}
+}
+
+let SYSLOG_LAST_ROWS = [];
+
+async function syslogFetchAndRender() {
+  const tbody = document.getElementById("syslog-table-body");
+  if (!tbody) return;
+  tbody.innerHTML = `<tr><td colspan="6" class="eq-queue-empty">Loading…</td></tr>`;
+
+  const params = new URLSearchParams();
+  if (SYSLOG.filters.action) params.set("action", SYSLOG.filters.action);
+  if (SYSLOG.filters.status) params.set("status", SYSLOG.filters.status);
+  if (SYSLOG.filters.q) params.set("q", SYSLOG.filters.q);
+  params.set("page", SYSLOG.page);
+  params.set("pageSize", SYSLOG.pageSize);
+
+  try {
+    const res = await apiFetch(`/api/system-log?${params.toString()}`);
+    if (!res.ok) throw new Error("failed");
+    const data = await res.json();
+    SYSLOG.total = data.total;
+    SYSLOG_LAST_ROWS = data.rows;
+
+    if (!data.rows.length) {
+      tbody.innerHTML = `<tr><td colspan="6" class="eq-queue-empty">No log entries found.</td></tr>`;
+    } else {
+      tbody.innerHTML = data.rows
+        .map(
+          (r) => `
+        <tr class="syslog-row" data-id="${r.id}">
+          <td class="mono">${syslogFormatDate(r.created_at)}</td>
+          <td>${escapeHtml(r.user_name || "—")}${
+            r.employee_id
+              ? ` <span class="mono" style="color:var(--ink-faint)">(${escapeHtml(r.employee_id)})</span>`
+              : ""
+          }</td>
+          <td>${r.user_role ? `<span class="tag ${escapeHtml(r.user_role)}">${escapeHtml(r.user_role)}</span>` : "—"}</td>
+          <td class="mono">${escapeHtml(r.action)}</td>
+          <td>${escapeHtml(r.description || "—")}</td>
+          <td>${syslogStatusBadge(r.status)}</td>
+        </tr>`
+        )
+        .join("");
+    }
+
+    document.getElementById("syslog-page-info").textContent =
+      `Page ${data.page} · ${data.rows.length} of ${data.total} entries`;
+    document.getElementById("syslog-prev-btn").disabled = data.page <= 1;
+    document.getElementById("syslog-next-btn").disabled = data.page * data.pageSize >= data.total;
+
+    tbody.querySelectorAll(".syslog-row").forEach((tr) => {
+      tr.addEventListener("click", () => {
+        const row = SYSLOG_LAST_ROWS.find((r) => String(r.id) === tr.dataset.id);
+        syslogShowDetail(row);
+      });
+    });
+  } catch (err) {
+    tbody.innerHTML = `<tr><td colspan="6" class="eq-queue-empty">Could not load log entries.</td></tr>`;
+  }
+}
+
+function syslogShowDetail(row) {
+  if (!row) return;
+  const backdrop = document.getElementById("syslog-detail-backdrop");
+  const body = document.getElementById("syslog-detail-body");
+  body.innerHTML = `
+    <table class="data-table ms-detail-table compact">
+      <tbody>
+        <tr><td>When</td><td class="mono">${syslogFormatDate(row.created_at)}</td></tr>
+        <tr><td>User</td><td>${escapeHtml(row.user_name || "—")} ${row.employee_id ? `(${escapeHtml(row.employee_id)})` : ""}</td></tr>
+        <tr><td>Role</td><td>${escapeHtml(row.user_role || "—")}</td></tr>
+        <tr><td>Action</td><td class="mono">${escapeHtml(row.action)}</td></tr>
+        <tr><td>Target</td><td class="mono">${escapeHtml(row.target_type || "—")} ${row.target_id ? `#${escapeHtml(row.target_id)}` : ""}</td></tr>
+        <tr><td>Description</td><td>${escapeHtml(row.description || "—")}</td></tr>
+        <tr><td>Status</td><td>${syslogStatusBadge(row.status)}</td></tr>
+        <tr><td>IP</td><td class="mono">${escapeHtml(row.ip_address || "—")}</td></tr>
+      </tbody>
+    </table>
+    <div class="card-title" style="margin-top:12px;">Details</div>
+    <pre class="mono-box" style="white-space:pre-wrap; max-height:240px; overflow-y:auto;">${escapeHtml(
+      row.details ? JSON.stringify(row.details, null, 2) : "—"
+    )}</pre>
+  `;
+  backdrop.classList.add("open");
+}
+
+PAGE_INIT.system_log = function () {
+  SYSLOG.page = 1;
+  SYSLOG.filters = { action: "", status: "", q: "" };
+  document.getElementById("syslog-action-filter").value = "";
+  document.getElementById("syslog-status-filter").value = "";
+  document.getElementById("syslog-search-input").value = "";
+
+  syslogLoadActions();
+  syslogFetchAndRender();
+
+  document.getElementById("syslog-action-filter").addEventListener("change", (e) => {
+    SYSLOG.filters.action = e.target.value;
+    SYSLOG.page = 1;
+    syslogFetchAndRender();
+  });
+  document.getElementById("syslog-status-filter").addEventListener("change", (e) => {
+    SYSLOG.filters.status = e.target.value;
+    SYSLOG.page = 1;
+    syslogFetchAndRender();
+  });
+  document.getElementById("syslog-search-input").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      SYSLOG.filters.q = e.target.value.trim();
+      SYSLOG.page = 1;
+      syslogFetchAndRender();
+    }
+  });
+  document.getElementById("syslog-search-btn").addEventListener("click", () => {
+    SYSLOG.filters.q = document.getElementById("syslog-search-input").value.trim();
+    SYSLOG.page = 1;
+    syslogFetchAndRender();
+  });
+  document.getElementById("syslog-refresh-btn").addEventListener("click", syslogFetchAndRender);
+  document.getElementById("syslog-prev-btn").addEventListener("click", () => {
+    if (SYSLOG.page > 1) {
+      SYSLOG.page -= 1;
+      syslogFetchAndRender();
+    }
+  });
+  document.getElementById("syslog-next-btn").addEventListener("click", () => {
+    if (SYSLOG.page * SYSLOG.pageSize < SYSLOG.total) {
+      SYSLOG.page += 1;
+      syslogFetchAndRender();
+    }
+  });
+  document.getElementById("syslog-detail-close-btn").addEventListener("click", () => {
+    document.getElementById("syslog-detail-backdrop").classList.remove("open");
+  });
+  document.getElementById("syslog-detail-backdrop").addEventListener("click", (e) => {
+    if (e.target.id === "syslog-detail-backdrop") {
+      document.getElementById("syslog-detail-backdrop").classList.remove("open");
+    }
   });
 };

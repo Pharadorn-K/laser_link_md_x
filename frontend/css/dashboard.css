@@ -1054,3 +1054,21 @@ table.data-table tr:last-child td { border-bottom: none; }
 
 .ac-detail-footer { display: flex; align-items: center; gap: 12px; margin-top: 6px; }
 .ac-attempts-note { font-size: 12px; color: var(--ink-faint); }
+
+/* ---------------------------------------------------------
+   FOR SYSTEM LOG PAGE  (pages/system_log.html)
+   --------------------------------------------------------- */
+.syslog-toolbar {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+.syslog-row { cursor: pointer; }
+.syslog-row:hover { background: var(--line-soft); }
+.syslog-pager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 12px;
+}

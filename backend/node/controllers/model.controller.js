@@ -9,10 +9,14 @@
 //   at creation, updated later by operators like any condition).
 //   photo_path is an optional reference part photo — only the path
 //   is stored here; the file itself lives under uploads/models/.
+//
+//   Every create/update/delete/condition-set/lot-no/camera-toggle
+//   action is recorded to system_log for admin traceability.
 // ============================================================
 const pool = require('../config/db');
 const fs = require('fs');
 const path = require('path');
+const systemLog = require('../services/systemLog.service');
 
 const MAX_CONDITIONS = 20;
 
@@ -47,16 +51,9 @@ function validateBody(body) {
     return "pallet_no must be 'Pallet1' or 'Pallet2'.";
   }
 
-  // Lot No. is mandatory on every model — it gets replaced every 150
-  // parts (or fewer), so operators update its value later from the
-  // pallet card, but a starting value + BLK slot is required up front.
   if (!body.lot_no || !String(body.lot_no).trim()) {
     return 'Lot No. is required.';
   }
-  // const lotBlock = Number(body.lot_no_block);
-  // if (!Number.isInteger(lotBlock) || lotBlock < 0 || lotBlock > 255) {
-  //   return 'Lot No. BLK number must be an integer between 0 and 255.';
-  // }
 
   const conditions = Array.isArray(body.conditions) ? body.conditions : [];
   if (conditions.length > MAX_CONDITIONS) {
@@ -89,7 +86,6 @@ function buildFieldsFromBody(body, photoPath) {
     check_camera: toBool(body.check_camera),
     check_lot_no: true, // always on — Lot No. is mandatory now
     lot_no: String(body.lot_no).trim(),
-    // lot_no_block: Number(body.lot_no_block),
   };
   if (photoPath !== undefined) {
     fields.photo_path = photoPath;
@@ -98,11 +94,9 @@ function buildFieldsFromBody(body, photoPath) {
 }
 
 function diskPathFromPublicPath(publicPath) {
-  // publicPath looks like "/uploads/models/xyz.png"
   return path.join(__dirname, '..', publicPath.replace(/^\/uploads\//, 'uploads/'));
 }
 
-// Inserts non-blank condition rows for a model_condition_id, in order.
 async function insertConditionItems(conn, modelConditionId, conditions) {
   const list = Array.isArray(conditions) ? conditions : [];
   let order = 0;
@@ -191,6 +185,22 @@ async function createModel(req, res) {
 
     await conn.commit();
     const full = await getFullModel(result.insertId);
+
+    await systemLog.logAction({
+      req,
+      action: 'model.create',
+      targetType: 'model_condition',
+      targetId: result.insertId,
+      description: `Created model "${fields.model}" (Job ${fields.job_no}, ${fields.pallet_no})`,
+      details: {
+        model: fields.model,
+        job_no: fields.job_no,
+        pallet_no: fields.pallet_no,
+        lot_no: fields.lot_no,
+        conditions_count: (body.conditions || []).length,
+      },
+    });
+
     return res.status(201).json(full);
   } catch (e) {
     await conn.rollback();
@@ -213,6 +223,8 @@ async function updateModel(req, res) {
     if (req.file) fs.unlink(req.file.path, () => {});
     return res.status(400).json({ error: err });
   }
+
+  const before = await getFullModel(req.params.id);
 
   const conn = await pool.getConnection();
   try {
@@ -247,12 +259,32 @@ async function updateModel(req, res) {
 
     await conn.commit();
 
-    // Only remove the replaced photo file once the DB commit succeeded.
     if (oldPhotoPath) {
       fs.unlink(diskPathFromPublicPath(oldPhotoPath), () => {});
     }
 
     const full = await getFullModel(req.params.id);
+
+    await systemLog.logAction({
+      req,
+      action: 'model.update',
+      targetType: 'model_condition',
+      targetId: req.params.id,
+      description: `Updated model "${fields.model}" (Job ${fields.job_no}, ${fields.pallet_no})`,
+      details: {
+        before: before ? {
+          model: before.model, job_no: before.job_no, pallet_no: before.pallet_no,
+          lot_no: before.lot_no, check_camera: !!before.check_camera,
+          conditions_count: (before.conditions || []).length,
+        } : null,
+        after: {
+          model: fields.model, job_no: fields.job_no, pallet_no: fields.pallet_no,
+          lot_no: fields.lot_no, check_camera: fields.check_camera,
+          conditions_count: (body.conditions || []).length,
+        },
+      },
+    });
+
     return res.json(full);
   } catch (e) {
     await conn.rollback();
@@ -269,12 +301,26 @@ async function updateModel(req, res) {
 
 // ---------------- Delete ----------------
 async function deleteModel(req, res) {
-  const [rows] = await pool.query('SELECT photo_path FROM model_condition WHERE id = ?', [req.params.id]);
+  const [rows] = await pool.query(
+    'SELECT model, job_no, pallet_no, photo_path FROM model_condition WHERE id = ?',
+    [req.params.id]
+  );
+  if (rows.length === 0) return res.status(404).json({ error: 'Model condition not found.' });
+
   const [result] = await pool.query('DELETE FROM model_condition WHERE id = ?', [req.params.id]);
   if (result.affectedRows === 0) return res.status(404).json({ error: 'Model condition not found.' });
-  if (rows[0] && rows[0].photo_path) {
+  if (rows[0].photo_path) {
     fs.unlink(diskPathFromPublicPath(rows[0].photo_path), () => {});
   }
+
+  await systemLog.logAction({
+    req,
+    action: 'model.delete',
+    targetType: 'model_condition',
+    targetId: req.params.id,
+    description: `Deleted model "${rows[0].model}" (Job ${rows[0].job_no}, ${rows[0].pallet_no})`,
+  });
+
   return res.json({ deleted: Number(req.params.id) });
 }
 
@@ -292,12 +338,37 @@ async function updateConditionValue(req, res) {
   if (!condition_value || !String(condition_value).trim()) {
     return res.status(400).json({ error: 'condition_value is required.' });
   }
-  const [result] = await pool.query(
-    'UPDATE model_condition_item SET condition_value = ? WHERE id = ? AND model_condition_id = ?',
-    [String(condition_value).trim(), itemId, id]
+
+  const [itemRows] = await pool.query(
+    'SELECT * FROM model_condition_item WHERE id = ? AND model_condition_id = ?',
+    [itemId, id]
   );
-  if (result.affectedRows === 0) return res.status(404).json({ error: 'Condition not found.' });
+  if (itemRows.length === 0) return res.status(404).json({ error: 'Condition not found.' });
+  const oldItem = itemRows[0];
+  const newValue = String(condition_value).trim();
+
+  await pool.query(
+    'UPDATE model_condition_item SET condition_value = ? WHERE id = ? AND model_condition_id = ?',
+    [newValue, itemId, id]
+  );
+
   const full = await getFullModel(id);
+
+  await systemLog.logAction({
+    req,
+    action: 'model.condition_update',
+    targetType: 'model_condition',
+    targetId: id,
+    description: `Set "${oldItem.condition_name}" (BLK ${oldItem.block_no}) from "${oldItem.condition_value}" to "${newValue}" on "${full ? full.model : ''}"`,
+    details: {
+      item_id: itemId,
+      condition_name: oldItem.condition_name,
+      block_no: oldItem.block_no,
+      from: oldItem.condition_value,
+      to: newValue,
+    },
+  });
+
   return res.json(full);
 }
 
@@ -307,12 +378,24 @@ async function updateLotNo(req, res) {
   if (!lot_no || !String(lot_no).trim()) {
     return res.status(400).json({ error: 'lot_no is required.' });
   }
-  const [result] = await pool.query(
-    'UPDATE model_condition SET lot_no = ? WHERE id = ?',
-    [String(lot_no).trim(), id]
-  );
-  if (result.affectedRows === 0) return res.status(404).json({ error: 'Model condition not found.' });
+
+  const [oldRows] = await pool.query('SELECT lot_no, model FROM model_condition WHERE id = ?', [id]);
+  if (oldRows.length === 0) return res.status(404).json({ error: 'Model condition not found.' });
+  const before = oldRows[0];
+  const newValue = String(lot_no).trim();
+
+  await pool.query('UPDATE model_condition SET lot_no = ? WHERE id = ?', [newValue, id]);
   const full = await getFullModel(id);
+
+  await systemLog.logAction({
+    req,
+    action: 'model.lotno_update',
+    targetType: 'model_condition',
+    targetId: id,
+    description: `Changed Lot No. on "${before.model}" from "${before.lot_no}" to "${newValue}"`,
+    details: { from: before.lot_no, to: newValue },
+  });
+
   return res.json(full);
 }
 
@@ -323,12 +406,23 @@ async function updateCameraCheck(req, res) {
     return res.status(400).json({ error: 'check_camera is required.' });
   }
   const value = toBool(check_camera);
-  const [result] = await pool.query(
-    'UPDATE model_condition SET check_camera = ? WHERE id = ?',
-    [value, id]
-  );
-  if (result.affectedRows === 0) return res.status(404).json({ error: 'Model condition not found.' });
+
+  const [oldRows] = await pool.query('SELECT check_camera, model FROM model_condition WHERE id = ?', [id]);
+  if (oldRows.length === 0) return res.status(404).json({ error: 'Model condition not found.' });
+  const before = oldRows[0];
+
+  await pool.query('UPDATE model_condition SET check_camera = ? WHERE id = ?', [value, id]);
   const full = await getFullModel(id);
+
+  await systemLog.logAction({
+    req,
+    action: 'model.camera_toggle',
+    targetType: 'model_condition',
+    targetId: id,
+    description: `${value ? 'Enabled' : 'Disabled'} Camera Check on "${before.model}"`,
+    details: { from: !!before.check_camera, to: value },
+  });
+
   return res.json(full);
 }
 
@@ -340,7 +434,7 @@ module.exports = {
   deleteModel,
   updateConditionValue,
   updateLotNo,
-  updateCameraCheck, // NEW
+  updateCameraCheck,
   listConditionNames,
   MAX_CONDITIONS,
 };

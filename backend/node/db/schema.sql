@@ -135,3 +135,26 @@ UPDATE users SET role = 'operator' WHERE role = 'user';
 
 ALTER TABLE users
   MODIFY COLUMN role ENUM('admin', 'operator', 'machine_controller', 'engineer') NOT NULL DEFAULT 'operator';
+
+
+USE laser_link_md_x;
+
+CREATE TABLE IF NOT EXISTS system_log (
+    id            INT AUTO_INCREMENT PRIMARY KEY,
+    user_id       INT NULL DEFAULT NULL,
+    employee_id   VARCHAR(32)  NULL DEFAULT NULL,
+    user_name     VARCHAR(100) NULL DEFAULT NULL,
+    user_role     VARCHAR(32)  NULL DEFAULT NULL,
+    action        VARCHAR(64)  NOT NULL,
+    target_type   VARCHAR(64)  NULL DEFAULT NULL,
+    target_id     VARCHAR(64)  NULL DEFAULT NULL,
+    description   VARCHAR(500) NULL DEFAULT NULL,
+    details       JSON NULL DEFAULT NULL,
+    status        ENUM('success', 'failed') NOT NULL DEFAULT 'success',
+    ip_address    VARCHAR(64) NULL DEFAULT NULL,
+    created_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB;
+
+CREATE INDEX idx_system_log_created_at ON system_log (created_at);
+CREATE INDEX idx_system_log_action     ON system_log (action);
+CREATE INDEX idx_system_log_user       ON system_log (user_id);

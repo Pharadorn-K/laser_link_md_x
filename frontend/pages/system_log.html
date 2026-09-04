@@ -1,0 +1,59 @@
+<!-- frontend/pages/system_log.html -->
+<!-- ============================================================
+     system_log.html — admin only. loaded into #content by dashboard.js
+     Logic lives in dashboard.js, section "FOR SYSTEM LOG PAGE"
+     ============================================================ -->
+<div class="syslog-toolbar">
+  <div class="field" style="margin-bottom:0; min-width:200px;">
+    <label for="syslog-action-filter">Action</label>
+    <select id="syslog-action-filter"><option value="">All actions</option></select>
+  </div>
+  <div class="field" style="margin-bottom:0; min-width:160px;">
+    <label for="syslog-status-filter">Status</label>
+    <select id="syslog-status-filter">
+      <option value="">All</option>
+      <option value="success">Success</option>
+      <option value="failed">Failed</option>
+    </select>
+  </div>
+  <div class="field" style="margin-bottom:0; flex:1; min-width:220px;">
+    <label for="syslog-search-input">Search</label>
+    <input type="text" id="syslog-search-input" placeholder="User, employee ID, description…" />
+  </div>
+  <button class="btn btn-primary" id="syslog-search-btn" style="align-self:flex-end;">Search</button>
+  <button class="btn" id="syslog-refresh-btn" style="align-self:flex-end;"><i class="fa-solid fa-rotate"></i> Refresh</button>
+</div>
+
+<div class="card">
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th>When</th>
+        <th>User</th>
+        <th>Role</th>
+        <th>Action</th>
+        <th>Description</th>
+        <th>Status</th>
+      </tr>
+    </thead>
+    <tbody id="syslog-table-body">
+      <tr><td colspan="6" class="eq-queue-empty">Loading…</td></tr>
+    </tbody>
+  </table>
+  <div class="syslog-pager">
+    <button class="btn btn-sm" id="syslog-prev-btn">&larr; Prev</button>
+    <span id="syslog-page-info" style="font-size:12px;color:var(--ink-soft);"></span>
+    <button class="btn btn-sm" id="syslog-next-btn">Next &rarr;</button>
+  </div>
+</div>
+
+<!-- ================= Detail modal ================= -->
+<div class="ms-modal-backdrop" id="syslog-detail-backdrop">
+  <div class="ms-modal">
+    <div class="ms-modal-title">Log entry</div>
+    <div id="syslog-detail-body"></div>
+    <div style="display:flex; gap:8px; margin-top:14px;">
+      <button type="button" class="btn" id="syslog-detail-close-btn">Close</button>
+    </div>
+  </div>
+</div>

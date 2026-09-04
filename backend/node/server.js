@@ -4,6 +4,7 @@
 //   - Serves the frontend (static files)
 //   - Handles auth / user approval (MySQL, this file's own domain)
 //   - Proxies equipment/laser calls to the Python service
+//   - Serves the System Log (admin-only audit trail)
 // ============================================================
 const express = require('express');
 const cors = require('cors');
@@ -14,6 +15,7 @@ const authRoutes = require('./routes/auth.routes');
 const usersRoutes = require('./routes/users.routes');
 const equipmentRoutes = require('./routes/equipment.routes');
 const modelRoutes = require('./routes/model.routes');
+const systemLogRoutes = require('./routes/systemLog.routes');
 
 const app = express();
 
@@ -28,6 +30,7 @@ app.use('/api/auth', authRoutes);
 app.use('/api/users', usersRoutes);
 app.use('/api/equipment', equipmentRoutes);
 app.use('/api/models', modelRoutes);
+app.use('/api/system-log', systemLogRoutes);
 
 app.get('/api/health', (req, res) => res.json({ ok: true }));
 
