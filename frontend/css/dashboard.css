@@ -242,6 +242,17 @@ table.data-table tr:last-child td { border-bottom: none; }
   border-radius: var(--radius);
   padding: 14px 18px;
 }
+
+/* ---- LEFT column: Check Results (row 1) + Timing (row 2), stacked ---- */
+.mon-count-left-col {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 16px;
+}
+
 .mon-count-col {
   display: flex;
   flex-direction: column;
@@ -249,23 +260,14 @@ table.data-table tr:last-child td { border-bottom: none; }
   min-width: 0;
 }
 .mon-checks-col {
-  flex: 0 1 240px;
-  max-width: 240px;
-  align-items: flex-start;
-  gap: 6px;
-}
-
-.mon-checks-col {
-  flex: 0 1 240px;
-  max-width: 240px;
   align-items: flex-start;
   gap: 6px;
 }
 .mon-timing-col {
-  flex: 0 1 220px;
-  max-width: 220px;
   align-items: flex-start;
   gap: 6px;
+  padding-top: 14px;
+  border-top: 1px dashed var(--line-soft);
 }
 .mon-timing-list {
   display: flex;
@@ -292,6 +294,7 @@ table.data-table tr:last-child td { border-bottom: none; }
   color: var(--ink);
 }
 
+/* ---- RIGHT column: Count Part ---- */
 .mon-count-side-col {
   flex: 0 0 auto;
   min-width: 390px;
@@ -304,6 +307,17 @@ table.data-table tr:last-child td { border-bottom: none; }
 .mon-count-num-col {
   align-items: center;
   text-align: center;
+}
+
+@media (max-width: 1100px) {
+  .mon-count-block { flex-direction: column; }
+  .mon-count-side-col {
+    min-width: 0;
+    border-left: none;
+    padding-left: 0;
+    border-top: 1px solid var(--line-soft);
+    padding-top: 14px;
+  }
 }
 
 .mon-chk-list {

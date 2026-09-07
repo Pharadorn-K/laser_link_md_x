@@ -824,24 +824,26 @@ function monRenderPalletBlock(pallet) {
     </div>
 
     <div class="mon-count-block">
-      <div class="mon-count-col mon-checks-col">
-        <div class="mon-count-label">Check Results</div>
-        <div class="mon-chk-list">
-          ${chkRow("Camera Check", "camera", "camera")}
-          ${chkRow("2D Code Read", "code2dRead", "code2dread")}
-          ${chkRow("2D Code Grade", "code2dGrade", "code2dgrade")}
-        </div>
-      </div>
-      <div class="mon-count-col mon-timing-col">
-        <div class="mon-count-label">Timing</div>
-        <div class="mon-timing-list">
-          <div class="mon-timing-item">
-            <span class="mon-timing-label">Start setting at</span>
-            <span class="mon-timing-value mono" id="mon-timing-setting-${pallet}">${monFormatTimingDate((MON.timings[pallet] || {}).setting_started_at)}</span>
+      <div class="mon-count-left-col">
+        <div class="mon-count-col mon-checks-col">
+          <div class="mon-count-label">Check Results</div>
+          <div class="mon-chk-list">
+            ${chkRow("Camera Check", "camera", "camera")}
+            ${chkRow("2D Code Read", "code2dRead", "code2dread")}
+            ${chkRow("2D Code Grade", "code2dGrade", "code2dgrade")}
           </div>
-          <div class="mon-timing-item">
-            <span class="mon-timing-label">Start production at</span>
-            <span class="mon-timing-value mono" id="mon-timing-mass-${pallet}">${monFormatTimingDate((MON.timings[pallet] || {}).mass_started_at)}</span>
+        </div>
+        <div class="mon-count-col mon-timing-col">
+          <div class="mon-count-label">Timing</div>
+          <div class="mon-timing-list">
+            <div class="mon-timing-item">
+              <span class="mon-timing-label">Start setting at</span>
+              <span class="mon-timing-value mono" id="mon-timing-setting-${pallet}">${monFormatTimingDate((MON.timings[pallet] || {}).setting_started_at)}</span>
+            </div>
+            <div class="mon-timing-item">
+              <span class="mon-timing-label">Start production at</span>
+              <span class="mon-timing-value mono" id="mon-timing-mass-${pallet}">${monFormatTimingDate((MON.timings[pallet] || {}).mass_started_at)}</span>
+            </div>
           </div>
         </div>
       </div>
