@@ -75,12 +75,13 @@ async function logClientEvent(action, description, details) {
 
 const PAGE_TITLES = {
   monitor: "Monitor",
+  production_log: "Production Log",   // NEW
   model_setting: "Model Setting",
   add_new_model: "Add New Model",
   alarm_center: "Alarm Center",
   profile: "Profile",
   all_user: "Users",
-  system_log: "System Log",   // NEW
+  system_log: "System Log",
 };
 
 // Per-page init hooks, filled in by each section below.
@@ -91,10 +92,11 @@ const PAGE_TEARDOWN = {};
 let activePage = null;
 
 const PAGE_ROLES = {
+  production_log: ["admin", "engineer"],   // NEW
   model_setting: ["admin", "engineer", "machine_controller"],
   add_new_model: ["admin", "engineer"],
   all_user: ["admin"],
-  system_log: ["admin"],   // NEW
+  system_log: ["admin"],
 };
 
 async function loadPage(page) {
@@ -3509,3 +3511,141 @@ PAGE_INIT.system_log = function () {
     }
   });
 };
+
+/* ============================================================
+   FOR PRODUCTION LOG PAGE (admin / engineer only)
+   ============================================================
+   Reads GET /api/production-log/summary?month=YYYY-MM, which
+   groups production_log rows by (model, job_no, lot_no,
+   conditions) for the given month and returns setting/mass
+   split counts + start/end timestamps per group.
+   ============================================================ */
+const PL = {
+  month: null, // "YYYY-MM"
+  rows: [],
+};
+
+function plCurrentMonthStr() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+
+function plFormatDate(iso) {
+  if (!iso) return "—";
+  return new Date(iso).toLocaleString([], {
+    year: "numeric", month: "short", day: "2-digit",
+    hour: "2-digit", minute: "2-digit",
+  });
+}
+
+async function plFetchAndRender() {
+  const tbody = document.getElementById("pl-table-body");
+  if (!tbody) return;
+  tbody.innerHTML = `<tr><td colspan="11" class="eq-queue-empty">Loading…</td></tr>`;
+
+  try {
+    const res = await apiFetch(`/api/production-log/summary?month=${PL.month}`);
+    if (!res.ok) throw new Error("failed");
+    const data = await res.json();
+    PL.rows = data.rows || [];
+
+    const note = document.getElementById("pl-summary-note");
+    if (note) {
+      note.textContent = `${data.month} · ${PL.rows.length} group${PL.rows.length === 1 ? "" : "s"}`;
+    }
+
+    if (PL.rows.length === 0) {
+      tbody.innerHTML = `<tr><td colspan="11" class="eq-queue-empty">No production history for this month.</td></tr>`;
+      return;
+    }
+
+    tbody.innerHTML = PL.rows
+      .map((r) => `
+        <tr>
+          <td>${escapeHtml(r.model)}</td>
+          <td class="mono">${padJob(r.job_no)}</td>
+          <td class="mono">${escapeHtml(r.lot_no || "—")}</td>
+          <td>${escapeHtml(r.condition_summary)}</td>
+          <td>${escapeHtml(r.setting_users)}</td>
+          <td>${escapeHtml(r.mass_users)}</td>
+          <td class="mono">${r.count_setting}</td>
+          <td class="mono">${r.count_mass}</td>
+          <td class="mono"><strong>${r.total_count}</strong></td>
+          <td class="mono">${plFormatDate(r.start_at)}</td>
+          <td class="mono">${plFormatDate(r.end_at)}</td>
+        </tr>`)
+      .join("");
+  } catch (err) {
+    tbody.innerHTML = `<tr><td colspan="11" class="eq-queue-empty">Could not load production log.</td></tr>`;
+  }
+}
+
+PAGE_INIT.production_log = function () {
+  PL.month = plCurrentMonthStr();
+  document.getElementById("pl-month-input").value = PL.month;
+
+  plFetchAndRender();
+
+  document.getElementById("pl-search-btn").addEventListener("click", () => {
+    const value = document.getElementById("pl-month-input").value;
+    PL.month = value || plCurrentMonthStr();
+    plFetchAndRender();
+  });
+  document.getElementById("pl-refresh-btn").addEventListener("click", plFetchAndRender);
+  document.getElementById("pl-export-btn").addEventListener("click", plDownloadCsv); // NEW
+};
+
+// Escapes a value for a CSV cell: wraps in quotes and doubles any
+// internal quotes if the value contains a comma, quote, or newline.
+function plCsvCell(value) {
+  const str = value === null || value === undefined ? "" : String(value);
+  if (/[",\n]/.test(str)) {
+    return `"${str.replace(/"/g, '""')}"`;
+  }
+  return str;
+}
+
+function plDownloadCsv() {
+  if (!PL.rows || PL.rows.length === 0) {
+    showToast("Nothing to export for this month.");
+    return;
+  }
+
+  const headers = [
+    "Part Name", "Job No.", "Lot No.", "Condition",
+    "Setting By", "Mass Production By",
+    "Count Setting", "Count Mass", "Total Count",
+    "Start", "End",
+  ];
+
+  const lines = [headers.map(plCsvCell).join(",")];
+
+  PL.rows.forEach((r) => {
+    lines.push([
+      plCsvCell(r.model),
+      plCsvCell(padJob(r.job_no)),
+      plCsvCell(r.lot_no || ""),
+      plCsvCell(r.condition_summary),
+      plCsvCell(r.setting_users),
+      plCsvCell(r.mass_users),
+      plCsvCell(r.count_setting),
+      plCsvCell(r.count_mass),
+      plCsvCell(r.total_count),
+      plCsvCell(plFormatDate(r.start_at)),
+      plCsvCell(plFormatDate(r.end_at)),
+    ].join(","));
+  });
+
+  // Leading BOM so Excel opens UTF-8 (Thai model/condition names) correctly.
+  const csvContent = "\uFEFF" + lines.join("\r\n");
+  const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `production_log_${PL.month}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}

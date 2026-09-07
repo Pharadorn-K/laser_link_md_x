@@ -9,7 +9,8 @@ const usersRoutes = require('./routes/users.routes');
 const equipmentRoutes = require('./routes/equipment.routes');
 const modelRoutes = require('./routes/model.routes');
 const systemLogRoutes = require('./routes/systemLog.routes');
-const productionRoutes = require('./routes/production.routes'); // NEW
+const productionRoutes = require('./routes/production.routes');
+const productionLogRoutes = require('./routes/productionLog.routes'); // NEW
 
 const app = express();
 
@@ -23,7 +24,8 @@ app.use('/api/users', usersRoutes);
 app.use('/api/equipment', equipmentRoutes);
 app.use('/api/models', modelRoutes);
 app.use('/api/system-log', systemLogRoutes);
-app.use('/api/production', productionRoutes); // NEW
+app.use('/api/production', productionRoutes);
+app.use('/api/production-log', productionLogRoutes); // NEW
 
 app.get('/api/health', (req, res) => res.json({ ok: true }));
 

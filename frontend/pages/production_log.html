@@ -1,0 +1,41 @@
+<!-- frontend/pages/production_log.html -->
+<!-- ============================================================
+     production_log.html — Admin & Engineer only. loaded into
+     #content by dashboard.js
+     Logic lives in dashboard.js, section "FOR PRODUCTION LOG PAGE"
+     ============================================================ -->
+<div class="pl-toolbar">
+  <div class="field" style="margin-bottom:0; min-width:180px;">
+    <label for="pl-month-input">Month</label>
+    <input type="month" id="pl-month-input" />
+  </div>
+  <button class="btn btn-primary" id="pl-search-btn" style="align-self:flex-end;">Search</button>
+  <button class="btn" id="pl-refresh-btn" style="align-self:flex-end;"><i class="fa-solid fa-rotate"></i> Refresh</button>
+  <button class="btn" id="pl-export-btn" style="align-self:flex-end;"><i class="fa-solid fa-file-csv"></i> Export as CSV</button>
+  <span class="pl-summary-note" id="pl-summary-note" style="align-self:center; margin-left:auto;"></span>
+</div>
+
+<div class="card">
+  <div class="pl-table-wrap">
+    <table class="data-table pl-table">
+      <thead>
+        <tr>
+          <th>Part Name</th>
+          <th>Job No.</th>
+          <th>Lot No.</th>
+          <th>Condition</th>
+          <th>Setting By</th>
+          <th>Mass Production By</th>
+          <th>Count Setting</th>
+          <th>Count Mass</th>
+          <th>Total Count</th>
+          <th>Start</th>
+          <th>End</th>
+        </tr>
+      </thead>
+      <tbody id="pl-table-body">
+        <tr><td colspan="11" class="eq-queue-empty">Loading…</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
