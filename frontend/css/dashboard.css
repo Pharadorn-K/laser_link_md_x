@@ -488,13 +488,121 @@ table.data-table tr:last-child td { border-bottom: none; }
 /* ---------------------------------------------------------
    FOR PROFILE PAGE  (pages/profile.html)
    --------------------------------------------------------- */
-.profile-header { display: flex; align-items: center; gap: 16px; margin-bottom: 20px; }
+.profile-page {
+  display: grid;
+  grid-template-columns: 280px minmax(0, 1fr);
+  gap: 16px;
+  min-height: 100%;
+}
+.profile-panel,
+.mp-card { min-height: 0; }
+.profile-panel { display: flex; flex-direction: column; }
+.profile-header { display: flex; align-items: center; gap: 12px; margin-bottom: 18px; }
 .profile-header img {
-  width: 150px; height: 170px; border-radius: 10%;
+  width: 72px; height: 72px; border-radius: 12px;
   object-fit: cover; background: var(--line-soft); border: 1px solid var(--line);
 }
-.profile-header h2 { margin: 0 0 2px; font-size: 17px; }
+.profile-header h2 { margin: 0 0 3px; font-size: 16px; }
 .profile-header .eid { font-family: var(--font-mono); color: var(--ink-faint); font-size: 12px; }
+.profile-panel .field { margin-bottom: 10px; }
+.profile-panel .field input { padding: 8px 9px; font-size: 12px; }
+.profile-panel .field label { font-size: 10px; margin-bottom: 4px; }
+.profile-panel .card-title { margin-bottom: 10px; }
+
+.mp-card { margin: 0; max-width: none; display: flex; flex-direction: column; overflow: hidden; }
+
+.mp-stats-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.mp-stat-box {
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm);
+  padding: 9px 8px;
+  text-align: center;
+}
+.mp-stat-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  color: var(--ink-faint);
+  margin-bottom: 6px;
+}
+.mp-stat-mass {
+  font-size: 26px;
+  font-weight: 800;
+  color: var(--accent-strong);
+  font-family: var(--font-mono);
+}
+.mp-stat-mass span {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--ink-faint);
+  margin-left: 4px;
+  text-transform: uppercase;
+}
+.mp-stat-setting { font-size: 12px; color: var(--ink-soft); margin-top: 2px; }
+
+.mp-trend-row { margin-top: 2px; }
+.mp-trend-toggle {
+  display: inline-flex;
+  gap: 4px;
+  margin-left: 10px;
+  background: var(--line-soft);
+  padding: 2px;
+  border-radius: 999px;
+}
+.mp-trend-btn {
+  border: none;
+  background: transparent;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--ink-soft);
+}
+.mp-trend-btn.active { background: var(--bg-sidebar); color: #fff; }
+
+.mp-chart {
+  display: flex;
+  align-items: flex-end;
+  gap: 4px;
+  height: 112px;
+  padding: 6px 4px 0;
+  border-bottom: 1px solid var(--line-soft);
+  overflow-x: auto;
+}
+.mp-bar-col {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  flex: 0 0 auto;
+  width: 20px;
+  height: 100%;
+}
+.mp-bar-stack {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column-reverse;
+}
+.mp-bar-seg { width: 100%; border-radius: 2px 2px 0 0; min-height: 1px; }
+.mp-bar-mass { background: var(--accent); }
+.mp-bar-setting { background: var(--info); opacity: .6; }
+.mp-bar-label { font-size: 9.5px; color: var(--ink-faint); margin-top: 4px; }
+
+.mp-table-wrap { flex: 1 1 auto; min-height: 0; overflow: auto; margin-top: 6px; }
+.mp-table td, .mp-table th { font-size: 12.5px; }
+
+@media (max-width: 760px) {
+  .profile-page { grid-template-columns: 1fr; min-height: auto; }
+  .profile-panel { min-height: auto; }
+  .mp-card { min-height: 620px; }
+  .mp-stats-grid { grid-template-columns: repeat(2, 1fr); }
+}
 
 /* ---------------------------------------------------------
    FOR MODEL SETTING PAGE — embedded Work Mode (right column)

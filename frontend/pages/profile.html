@@ -3,31 +3,72 @@
      profile.html — loaded into #content by dashboard.js
      Logic lives in dashboard.js, section "FOR PROFILE PAGE"
      ============================================================ -->
-<div class="profile-header">
-  <img id="pf-avatar" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3C/svg%3E" alt="" />
-  <div>
-    <h2 id="pf-name">—</h2>
-    <div class="eid" id="pf-employee-id">—</div>
+<div class="profile-page">
+  <section class="card profile-panel">
+    <div class="profile-header">
+      <img id="pf-avatar" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3C/svg%3E" alt="" />
+      <div>
+        <h2 id="pf-name">—</h2>
+        <div class="eid" id="pf-employee-id">—</div>
+      </div>
+    </div>
+
+    <div id="pf-alert-box"></div>
+
+    <div class="card-title">Edit profile</div>
+    <form id="pf-form">
+      <div class="field">
+        <label for="pf-photo">Photo</label>
+        <input type="file" id="pf-photo" accept="image/png,image/jpeg,image/webp" />
+      </div>
+      <div class="field">
+        <label for="pf-name-input">Full name</label>
+        <input type="text" id="pf-name-input" />
+      </div>
+      <div class="field">
+        <label for="pf-password-input">New password</label>
+        <input type="password" id="pf-password-input" placeholder="Leave blank to keep current password" autocomplete="new-password" />
+      </div>
+      <button type="submit" class="btn btn-primary btn-block">Save changes</button>
+    </form>
+  </section>
+
+  <!-- ================= MY PRODUCTION ================= -->
+  <section class="card mp-card">
+  <div class="card-title">My Production</div>
+
+  <div class="mp-stats-grid" id="mp-stats-grid">
+    <div class="eq-queue-empty">Loading…</div>
   </div>
-</div>
 
-<div id="pf-alert-box"></div>
+  <div class="mp-trend-row">
+    <div class="card-title" style="margin-top:14px;">
+      Trend
+      <div class="mp-trend-toggle">
+        <button type="button" class="mp-trend-btn active" data-range="7">7 days</button>
+        <button type="button" class="mp-trend-btn" data-range="30">30 days</button>
+      </div>
+    </div>
+    <div class="mp-chart" id="mp-chart"></div>
+  </div>
 
-<div class="card" style="max-width:480px;">
-  <div class="card-title">Edit profile</div>
-  <form id="pf-form">
-    <div class="field">
-      <label for="pf-photo">Photo</label>
-      <input type="file" id="pf-photo" accept="image/png,image/jpeg,image/webp" />
-    </div>
-    <div class="field">
-      <label for="pf-name-input">Full name</label>
-      <input type="text" id="pf-name-input" />
-    </div>
-    <div class="field">
-      <label for="pf-password-input">New password</label>
-      <input type="password" id="pf-password-input" placeholder="Leave blank to keep current password" autocomplete="new-password" />
-    </div>
-    <button type="submit" class="btn btn-primary">Save changes</button>
-  </form>
+  <div class="card-title" style="margin-top:14px;">Recent Activity</div>
+  <div class="mp-table-wrap">
+    <table class="data-table mp-table">
+      <thead>
+        <tr>
+          <th>When</th>
+          <th>Model</th>
+          <th>Job No.</th>
+          <th>Lot No.</th>
+          <th>Pallet</th>
+          <th>Type</th>
+        </tr>
+      </thead>
+      <tbody id="mp-recent-body">
+        <tr><td colspan="6" class="eq-queue-empty">Loading…</td></tr>
+      </tbody>
+    </table>
+  </div>
+  </section>
 </div>

@@ -3347,6 +3347,96 @@ PAGE_INIT.all_user = function () {
 /* ============================================================
    FOR PROFILE PAGE
    ============================================================ */
+
+/* ---- My Production card: stats / trend chart / recent table ---- */
+const MP = { trend: [], range: 7 };
+
+function mpFormatDayLabel(iso) {
+  // "YYYY-MM-DD" -> "DD" (day-of-month only, kept compact for narrow bars)
+  return iso.split("-")[2];
+}
+
+function mpRenderStats(stats) {
+  const grid = document.getElementById("mp-stats-grid");
+  if (!grid) return;
+  const periods = [
+    ["today", "Today"],
+    ["week", "This Week"],
+    ["month", "This Month"],
+    ["all_time", "All-time"],
+  ];
+  grid.innerHTML = periods
+    .map(
+      ([key, label]) => `
+    <div class="mp-stat-box">
+      <div class="mp-stat-label">${label}</div>
+      <div class="mp-stat-mass">${stats.mass[key]}<span>mass</span></div>
+      <div class="mp-stat-setting">${stats.setting[key]} setting</div>
+    </div>`
+    )
+    .join("");
+}
+
+function mpRenderChart(trend, rangeDays) {
+  const wrap = document.getElementById("mp-chart");
+  if (!wrap) return;
+  const slice = trend.slice(-rangeDays);
+  const maxTotal = Math.max(1, ...slice.map((d) => d.mass + d.setting));
+  wrap.innerHTML = slice
+    .map((d) => {
+      const massH = Math.round((d.mass / maxTotal) * 100);
+      const setH = Math.round((d.setting / maxTotal) * 100);
+      const title = `${d.date}: ${d.mass} mass, ${d.setting} setting`;
+      return `
+      <div class="mp-bar-col" title="${escapeHtml(title)}">
+        <div class="mp-bar-stack">
+          <div class="mp-bar-seg mp-bar-mass" style="height:${massH}%;"></div>
+          <div class="mp-bar-seg mp-bar-setting" style="height:${setH}%;"></div>
+        </div>
+        <div class="mp-bar-label">${mpFormatDayLabel(d.date)}</div>
+      </div>`;
+    })
+    .join("");
+}
+
+function mpRenderRecent(rows) {
+  const tbody = document.getElementById("mp-recent-body");
+  if (!tbody) return;
+  if (!rows.length) {
+    tbody.innerHTML = `<tr><td colspan="6" class="eq-queue-empty">No production logged yet.</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = rows
+    .map(
+      (r) => `
+    <tr>
+      <td class="mono">${new Date(r.marked_at).toLocaleString([], { month: "short", day: "2-digit", hour: "2-digit", minute: "2-digit" })}</td>
+      <td>${escapeHtml(r.model)}</td>
+      <td class="mono">${padJob(r.job_no)}</td>
+      <td class="mono">${escapeHtml(r.lot_no || "—")}</td>
+      <td>${escapeHtml(r.pallet_no || "—")}</td>
+      <td><span class="tag ${r.type === "mass" ? "approved" : "pending"}">${r.type === "mass" ? "Mass" : "Setting"}</span></td>
+    </tr>`
+    )
+    .join("");
+}
+
+async function mpLoadSummary() {
+  const grid = document.getElementById("mp-stats-grid");
+  if (grid) grid.innerHTML = `<div class="eq-queue-empty">Loading…</div>`;
+  try {
+    const res = await apiFetch("/api/production/my-summary");
+    if (!res.ok) throw new Error("failed");
+    const data = await res.json();
+    mpRenderStats(data.stats);
+    MP.trend = data.trend;
+    mpRenderChart(MP.trend, MP.range);
+    mpRenderRecent(data.recent);
+  } catch (err) {
+    if (grid) grid.innerHTML = `<div class="alert alert-error">Could not load production summary.</div>`;
+  }
+}
+
 PAGE_INIT.profile = function () {
   document.getElementById("pf-name").textContent = CURRENT_USER.name;
   document.getElementById("pf-employee-id").textContent = CURRENT_USER.employee_id;
@@ -3380,9 +3470,19 @@ PAGE_INIT.profile = function () {
     document.getElementById("pf-name").textContent = data.name;
     document.getElementById("pf-password-input").value = "";
   });
+
+  // ---- My Production ----
+  MP.range = 7;
+  mpLoadSummary();
+  document.querySelectorAll(".mp-trend-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      document.querySelectorAll(".mp-trend-btn").forEach((b) => b.classList.remove("active"));
+      btn.classList.add("active");
+      MP.range = Number(btn.dataset.range);
+      mpRenderChart(MP.trend, MP.range);
+    });
+  });
 };
-
-
 /* ============================================================
    FOR SYSTEM LOG PAGE (admin only)
    ============================================================ */

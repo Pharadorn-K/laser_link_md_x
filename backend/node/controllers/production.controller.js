@@ -275,11 +275,101 @@ async function completeSetting(req, res) {
   }
 }
 
+// ---------------- GET /api/production/my-summary ----------------
+// Powers the "My Production" card on the Profile page: quick stats
+// (mass vs setting, broken out by today/week/month/all-time), the
+// user's last 20 logged rows, and a filled 30-day trend series.
+async function getMySummary(req, res) {
+  const userId = req.user.id;
+  try {
+    const [statRows] = await pool.query(
+      `SELECT
+         type,
+         SUM(CASE WHEN DATE(marked_at) = CURDATE() THEN 1 ELSE 0 END) AS today,
+         SUM(CASE WHEN YEARWEEK(marked_at, 1) = YEARWEEK(CURDATE(), 1) THEN 1 ELSE 0 END) AS week,
+         SUM(CASE WHEN YEAR(marked_at) = YEAR(CURDATE()) AND MONTH(marked_at) = MONTH(CURDATE()) THEN 1 ELSE 0 END) AS month,
+         COUNT(*) AS all_time
+       FROM production_log
+       WHERE user_id = ?
+       GROUP BY type`,
+      [userId]
+    );
+
+    const stats = {
+      mass:    { today: 0, week: 0, month: 0, all_time: 0 },
+      setting: { today: 0, week: 0, month: 0, all_time: 0 },
+    };
+    statRows.forEach((row) => {
+      const bucket = row.type === 'mass' ? 'mass' : 'setting';
+      stats[bucket] = {
+        today: Number(row.today) || 0,
+        week: Number(row.week) || 0,
+        month: Number(row.month) || 0,
+        all_time: Number(row.all_time) || 0,
+      };
+    });
+
+    const [recentRows] = await pool.query(
+      `SELECT model, job_no, lot_no, pallet_no, type, marked_at
+         FROM production_log
+        WHERE user_id = ?
+        ORDER BY marked_at DESC
+        LIMIT 20`,
+      [userId]
+    );
+
+    const [trendRows] = await pool.query(
+      `SELECT DATE(marked_at) AS d, type, COUNT(*) AS cnt
+         FROM production_log
+        WHERE user_id = ? AND marked_at >= DATE_SUB(CURDATE(), INTERVAL 29 DAY)
+        GROUP BY DATE(marked_at), type
+        ORDER BY d ASC`,
+      [userId]
+    );
+
+    // Fill every day in the 30-day window (including zero-activity days)
+    // so the frontend chart never has to guess about gaps.
+    const byDate = {};
+    trendRows.forEach((row) => {
+      const key = row.d instanceof Date ? row.d.toISOString().slice(0, 10) : String(row.d).slice(0, 10);
+      const bucket = (byDate[key] ||= { mass: 0, setting: 0 });
+      bucket[row.type === 'mass' ? 'mass' : 'setting'] = Number(row.cnt) || 0;
+    });
+
+    const trend = [];
+    for (let i = 29; i >= 0; i--) {
+      const d = new Date();
+      d.setHours(0, 0, 0, 0);
+      d.setDate(d.getDate() - i);
+      const key = d.toISOString().slice(0, 10);
+      const bucket = byDate[key] || { mass: 0, setting: 0 };
+      trend.push({ date: key, mass: bucket.mass, setting: bucket.setting });
+    }
+
+    return res.json({
+      stats,
+      recent: recentRows.map((r) => ({
+        model: r.model,
+        job_no: r.job_no,
+        lot_no: r.lot_no,
+        pallet_no: r.pallet_no,
+        type: r.type,
+        marked_at: r.marked_at,
+      })),
+      trend,
+    });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: 'Server error fetching production summary.' });
+  }
+}
+
 module.exports = {
   getCount,
-  getTimings,   // NEW
+  getTimings,
   logProduction,
   resetCount,
   getSettingSummary,
   completeSetting,
+  getMySummary, // NEW
 };
