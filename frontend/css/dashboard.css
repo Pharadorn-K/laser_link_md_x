@@ -254,13 +254,56 @@ table.data-table tr:last-child td { border-bottom: none; }
   align-items: flex-start;
   gap: 6px;
 }
-.mon-count-num-col {
+
+.mon-checks-col {
+  flex: 0 1 240px;
+  max-width: 240px;
+  align-items: flex-start;
+  gap: 6px;
+}
+.mon-timing-col {
+  flex: 0 1 220px;
+  max-width: 220px;
+  align-items: flex-start;
+  gap: 6px;
+}
+.mon-timing-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+  margin-top: 4px;
+}
+.mon-timing-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.mon-timing-label {
+  font-size: 11px;
+  color: var(--ink-faint);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .03em;
+}
+.mon-timing-value {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.mon-count-side-col {
   flex: 0 0 auto;
   min-width: 390px;
-  align-items: center;
-  text-align: center;
   border-left: 1px solid var(--line-soft);
   padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.mon-count-num-col {
+  align-items: center;
+  text-align: center;
 }
 
 .mon-chk-list {

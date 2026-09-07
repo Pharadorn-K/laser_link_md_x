@@ -38,6 +38,42 @@ async function computeCount(modelConditionId, lotNo) {
   return base_count + rows[0].cnt;
 }
 
+// ---------------- GET /api/production/timings?model_condition_id= ----------------
+// First-logged timestamp per type ('setting' / 'mass') for the current
+// lot, since the last reset/complete-setting stamp — powers the
+// "Start setting at" / "Start production at" labels on Monitor.
+async function getTimings(req, res) {
+  const { model_condition_id } = req.query;
+  if (!model_condition_id) {
+    return res.status(400).json({ error: 'model_condition_id is required.' });
+  }
+  try {
+    const model = await resolveModel(model_condition_id);
+    if (!model) return res.status(404).json({ error: 'Model condition not found.' });
+
+    const { reset_at } = await getResetInfo(model_condition_id, model.lot_no);
+    const [rows] = await pool.query(
+      `SELECT type, MIN(marked_at) AS first_at
+         FROM production_log
+        WHERE model_condition_id = ? AND lot_no = ? AND marked_at > ?
+        GROUP BY type`,
+      [model_condition_id, model.lot_no, reset_at]
+    );
+
+    let setting_started_at = null;
+    let mass_started_at = null;
+    rows.forEach((r) => {
+      if (r.type === 'setting') setting_started_at = r.first_at;
+      if (r.type === 'mass') mass_started_at = r.first_at;
+    });
+
+    return res.json({ lot_no: model.lot_no, setting_started_at, mass_started_at });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: 'Server error fetching timings.' });
+  }
+}
+
 // Count of parts logged by non-operator roles ("setting" type) since
 // the last reset/complete stamp — used to prefill the Complete Setting
 // popup. Deliberately ignores base_count (that's a separate concern).
@@ -241,6 +277,7 @@ async function completeSetting(req, res) {
 
 module.exports = {
   getCount,
+  getTimings,   // NEW
   logProduction,
   resetCount,
   getSettingSummary,

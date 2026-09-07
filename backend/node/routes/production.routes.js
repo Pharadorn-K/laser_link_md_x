@@ -2,6 +2,7 @@
 // ============================================================
 // /api/production/* routes
 //   GET  /count            -> any authenticated user
+//   GET  /timings          -> any authenticated user
 //   POST /log              -> any authenticated user
 //   POST /reset            -> admin/engineer/machine_controller only
 //   GET  /setting-summary   -> admin/engineer/machine_controller only
@@ -15,6 +16,7 @@ const ctrl = require('../controllers/production.controller');
 const settingGuard = requireRole('admin', 'engineer', 'machine_controller');
 
 router.get('/count', requireAuth, ctrl.getCount);
+router.get('/timings', requireAuth, ctrl.getTimings);
 router.post('/log', requireAuth, ctrl.logProduction);
 router.post('/reset', settingGuard, ctrl.resetCount);
 router.get('/setting-summary', settingGuard, ctrl.getSettingSummary);

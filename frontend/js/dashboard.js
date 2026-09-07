@@ -430,6 +430,29 @@ async function monRefreshCount(pallet, job) {
   }
 }
 
+function monFormatTimingDate(iso) {
+  if (!iso) return "—";
+  return formatTopbarClock(new Date(iso)); // reuse the DD/MM/YYYY HH:MM:SS formatter
+}
+
+// Fetches setting/mass start timestamps for a pallet's current
+// (model, lot_no) and updates both MON.timings and the DOM if mounted.
+async function monRefreshTimings(pallet, job) {
+  if (!job) return;
+  try {
+    const res = await apiFetch(`/api/production/timings?model_condition_id=${job.id}`);
+    if (!res.ok) return;
+    const data = await res.json();
+    MON.timings[pallet] = data;
+    const settingEl = document.getElementById(`mon-timing-setting-${pallet}`);
+    const massEl = document.getElementById(`mon-timing-mass-${pallet}`);
+    if (settingEl) settingEl.textContent = monFormatTimingDate(data.setting_started_at);
+    if (massEl) massEl.textContent = monFormatTimingDate(data.mass_started_at);
+  } catch (err) {
+    // keep last known value on failure
+  }
+}
+
 /* ============================================================
    FOR MONITOR PAGE
    ============================================================
@@ -452,6 +475,7 @@ const MON_STEPS = [
 
 const MON = {
   counts: { Pallet1: 0, Pallet2: 0 },
+  timings: { Pallet1: null, Pallet2: null }, // NEW — { setting_started_at, mass_started_at }
   lastMarked: { Pallet1: null, Pallet2: null },
   running: false,
   timer: null,
@@ -759,10 +783,13 @@ function monRenderPalletBlock(pallet) {
     lock.classList.add("show");
     body.innerHTML = "";
     setCheckStatus(pallet, null);
+    MON.timings[pallet] = null; // NEW
     return;
   }
   lock.classList.remove("show");
   monRefreshCount(pallet, job); // fire-and-forget, updates DOM once resolved
+  monRefreshTimings(pallet, job); // NEW — fire-and-forget, updates DOM once resolved 
+
   const running = MON.running && MON.activePallet === pallet;
   const statusClass = running ? "busy" : "ready";
   const statusLabel = running ? "Running" : "Idle";
@@ -805,10 +832,26 @@ function monRenderPalletBlock(pallet) {
           ${chkRow("2D Code Grade", "code2dGrade", "code2dgrade")}
         </div>
       </div>
-      <div class="mon-count-col mon-count-num-col">
-        <div class="mon-count-label">Count Part</div>
-        <div class="mon-count-value" id="mon-count-${pallet}">${MON.counts[pallet]}</div>
-        <div class="mon-count-sub">${lastMarked ? `Last: ${new Date(lastMarked).toLocaleTimeString()}` : "No parts marked yet"}</div>
+      <div class="mon-count-col mon-timing-col">
+        <div class="mon-count-label">Timing</div>
+        <div class="mon-timing-list">
+          <div class="mon-timing-item">
+            <span class="mon-timing-label">Start setting at</span>
+            <span class="mon-timing-value mono" id="mon-timing-setting-${pallet}">${monFormatTimingDate((MON.timings[pallet] || {}).setting_started_at)}</span>
+          </div>
+          <div class="mon-timing-item">
+            <span class="mon-timing-label">Start production at</span>
+            <span class="mon-timing-value mono" id="mon-timing-mass-${pallet}">${monFormatTimingDate((MON.timings[pallet] || {}).mass_started_at)}</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="mon-count-side-col">
+        <div class="mon-count-col mon-count-num-col">
+          <div class="mon-count-label">Count Part</div>
+          <div class="mon-count-value" id="mon-count-${pallet}">${MON.counts[pallet]}</div>
+          <div class="mon-count-sub">${lastMarked ? `Last: ${new Date(lastMarked).toLocaleTimeString()}` : "No parts marked yet"}</div>
+        </div>
       </div>
     </div>
 
