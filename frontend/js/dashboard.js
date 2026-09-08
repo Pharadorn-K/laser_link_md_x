@@ -618,6 +618,13 @@ async function monRefreshGoal(pallet, job) {
   }
 }
 
+// Fire-and-forget: refreshes the Production Goal block for both pallets.
+// Called from monRenderAll() after every full render pass.
+function monRefreshGoals() {
+  monRefreshGoal("Pallet1", getSelectedJob("Pallet1"));
+  monRefreshGoal("Pallet2", getSelectedJob("Pallet2"));
+}
+
 function monIsAutoMode(mode) {
   return mode === "AUTO1-2" || mode === "AUTO1" || mode === "AUTO2";
 }
@@ -1067,6 +1074,17 @@ function monRenderPalletBlock(pallet) {
       document.getElementById("mon-confirm-backdrop").classList.add("open");
     });
   }
+}
+
+function monRefreshGoals() {
+  monRefreshGoal("Pallet1", getSelectedJob("Pallet1"));
+  monRefreshGoal("Pallet2", getSelectedJob("Pallet2"));
+}
+
+function monRenderAll() {
+  monRenderPalletBlock("Pallet1");
+  monRenderPalletBlock("Pallet2");
+  monRefreshGoals();
 }
 
 function monRenderAll() {
