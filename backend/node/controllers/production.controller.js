@@ -9,6 +9,12 @@
 //   - "Complete Setting"     -> base_count = <admin-entered number>,
 //                                reason='setting_complete'
 //     Both just move the reset stamp forward; history is preserved.
+//   - production_goal holds a shared target per (model, lot_no) — this
+//     lets AUTO1-2 (same model, two different job_no's on Pallet1 /
+//     Pallet2) share ONE combined target instead of one per pallet.
+//   - Mass-production logging (role = operator) is gated: it is
+//     refused until "Complete Setting" has been run at least once for
+//     that (model_condition_id, lot_no) — see isSettingComplete().
 // ============================================================
 const pool = require('../config/db');
 const systemLog = require('../services/systemLog.service');
@@ -38,10 +44,20 @@ async function computeCount(modelConditionId, lotNo) {
   return base_count + rows[0].cnt;
 }
 
+// True once an admin/engineer/machine_controller has run "Complete
+// Setting" for this (model_condition_id, lot_no) at least once since
+// the last reset. Used to gate operator ("mass") logging.
+async function isSettingComplete(modelConditionId, lotNo) {
+  const [rows] = await pool.query(
+    `SELECT 1 FROM production_count_reset
+      WHERE model_condition_id = ? AND lot_no = ? AND reset_reason = 'setting_complete'
+      LIMIT 1`,
+    [modelConditionId, lotNo]
+  );
+  return rows.length > 0;
+}
+
 // ---------------- GET /api/production/timings?model_condition_id= ----------------
-// First-logged timestamp per type ('setting' / 'mass') for the current
-// lot, since the last reset/complete-setting stamp — powers the
-// "Start setting at" / "Start production at" labels on Monitor.
 async function getTimings(req, res) {
   const { model_condition_id } = req.query;
   if (!model_condition_id) {
@@ -74,9 +90,6 @@ async function getTimings(req, res) {
   }
 }
 
-// Count of parts logged by non-operator roles ("setting" type) since
-// the last reset/complete stamp — used to prefill the Complete Setting
-// popup. Deliberately ignores base_count (that's a separate concern).
 async function computeSettingCount(modelConditionId, lotNo) {
   const { reset_at } = await getResetInfo(modelConditionId, lotNo);
   const [rows] = await pool.query(
@@ -121,13 +134,24 @@ async function logProduction(req, res) {
       return res.status(400).json({ error: `That model is assigned to ${model.pallet_no}, not ${pallet_no}.` });
     }
 
+    const actor = req.user || {};
+    const type = actor.role === 'operator' ? 'mass' : 'setting';
+
+    // Gate: mass production may not start until Complete Setting has
+    // run at least once for this model/lot combo.
+    if (type === 'mass') {
+      const complete = await isSettingComplete(model_condition_id, model.lot_no);
+      if (!complete) {
+        return res.status(409).json({
+          error: 'Setting has not been completed for this model/lot yet. Ask an Admin, Engineer, or Machine Controller to run "Complete Setting" on the Monitor page first.',
+        });
+      }
+    }
+
     const [items] = await pool.query(
       'SELECT condition_name, condition_value, block_no FROM model_condition_item WHERE model_condition_id = ? ORDER BY sort_order',
       [model_condition_id]
     );
-
-    const actor = req.user || {};
-    const type = actor.role === 'operator' ? 'mass' : 'setting';
 
     const [result] = await pool.query(
       `INSERT INTO production_log
@@ -200,9 +224,6 @@ async function resetCount(req, res) {
 }
 
 // ---------------- GET /api/production/setting-summary?model_condition_id= ----------------
-// Powers the "Complete Setting" popup: model info, its condition
-// values, and how many parts have been logged under 'setting' type
-// since the last reset/complete (the number the admin can then edit).
 async function getSettingSummary(req, res) {
   const { model_condition_id } = req.query;
   if (!model_condition_id) {
@@ -234,9 +255,6 @@ async function getSettingSummary(req, res) {
 }
 
 // ---------------- POST /api/production/complete-setting ----------------
-// Locks in the (possibly edited) setting count as the new baseline for
-// this model/lot, so the next part an operator marks continues counting
-// up from there. Does not touch production_log history.
 async function completeSetting(req, res) {
   const { model_condition_id, base_count } = req.body || {};
   if (!model_condition_id) {
@@ -275,10 +293,105 @@ async function completeSetting(req, res) {
   }
 }
 
+// ---------------- GET /api/production/goal?model=&lot_no= ----------------
+// Combined progress toward a shared target across every model_condition
+// row currently sharing this (model, lot_no) — e.g. Pallet1 Job 0001 +
+// Pallet2 Job 0002, same model & lot, counted together.
+async function getGoal(req, res) {
+  const { model, lot_no } = req.query;
+  if (!model || !lot_no) {
+    return res.status(400).json({ error: 'model and lot_no are required.' });
+  }
+  try {
+    const [goalRows] = await pool.query(
+      'SELECT goal_count FROM production_goal WHERE model = ? AND lot_no = ?',
+      [model, lot_no]
+    );
+    const goal_count = goalRows.length ? goalRows[0].goal_count : null;
+
+    const [conditionRows] = await pool.query(
+      'SELECT id FROM model_condition WHERE model = ? AND lot_no = ?',
+      [model, lot_no]
+    );
+
+    let current_count = 0;
+    for (const row of conditionRows) {
+      current_count += await computeCount(row.id, lot_no);
+    }
+
+    return res.json({
+      model,
+      lot_no,
+      goal_count,
+      current_count,
+      reached: goal_count !== null && current_count >= goal_count,
+      model_condition_ids: conditionRows.map((r) => r.id),
+    });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: 'Server error fetching goal.' });
+  }
+}
+
+// ---------------- POST /api/production/goal ----------------
+async function setGoal(req, res) {
+  const { model, lot_no, goal_count } = req.body || {};
+  if (!model || !lot_no) {
+    return res.status(400).json({ error: 'model and lot_no are required.' });
+  }
+  const goalNum = Number(goal_count);
+  if (!Number.isInteger(goalNum) || goalNum < 0) {
+    return res.status(400).json({ error: 'goal_count must be a non-negative integer.' });
+  }
+  try {
+    await pool.query(
+      `INSERT INTO production_goal (model, lot_no, goal_count, set_by_user_id)
+       VALUES (?, ?, ?, ?)
+       ON DUPLICATE KEY UPDATE goal_count = VALUES(goal_count), set_by_user_id = VALUES(set_by_user_id)`,
+      [model, lot_no, goalNum, req.user ? req.user.id : null]
+    );
+
+    await systemLog.logAction({
+      req,
+      action: 'production.goal_set',
+      targetType: 'production_goal',
+      targetId: `${model}::${lot_no}`,
+      description: `Set production goal for "${model}" (Lot ${lot_no}) to ${goalNum} pcs`,
+      details: { model, lot_no, goal_count: goalNum },
+    });
+
+    return res.json({ model, lot_no, goal_count: goalNum });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: 'Server error setting goal.' });
+  }
+}
+
+// ---------------- DELETE /api/production/goal ----------------
+async function deleteGoal(req, res) {
+  const { model, lot_no } = req.body || {};
+  if (!model || !lot_no) {
+    return res.status(400).json({ error: 'model and lot_no are required.' });
+  }
+  try {
+    await pool.query('DELETE FROM production_goal WHERE model = ? AND lot_no = ?', [model, lot_no]);
+
+    await systemLog.logAction({
+      req,
+      action: 'production.goal_clear',
+      targetType: 'production_goal',
+      targetId: `${model}::${lot_no}`,
+      description: `Cleared production goal for "${model}" (Lot ${lot_no})`,
+    });
+
+    return res.json({ cleared: true });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: 'Server error clearing goal.' });
+  }
+}
+
 // ---------------- GET /api/production/my-summary ----------------
-// Powers the "My Production" card on the Profile page: quick stats
-// (mass vs setting, broken out by today/week/month/all-time), the
-// user's last 20 logged rows, and a filled 30-day trend series.
 async function getMySummary(req, res) {
   const userId = req.user.id;
   try {
@@ -327,8 +440,6 @@ async function getMySummary(req, res) {
       [userId]
     );
 
-    // Fill every day in the 30-day window (including zero-activity days)
-    // so the frontend chart never has to guess about gaps.
     const byDate = {};
     trendRows.forEach((row) => {
       const key = row.d instanceof Date ? row.d.toISOString().slice(0, 10) : String(row.d).slice(0, 10);
@@ -371,5 +482,8 @@ module.exports = {
   resetCount,
   getSettingSummary,
   completeSetting,
-  getMySummary, // NEW
+  getGoal,
+  setGoal,
+  deleteGoal,
+  getMySummary,
 };

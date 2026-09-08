@@ -195,3 +195,16 @@ USE laser_link_md_x;
 ALTER TABLE production_count_reset
   ADD COLUMN base_count   INT NOT NULL DEFAULT 0,
   ADD COLUMN reset_reason ENUM('manual_reset','setting_complete') NOT NULL DEFAULT 'manual_reset';
+
+
+USE laser_link_md_x;
+
+CREATE TABLE IF NOT EXISTS production_goal (
+    model          VARCHAR(255) NOT NULL,
+    lot_no         VARCHAR(255) NOT NULL,
+    goal_count     INT NOT NULL,
+    set_by_user_id INT NULL DEFAULT NULL,
+    created_at     TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at     TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (model, lot_no)
+) ENGINE=InnoDB;

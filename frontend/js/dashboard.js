@@ -475,11 +475,13 @@ const MON_STEPS = [
 
 const MON = {
   counts: { Pallet1: 0, Pallet2: 0 },
-  timings: { Pallet1: null, Pallet2: null }, // NEW — { setting_started_at, mass_started_at }
+  timings: { Pallet1: null, Pallet2: null },
+  goals: { Pallet1: null, Pallet2: null },       // NEW
+  goalAlerted: {},                                // NEW
   lastMarked: { Pallet1: null, Pallet2: null },
   running: false,
   timer: null,
-  mode: null, // snapshot of work-mode at page load
+  mode: null,
 };
 
 const MON_AUTO = {
@@ -488,6 +490,133 @@ const MON_AUTO = {
   roundCount: { Pallet1: 0, Pallet2: 0 },
   palletCycleIndex: 0,
 };
+
+const MON_GOAL_ROLES = ["admin", "engineer", "machine_controller"];
+
+function monGoalProgressPct(current, goal) {
+  if (!goal) return 0;
+  return Math.max(0, Math.min(100, Math.round((current / goal) * 100)));
+}
+
+function monGoalInnerHtml(pallet, job) {
+  if (!job || !job.lot_no) return `<div class="mon-goal-empty">No model selected</div>`;
+
+  const canEdit = CURRENT_USER && MON_GOAL_ROLES.includes(CURRENT_USER.role);
+  const d = MON.goals[pallet];
+
+  if (!d) {
+    return `<div class="mon-goal-empty">Loading…</div>`;
+  }
+
+  if (d.goal_count === null || d.goal_count === undefined) {
+    return `
+      <div class="mon-goal-empty">${d.current_count} pcs made · no target set</div>
+      ${canEdit ? `
+        <div class="mon-goal-edit-row">
+          <input type="number" min="1" class="mon-goal-input" id="mon-goal-input-${pallet}" placeholder="e.g. 150" />
+          <button type="button" class="btn btn-sm btn-primary mon-goal-set-btn" data-pallet="${pallet}">Set</button>
+        </div>` : ""}
+    `;
+  }
+
+  const pct = monGoalProgressPct(d.current_count, d.goal_count);
+  return `
+    <div class="mon-goal-bar-track"><div class="mon-goal-bar-fill${d.reached ? " reached" : ""}" style="width:${pct}%;"></div></div>
+    <div class="mon-goal-bar-label">${d.current_count} / ${d.goal_count} pcs (${pct}%)${d.reached ? " · Reached" : ""}</div>
+    ${canEdit ? `
+      <div class="mon-goal-edit-row">
+        <input type="number" min="1" class="mon-goal-input" id="mon-goal-input-${pallet}" value="${d.goal_count}" />
+        <button type="button" class="btn btn-sm btn-primary mon-goal-set-btn" data-pallet="${pallet}">Update</button>
+        <button type="button" class="btn btn-sm btn-ghost mon-goal-clear-btn" data-pallet="${pallet}">Clear</button>
+      </div>` : ""}
+  `;
+}
+
+function monWireGoalBlock(pallet) {
+  const wrap = document.getElementById(`mon-goal-${pallet}`);
+  if (!wrap) return;
+  const job = getSelectedJob(pallet);
+  if (!job) return;
+
+  const setBtn = wrap.querySelector(".mon-goal-set-btn");
+  if (setBtn) {
+    setBtn.addEventListener("click", async () => {
+      const input = document.getElementById(`mon-goal-input-${pallet}`);
+      const value = input ? parseInt(input.value, 10) : NaN;
+      if (Number.isNaN(value) || value <= 0) { showToast("Enter a target greater than 0."); return; }
+      try {
+        const res = await apiFetch("/api/production/goal", {
+          method: "POST",
+          body: JSON.stringify({ model: job.model, lot_no: job.lot_no, goal_count: value }),
+        });
+        const data = await res.json();
+        if (!res.ok) { showToast(data.error || "Could not set goal."); return; }
+        showToast("Target set.", "success");
+        // Refresh both — AUTO1-2 may share the same model/lot.
+        monRefreshGoal("Pallet1", getSelectedJob("Pallet1"));
+        monRefreshGoal("Pallet2", getSelectedJob("Pallet2"));
+      } catch (err) {
+        showToast("Could not reach the server.");
+      }
+    });
+  }
+
+  const clearBtn = wrap.querySelector(".mon-goal-clear-btn");
+  if (clearBtn) {
+    clearBtn.addEventListener("click", async () => {
+      if (!confirm(`Clear the production target for "${job.model}" (Lot ${job.lot_no})?`)) return;
+      try {
+        const res = await apiFetch("/api/production/goal", {
+          method: "DELETE",
+          body: JSON.stringify({ model: job.model, lot_no: job.lot_no }),
+        });
+        if (!res.ok) { showToast("Could not clear goal."); return; }
+        showToast("Target cleared.", "success");
+        monRefreshGoal("Pallet1", getSelectedJob("Pallet1"));
+        monRefreshGoal("Pallet2", getSelectedJob("Pallet2"));
+      } catch (err) {
+        showToast("Could not reach the server.");
+      }
+    });
+  }
+}
+
+function monRenderGoalBlock(pallet) {
+  const wrap = document.getElementById(`mon-goal-${pallet}`);
+  if (!wrap) return;
+  const job = getSelectedJob(pallet);
+  wrap.innerHTML = monGoalInnerHtml(pallet, job);
+  monWireGoalBlock(pallet);
+}
+
+// Fire-and-forget, mirrors monRefreshCount/monRefreshTimings. Fetches
+// combined progress for this pallet's (model, lot_no) — if the other
+// pallet shares the same model+lot (AUTO1-2), it'll show the same
+// numbers when it's refreshed too, which is expected/fine.
+async function monRefreshGoal(pallet, job) {
+  if (!job || !job.lot_no) {
+    MON.goals[pallet] = null;
+    monRenderGoalBlock(pallet);
+    return;
+  }
+  try {
+    const res = await apiFetch(`/api/production/goal?model=${encodeURIComponent(job.model)}&lot_no=${encodeURIComponent(job.lot_no)}`);
+    if (!res.ok) return;
+    const data = await res.json();
+    MON.goals[pallet] = data;
+    monRenderGoalBlock(pallet);
+
+    const alertKey = `${pallet}:${job.model}::${job.lot_no}`;
+    if (data.reached && !MON.goalAlerted[alertKey]) {
+      MON.goalAlerted[alertKey] = true;
+      showToast(`Target reached for "${job.model}" (Lot ${job.lot_no}): ${data.current_count}/${data.goal_count} pcs.`, "success", 4000);
+    } else if (!data.reached) {
+      MON.goalAlerted[alertKey] = false; // allow re-alert if target is raised later
+    }
+  } catch (err) {
+    // keep last known value on failure
+  }
+}
 
 function monIsAutoMode(mode) {
   return mode === "AUTO1-2" || mode === "AUTO1" || mode === "AUTO2";
@@ -789,6 +918,8 @@ function monRenderPalletBlock(pallet) {
   lock.classList.remove("show");
   monRefreshCount(pallet, job); // fire-and-forget, updates DOM once resolved
   monRefreshTimings(pallet, job); // NEW — fire-and-forget, updates DOM once resolved 
+  monRefreshGoal(pallet, job); // NEW
+  monWireGoalBlock(pallet);
 
   const running = MON.running && MON.activePallet === pallet;
   const statusClass = running ? "busy" : "ready";
@@ -853,6 +984,10 @@ function monRenderPalletBlock(pallet) {
           <div class="mon-count-label">Count Part</div>
           <div class="mon-count-value" id="mon-count-${pallet}">${MON.counts[pallet]}</div>
           <div class="mon-count-sub">${lastMarked ? `Last: ${new Date(lastMarked).toLocaleTimeString()}` : "No parts marked yet"}</div>
+        </div>
+        <div class="mon-count-col mon-goal-col">
+          <div class="mon-count-label">Production Goal</div>
+          <div class="mon-goal-body" id="mon-goal-${pallet}">${monGoalInnerHtml(pallet, job)}</div>
         </div>
       </div>
     </div>
@@ -937,6 +1072,7 @@ function monRenderPalletBlock(pallet) {
 function monRenderAll() {
   monRenderPalletBlock("Pallet1");
   monRenderPalletBlock("Pallet2");
+  monRefreshGoals(); // NEW
 }
 
 function monRenderSeqList(steps, activeIndex, palletTag) {
@@ -976,6 +1112,8 @@ async function monReportCount(pallet, job) {
     showToast("Could not reach the server to log production count.");
   } finally {
     if (document.getElementById(`mon-body-${pallet}`)) monRenderPalletBlock(pallet);
+    monRefreshGoal("Pallet1", getSelectedJob("Pallet1")); // NEW
+    monRefreshGoal("Pallet2", getSelectedJob("Pallet2")); // NEW
   }
 }
 
@@ -1167,6 +1305,13 @@ function monApplyModeView() {
     monRenderSeqPreview(mode);
     monShowPreview();
   }
+
+  // NEW — keep Complete Setting button in sync with mode
+  const completeBtn = document.getElementById("mon-complete-setting-btn");
+  if (completeBtn) {
+    const canComplete = CURRENT_USER && MON_COMPLETE_SETTING_ROLES.includes(CURRENT_USER.role) && isAuto;
+    completeBtn.style.display = canComplete ? "" : "none";
+  }
 }
 
 PAGE_INIT.monitor = function () {
@@ -1178,14 +1323,15 @@ PAGE_INIT.monitor = function () {
 
   const completeBtn = document.getElementById("mon-complete-setting-btn");
   if (completeBtn) {
-    const canComplete = CURRENT_USER && MON_COMPLETE_SETTING_ROLES.includes(CURRENT_USER.role);
-    completeBtn.style.display = canComplete ? "" : "none";
+      const canComplete = CURRENT_USER && MON_COMPLETE_SETTING_ROLES.includes(CURRENT_USER.role) && monIsAutoMode(wmLoadMode());    completeBtn.style.display = canComplete ? "" : "none";
     completeBtn.addEventListener("click", monOpenCompleteSettingModal);
   }
+
   document.getElementById("mon-complete-setting-finish-btn").addEventListener("click", monConfirmCompleteSetting);
   document.getElementById("mon-complete-setting-cancel-btn").addEventListener("click", () => {
     document.getElementById("mon-complete-setting-backdrop").classList.remove("open");
   });
+
   document.getElementById("mon-complete-setting-backdrop").addEventListener("click", (e) => {
     if (e.target.id === "mon-complete-setting-backdrop") {
       document.getElementById("mon-complete-setting-backdrop").classList.remove("open");
@@ -1193,6 +1339,7 @@ PAGE_INIT.monitor = function () {
   });
 
   document.getElementById("mon-simulate-btn").addEventListener("click", monHandleStartSignal);
+
   const gotoBtn = document.getElementById("mon-goto-modelsetting-btn");
   if (gotoBtn) gotoBtn.addEventListener("click", () => loadPage("model_setting"));
 
