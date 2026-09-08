@@ -3653,7 +3653,7 @@ PAGE_INIT.profile = function () {
    ============================================================ */
 const SYSLOG = {
   page: 1,
-  pageSize: 50,
+  pageSize: 21,
   total: 0,
   filters: { action: "", status: "", q: "" },
 };
