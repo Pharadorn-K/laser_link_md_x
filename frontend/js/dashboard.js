@@ -245,6 +245,38 @@ function escapeHtml(str) {
 function padJob(n) {
   return String(n).padStart(4, "0");
 }
+
+// Renders the Camera Check On/Off button pair. `checked` = current
+// check_camera value; the active button is solid-colored (green ON /
+// red OFF), the other is outline and clickable to switch. groupId
+// must be unique per instance (pallet/page) so flashCameraToggle can
+// find it again after the surrounding block re-renders.
+function cameraToggleButtonsHtml(checked, groupId) {
+  return `
+    <div class="cam-toggle-group" id="${groupId}">
+      <button type="button" class="cam-toggle-btn cam-on${checked ? " active" : ""}" data-value="1">
+        <i class="fa-solid fa-video"></i> On
+      </button>
+      <button type="button" class="cam-toggle-btn cam-off${!checked ? " active" : ""}" data-value="0">
+        <i class="fa-solid fa-video-slash"></i> Off
+      </button>
+    </div>`;
+}
+
+// One-shot confirmation flash on whichever button is now active —
+// call this AFTER the surrounding block has been re-rendered with
+// the new state, so it flashes the correct (new) button.
+function flashCameraToggle(groupId) {
+  const group = document.getElementById(groupId);
+  if (!group) return;
+  const active = group.querySelector(".cam-toggle-btn.active");
+  if (!active) return;
+  active.classList.remove("cam-flash");
+  void active.offsetWidth; // restart animation if triggered again quickly
+  active.classList.add("cam-flash");
+  setTimeout(() => active.classList.remove("cam-flash"), 1000);
+}
+
 function padBlk(n) {
   return String(n).padStart(3, "0");
 }
@@ -860,6 +892,7 @@ function monActivePallets() {
 // values (e.g. every ≤150 pcs) without leaving Monitor.
 function monConditionEditRowsHtml(job, pallet) {
   const items = job.conditions || [];
+  const camGroupId = `mon-cam-toggle-${pallet}`;
 
   const cameraRow = `
     <div class="ms-cond-edit-row mon-cond-edit-row ms-camera-row" data-pallet="${pallet}">
@@ -867,9 +900,7 @@ function monConditionEditRowsHtml(job, pallet) {
         <span class="ms-cond-edit-name">Camera Check</span>
         <span class="ms-cond-edit-blk mono">${job.check_camera ? "Enabled" : "Disabled"}</span>
       </div>
-      <button type="button" class="btn btn-sm ${job.check_camera ? "btn-danger" : "btn-primary"} mon-camera-toggle-btn" data-current="${job.check_camera ? "1" : "0"}">
-        ${job.check_camera ? "Turn OFF" : "Turn ON"}
-      </button>
+      ${cameraToggleButtonsHtml(job.check_camera, camGroupId)}
     </div>`;
 
   const lotRow = job.check_lot_no
@@ -1063,17 +1094,21 @@ function monRenderPalletBlock(pallet) {
     });
   }
 
-  const cameraBtn = body.querySelector(".mon-camera-toggle-btn");
-  if (cameraBtn) {
-    cameraBtn.addEventListener("click", () => {
-      const newValue = cameraBtn.dataset.current !== "1"; // toggle
-      MON.pendingSet = { pallet, modelId: job.id, itemId: null, newValue, oldValue: job.check_camera, name: "Camera Check", isCamera: true };
+  const camGroupId = `mon-cam-toggle-${pallet}`;
+  body.querySelectorAll(`#${camGroupId} .cam-toggle-btn`).forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const newValue = btn.dataset.value === "1";
+      if (newValue === !!job.check_camera) { showToast("No change.", "info"); return; }
+      MON.pendingSet = {
+        pallet, modelId: job.id, itemId: null, newValue,
+        oldValue: job.check_camera, name: "Camera Check", isCamera: true, camGroupId,
+      };
       document.getElementById("mon-confirm-text").textContent = newValue
         ? "Re-enable Camera Check for this pallet?"
         : "Disable Camera Check for this pallet? Marking will proceed without a camera check until an Engineer re-enables it.";
       document.getElementById("mon-confirm-backdrop").classList.add("open");
     });
-  }
+  });
 }
 
 function monRefreshGoals() {
@@ -1172,6 +1207,7 @@ async function monConfirmSetValue() {
     }
     showToast(`"${p.name}" updated.`, "success");
     await monRefetchJob(p.pallet);
+    if (p.isCamera && p.camGroupId) flashCameraToggle(p.camGroupId);
   } catch (err) {
     showToast("Could not reach the server.");
   } finally {
@@ -2538,15 +2574,14 @@ function msRenderDetail(pallet, condition) {
   `;
 
   // ---- inner col2: scrollable editable conditions (select is already in the HTML above this block) ----
+  const camGroupId = `ms-cam-toggle-${pallet}`;
   const cameraRow = `
   <div class="ms-cond-edit-row ms-camera-row">
     <div class="ms-cond-edit-meta">
       <span class="ms-cond-edit-name">Camera Check</span>
       <span class="ms-cond-edit-blk mono">${condition.check_camera ? "Enabled" : "Disabled"}</span>
     </div>
-    <button type="button" class="btn btn-sm ${condition.check_camera ? "btn-danger" : "btn-primary"} ms-camera-toggle-btn" data-current="${condition.check_camera ? "1" : "0"}">
-      ${condition.check_camera ? "Turn OFF" : "Turn ON"}
-    </button>
+    ${cameraToggleButtonsHtml(condition.check_camera, camGroupId)}
   </div>`;
 
   const lotNoRow = `
@@ -2607,17 +2642,20 @@ function msRenderDetail(pallet, condition) {
     });
   }
 
-  const cameraBtn = condWrap.querySelector(".ms-camera-toggle-btn");
-  if (cameraBtn) {
-    cameraBtn.addEventListener("click", () => {
-      const newValue = cameraBtn.dataset.current !== "1"; // toggle
-      MS.pendingSet = { pallet, modelId: condition.id, itemId: null, newValue, oldValue: condition.check_camera, name: "Camera Check", isCamera: true };
+  condWrap.querySelectorAll(`#${camGroupId} .cam-toggle-btn`).forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const newValue = btn.dataset.value === "1";
+      if (newValue === !!condition.check_camera) { showToast("No change.", "info"); return; }
+      MS.pendingSet = {
+        pallet, modelId: condition.id, itemId: null, newValue,
+        oldValue: condition.check_camera, name: "Camera Check", isCamera: true, camGroupId,
+      };
       document.getElementById("ms-confirm-text").textContent = newValue
         ? "Re-enable Camera Check for this model?"
         : "Disable Camera Check for this model? Marking will proceed without a camera check until an Engineer re-enables it.";
       document.getElementById("ms-confirm-backdrop").classList.add("open");
     });
-  }
+  });
 }
 
 async function msConfirmSetValue() {
@@ -2643,6 +2681,7 @@ async function msConfirmSetValue() {
     }
     showToast(`"${p.name}" updated.`, "success");
     await msLoadPallet(p.pallet);
+    if (p.isCamera && p.camGroupId) flashCameraToggle(p.camGroupId);
   } catch (err) {
     showToast("Could not reach the server.");
   } finally {
@@ -2742,10 +2781,10 @@ function msOpenModal(condition) {
   document.getElementById("ms-f-read2d").checked = condition ? !!condition.check_read2dcode : false;
   document.getElementById("ms-f-read2d-detailed").value = condition && condition.read2dcode_detailed !== undefined ? condition.read2dcode_detailed : "0";
 
-  document.getElementById("ms-f-grade2d").checked = condition ? !!condition.check_grade2dcode : true;
+  document.getElementById("ms-f-grade2d").checked = condition ? !!condition.check_grade2dcode : false;
   document.getElementById("ms-f-grade").value = condition ? condition.control_grade || "" : "";
 
-  document.getElementById("ms-f-camera").checked = condition ? !!condition.check_camera : true;
+  document.getElementById("ms-f-camera").checked = condition ? !!condition.check_camera : false;
   
   // document.getElementById("ms-f-lotno-block").value = condition && condition.lot_no_block != null ? condition.lot_no_block : 0;
   document.getElementById("ms-f-lotno-value").value = condition && condition.lot_no ? condition.lot_no : "";
@@ -2922,10 +2961,10 @@ function anmFillForm(condition) {
   document.getElementById("ms-f-read2d-detailed").value =
     condition && condition.read2dcode_detailed !== undefined ? condition.read2dcode_detailed : "0";
 
-  document.getElementById("ms-f-grade2d").checked = condition ? !!condition.check_grade2dcode : true;
+  document.getElementById("ms-f-grade2d").checked = condition ? !!condition.check_grade2dcode : false;
   document.getElementById("ms-f-grade").value = condition ? condition.control_grade || "" : "";
 
-  document.getElementById("ms-f-camera").checked = condition ? !!condition.check_camera : true;
+  document.getElementById("ms-f-camera").checked = condition ? !!condition.check_camera : false;
   document.getElementById("ms-f-lotno-value").value = condition && condition.lot_no ? condition.lot_no : "";
 
   const photoInputEl = document.getElementById("ms-f-photo");

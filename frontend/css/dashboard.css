@@ -512,16 +512,6 @@ table.data-table tr:last-child td { border-bottom: none; }
   100% { left: 130%; }
 }
 
-/* @media (prefers-reduced-motion: reduce) {
-  #mon-complete-setting-btn.mon-cs-attention {
-    animation: none;
-    box-shadow: 0 0 0 3px rgba(217, 122, 31, 0.55);
-  }
-  #mon-complete-setting-btn.mon-cs-attention::before {
-    display: none;
-  }
-} */
-
 .mon-setting-summary-card {
   border: 1px solid var(--line-soft);
   border-radius: var(--radius-sm);
@@ -538,6 +528,8 @@ table.data-table tr:last-child td { border-bottom: none; }
   border-top: 1px dashed var(--line-soft);
 }
 .mon-setting-count-row input { width: 100px; }
+
+
 
 /* ---------------------------------------------------------
   FOR USER MANAGEMENT PAGE  (pages/all_user.html)
@@ -1390,3 +1382,47 @@ table.data-table tr:last-child td { border-bottom: none; }
   flex-wrap: wrap;
 }
 .mon-goal-edit-row input { width: 80px; padding: 5px 7px; font-size: 12px; }
+
+/* ---------------------------------------------------------
+   Camera Check — On/Off button pair (replaces single toggle)
+   --------------------------------------------------------- */
+.cam-toggle-group {
+  display: inline-flex;
+  justify-self: end;
+  gap: 6px;
+}
+.cam-toggle-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 700;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: #fff;
+  color: var(--ink-faint);
+  transition: background .15s ease, border-color .15s ease, color .15s ease;
+}
+.cam-toggle-btn:hover { border-color: #c3c9d1; }
+
+.cam-toggle-btn.cam-on.active {
+  background: var(--ok);
+  border-color: var(--ok);
+  color: #fff;
+}
+.cam-toggle-btn.cam-off.active {
+  background: var(--err);
+  border-color: var(--err);
+  color: #fff;
+}
+
+/* Brief confirmation flash on the button that just became active —
+   NOT a persistent state indicator, just a "this changed" cue. */
+.cam-toggle-btn.cam-flash {
+  animation: camFlashPulse 0.45s ease-in-out 2;
+}
+@keyframes camFlashPulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(255,255,255,0); }
+  50%      { box-shadow: 0 0 0 5px rgba(255,255,255,.6) inset; }
+}
