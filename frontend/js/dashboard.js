@@ -1181,6 +1181,8 @@ async function monConfirmSetValue() {
 
 const MON_COMPLETE_SETTING_ROLES = ["admin", "engineer", "machine_controller"];
 
+
+
 function monConditionSummaryHtml(conditions) {
   const items = conditions || [];
   if (!items.length) return `<div class="eq-queue-empty">No conditions set.</div>`;
