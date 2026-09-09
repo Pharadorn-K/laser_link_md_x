@@ -144,7 +144,6 @@ function initShell() {
   initLightbox(); // NEW
 }
 
-
 function applyUserToChrome(user) {
   CURRENT_USER = user;
   document.getElementById("topbar-username").textContent = user.name;
@@ -261,6 +260,7 @@ function applySkipFlags(steps, job) {
     skipped: typeof s.skipIf === "function" ? !!s.skipIf(job) : false,
   }));
 }
+
 // Builds the base command string for a model_condition row, e.g.
 // "JobNo=0001,BLK=001,CharacterString=G,BLK=002,CharacterString=K9L"
 function buildBaseCommand(condition) {
@@ -1407,6 +1407,7 @@ const WM_PALLET_STATE = {
 function wmLoadMode() {
   return localStorage.getItem(WM_MODE_KEY) || null;
 }
+
 function wmSaveMode(mode) {
   if (mode) localStorage.setItem(WM_MODE_KEY, mode);
   else localStorage.removeItem(WM_MODE_KEY);
@@ -1798,6 +1799,7 @@ const WM_GROUP_LABELS = {
   vision: "Vision / 2D Code",
   laser: "Laser",
 };
+
 function wmRenderFnGroups() {
   const wrap = document.getElementById("wm-fn-groups");
   if (!wrap) return;
@@ -2412,10 +2414,12 @@ function msShowAlert(message, type = "error") {
   const box = document.getElementById("ms-alert-box");
   if (box) box.innerHTML = `<div class="alert alert-${type}">${message}</div>`;
 }
+
 function msClearAlert() {
   const box = document.getElementById("ms-alert-box");
   if (box) box.innerHTML = "";
 }
+
 function msModalAlert(message) {
   document.getElementById("ms-modal-alert").innerHTML = `<div class="alert alert-error">${message}</div>`;
 }
