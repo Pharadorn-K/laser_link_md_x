@@ -1181,6 +1181,31 @@ async function monConfirmSetValue() {
 
 const MON_COMPLETE_SETTING_ROLES = ["admin", "engineer", "machine_controller"];
 
+// Centralizes show/hide + the attention-pulse class for the Complete
+// Setting button, so both call sites (mode change + page init) stay
+// in sync instead of duplicating the same three lines.
+function monSetCompleteSettingButtonVisible(canComplete) {
+  const btn = document.getElementById("mon-complete-setting-btn");
+  if (!btn) return;
+  btn.style.display = canComplete ? "" : "none";
+  btn.classList.toggle("mon-cs-attention", !!canComplete);
+}
+
+// Temporarily stop the pulse while the summary modal is open (nothing
+// to remind the user about once they've already opened it), and restore
+// it if they cancel instead of finishing.
+function monPauseCompleteSettingAttention() {
+  const btn = document.getElementById("mon-complete-setting-btn");
+  if (btn) btn.classList.remove("mon-cs-attention");
+}
+
+function monResumeCompleteSettingAttentionIfEligible() {
+  const canComplete =
+    CURRENT_USER &&
+    MON_COMPLETE_SETTING_ROLES.includes(CURRENT_USER.role) &&
+    monIsAutoMode(wmLoadMode());
+  monSetCompleteSettingButtonVisible(canComplete);
+}
 
 
 function monConditionSummaryHtml(conditions) {
@@ -1197,6 +1222,7 @@ function monConditionSummaryHtml(conditions) {
 }
 
 async function monOpenCompleteSettingModal() {
+  monPauseCompleteSettingAttention(); // NEW — stop reminding once they've opened it
   const pallets = ["Pallet1", "Pallet2"].filter((p) => !!getSelectedJob(p));
   if (pallets.length === 0) {
     showToast("Select a model for at least one pallet on Model Setting first.");
@@ -1330,7 +1356,7 @@ function monApplyModeView() {
   const completeBtn = document.getElementById("mon-complete-setting-btn");
   if (completeBtn) {
     const canComplete = CURRENT_USER && MON_COMPLETE_SETTING_ROLES.includes(CURRENT_USER.role) && isAuto;
-    completeBtn.style.display = canComplete ? "" : "none";
+    monSetCompleteSettingButtonVisible(canComplete);
   }
 }
 
@@ -1343,18 +1369,20 @@ PAGE_INIT.monitor = function () {
 
   const completeBtn = document.getElementById("mon-complete-setting-btn");
   if (completeBtn) {
-      const canComplete = CURRENT_USER && MON_COMPLETE_SETTING_ROLES.includes(CURRENT_USER.role) && monIsAutoMode(wmLoadMode());    completeBtn.style.display = canComplete ? "" : "none";
+    monResumeCompleteSettingAttentionIfEligible();
     completeBtn.addEventListener("click", monOpenCompleteSettingModal);
   }
 
   document.getElementById("mon-complete-setting-finish-btn").addEventListener("click", monConfirmCompleteSetting);
   document.getElementById("mon-complete-setting-cancel-btn").addEventListener("click", () => {
     document.getElementById("mon-complete-setting-backdrop").classList.remove("open");
+    monResumeCompleteSettingAttentionIfEligible(); // NEW — they backed out, keep reminding
   });
 
   document.getElementById("mon-complete-setting-backdrop").addEventListener("click", (e) => {
     if (e.target.id === "mon-complete-setting-backdrop") {
       document.getElementById("mon-complete-setting-backdrop").classList.remove("open");
+      monResumeCompleteSettingAttentionIfEligible(); // NEW
     }
   });
 
