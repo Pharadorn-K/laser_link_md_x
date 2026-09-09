@@ -1232,7 +1232,7 @@ async function monOpenCompleteSettingModal() {
           <div class="mon-setting-count-row">
             <label for="mon-setting-count-${pallet}" style="font-size:12.5px;font-weight:700;">Count Setting</label>
             <input type="number" min="0" id="mon-setting-count-${pallet}" data-pallet="${pallet}" value="${data.setting_count}" />
-            <span class="field-hint" style="margin:0;">Parts used for setting/testing. Operators will continue counting from this number.</span>
+            <span class="field-hint" style="margin:0;">Parts used for setting/testing.</span>
           </div>
         </div>`);
     } catch (err) {
