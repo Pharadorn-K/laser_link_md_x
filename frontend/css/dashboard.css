@@ -226,7 +226,7 @@ table.data-table tr:last-child td { border-bottom: none; }
 }
 
 .mon-pallet-card { position: relative; display: flex; flex-direction: column; overflow: hidden; }
-.mon-pallet-body { flex: 1 1 auto; display: flex; flex-direction: column; gap: 14px; }
+.mon-pallet-body { flex: 1 1 auto; display: flex; flex-direction: column; gap: 8px; }
 
 .mon-model-row { display: flex; align-items: center; justify-content: space-between; }
 .mon-model-name { font-size: 15px; font-weight: 800; }
@@ -685,7 +685,7 @@ table.data-table tr:last-child td { border-bottom: none; }
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 6px;
 }
 .ms-wm-card .wm-mode-row { flex: 0 0 auto; }
 .ms-wm-card .wm-active-mode { margin-left: auto; }
