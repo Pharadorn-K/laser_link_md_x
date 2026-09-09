@@ -444,7 +444,7 @@ table.data-table tr:last-child td { border-bottom: none; }
 }
 
 .mon-cond-edit-list { max-height: 200px; overflow-y: auto; gap: 6px; }
-.mon-cond-edit-list .ms-cond-edit-row { padding: 6px 8px; }
+.mon-cond-edit-list .ms-cond-edit-row { padding: 3px 4px; }
 .mon-cond-edit-list .ms-cond-edit-name { font-size: 11.5px; }
 .mon-cond-edit-list .ms-cond-edit-input { padding: 5px 6px; font-size: 12px; }
 
@@ -860,7 +860,7 @@ table.data-table tr:last-child td { border-bottom: none; }
 .ms-card { display: flex; flex-direction: column; overflow: hidden; }
 .ms-card .field { flex: 0 0 auto; }
 
-.ms-cond-edit-list { display: flex; flex-direction: column; gap: 8px; margin: 8px 0 12px; }
+.ms-cond-edit-list { display: flex; flex-direction: column; gap: 5px; margin: 5px 0 5px; }
 .ms-cond-edit-row {
   display: grid;
   grid-template-columns: 1fr 1fr auto;

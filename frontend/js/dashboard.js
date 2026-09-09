@@ -865,7 +865,7 @@ function monConditionEditRowsHtml(job, pallet) {
     <div class="ms-cond-edit-row mon-cond-edit-row ms-camera-row" data-pallet="${pallet}">
       <div class="ms-cond-edit-meta">
         <span class="ms-cond-edit-name">Camera Check</span>
-        <span class="ms-cond-edit-blk mono">${job.check_camera ? "Enabled" : "Disabled — bypassed"}</span>
+        <span class="ms-cond-edit-blk mono">${job.check_camera ? "Enabled" : "Disabled"}</span>
       </div>
       <button type="button" class="btn btn-sm ${job.check_camera ? "btn-danger" : "btn-primary"} mon-camera-toggle-btn" data-current="${job.check_camera ? "1" : "0"}">
         ${job.check_camera ? "Turn OFF" : "Turn ON"}
@@ -2508,7 +2508,7 @@ function msRenderDetail(pallet, condition) {
   <div class="ms-cond-edit-row ms-camera-row">
     <div class="ms-cond-edit-meta">
       <span class="ms-cond-edit-name">Camera Check</span>
-      <span class="ms-cond-edit-blk mono">${condition.check_camera ? "Enabled" : "Disabled — bypassed"}</span>
+      <span class="ms-cond-edit-blk mono">${condition.check_camera ? "Enabled" : "Disabled"}</span>
     </div>
     <button type="button" class="btn btn-sm ${condition.check_camera ? "btn-danger" : "btn-primary"} ms-camera-toggle-btn" data-current="${condition.check_camera ? "1" : "0"}">
       ${condition.check_camera ? "Turn OFF" : "Turn ON"}
