@@ -465,8 +465,12 @@ table.data-table tr:last-child td { border-bottom: none; }
 #mon-complete-setting-btn.mon-cs-attention {
   position: relative;
   overflow: hidden;
-  animation: monCsWobble 2.6s ease-in-out infinite;
+  animation: monCsWobble 1.6s ease-in-out infinite;
   box-shadow: 0 0 0 0 rgba(217, 122, 31, 0.5);
+}
+
+#mon-complete-setting-finish-btn {
+  animation: monCsWobble 1.6s ease-in-out infinite;
 }
 
 /* wobble: small rotate + lift, pauses between waves so it doesn't
@@ -498,7 +502,7 @@ table.data-table tr:last-child td { border-bottom: none; }
     rgba(255, 255, 255, 0) 100%
   );
   transform: skewX(-20deg);
-  animation: monCsShimmer 2.6s ease-in-out infinite;
+  animation: monCsShimmer 1.6s ease-in-out infinite;
   pointer-events: none;
 }
 
@@ -508,22 +512,7 @@ table.data-table tr:last-child td { border-bottom: none; }
   100% { left: 130%; }
 }
 
-/* small persistent "needs action" dot, independent of the motion,
-   so the state still reads even mid-cycle / for reduced-motion users */
-#mon-complete-setting-btn.mon-cs-attention::after {
-  content: "";
-  position: absolute;
-  top: -4px;
-  right: -4px;
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  background: var(--err);
-  box-shadow: 0 0 0 2px #fff;
-  z-index: 2;
-}
-
-@media (prefers-reduced-motion: reduce) {
+/* @media (prefers-reduced-motion: reduce) {
   #mon-complete-setting-btn.mon-cs-attention {
     animation: none;
     box-shadow: 0 0 0 3px rgba(217, 122, 31, 0.55);
@@ -531,7 +520,7 @@ table.data-table tr:last-child td { border-bottom: none; }
   #mon-complete-setting-btn.mon-cs-attention::before {
     display: none;
   }
-}
+} */
 
 .mon-setting-summary-card {
   border: 1px solid var(--line-soft);
