@@ -393,12 +393,12 @@ table.data-table tr:last-child td { border-bottom: none; }
 /* -- pallet card: photo + conditions -- */
 .mon-detail-layout {
   display: grid;
-  grid-template-columns: 230px 1fr;
+  grid-template-columns: 250px 1fr;
   gap: 10px;
   margin: 8px 0;
 }
 .mon-photo-frame {
-  width: 230px; height: 230px;
+  width: 250px; height: 250px;
   border: 1px dashed var(--line);
   border-radius: var(--radius-sm);
   overflow: hidden;
@@ -443,7 +443,7 @@ table.data-table tr:last-child td { border-bottom: none; }
   padding: 0;
 }
 
-.mon-cond-edit-list { max-height: 200px; overflow-y: auto; gap: 6px; }
+.mon-cond-edit-list { max-height: 250px; overflow-y: auto; gap: 6px; }
 .mon-cond-edit-list .ms-cond-edit-row { padding: 3px 4px; }
 .mon-cond-edit-list .ms-cond-edit-name { font-size: 11.5px; }
 .mon-cond-edit-list .ms-cond-edit-input { padding: 5px 6px; font-size: 12px; }
@@ -746,8 +746,9 @@ table.data-table tr:last-child td { border-bottom: none; }
 }
 .ms-pallet-photo-frame {
   flex: 0 0 auto;
-  width: 220px;
-  height: 220px;
+  align-self: center;
+  width: 170px;
+  height: 170px;
   border: 1px dashed var(--line);
   border-radius: var(--radius-sm);
   overflow: hidden;
@@ -929,6 +930,11 @@ table.data-table tr:last-child td { border-bottom: none; }
   padding: 8px 10px;
   border: 1px solid var(--line-soft);
   border-radius: var(--radius-sm);
+}
+.mon-cond-edit-header {
+  display: flex;
+  justify-content: flex-end;
+  margin: 6px 0;
 }
 .ms-cond-edit-meta { display: flex; flex-direction: column; gap: 2px; }
 .ms-cond-edit-name { font-size: 12.5px; font-weight: 700; }

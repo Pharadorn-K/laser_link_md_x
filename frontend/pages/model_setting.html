@@ -91,7 +91,6 @@
             <option value="AUTO2">AUTO 2 (Pallet 2 only)</option>
           </select>
         </div>
-        <button class="btn btn-primary" id="wm-set-mode-btn">Set Mode</button>
         <span class="wm-active-mode" id="wm-active-mode-pill">No mode active</span>
       </div>
 
@@ -139,7 +138,7 @@
 
 </div>
 
-<!-- ================= Confirm "Set value" modal (operators) ================= -->
+<!-- ================= Confirm condition update modal ================= -->
 <div class="ms-modal-backdrop" id="ms-confirm-backdrop">
   <div class="ms-modal ms-modal-sm">
     <div class="ms-modal-title">Confirm change</div>
@@ -147,6 +146,19 @@
     <div style="display:flex; gap:8px; margin-top:14px;">
       <button type="button" class="btn btn-primary" id="ms-confirm-yes-btn">Yes, set it</button>
       <button type="button" class="btn" id="ms-confirm-no-btn">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- ================= Confirm "Set value" modal (operators) ================= -->
+<div class="ms-modal-backdrop" id="ms-edit-modal-backdrop">
+  <div class="ms-modal">
+    <div class="ms-modal-title" id="ms-edit-modal-title">Edit</div>
+    <div id="ms-edit-modal-alert"></div>
+    <div id="ms-edit-modal-body"><!-- filled by JS --></div>
+    <div style="display:flex; gap:8px; margin-top:16px;">
+      <button type="button" class="btn btn-primary" id="ms-edit-modal-save-btn">Save changes</button>
+      <button type="button" class="btn" id="ms-edit-modal-cancel-btn">Cancel</button>
     </div>
   </div>
 </div>

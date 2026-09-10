@@ -891,7 +891,6 @@ function monActivePallets() {
 // concept as Model Setting's ms-cond-edit-list, so operators can update
 // values (e.g. every ≤150 pcs) without leaving Monitor.
 function monConditionEditRowsHtml(job, pallet) {
-  const items = job.conditions || [];
   const camGroupId = `mon-cam-toggle-${pallet}`;
 
   const cameraRow = `
@@ -903,30 +902,46 @@ function monConditionEditRowsHtml(job, pallet) {
       ${cameraToggleButtonsHtml(job.check_camera, camGroupId)}
     </div>`;
 
-  const lotRow = job.check_lot_no
-    ? `<div class="ms-cond-edit-row mon-cond-edit-row ms-lotno-row" data-pallet="${pallet}">
+  return `
+    ${cameraRow}
+    <div class="mon-cond-edit-header">
+      <button type="button" class="btn btn-sm btn-primary mon-edit-btn" data-pallet="${pallet}">
+        <i class="fa-solid fa-pen"></i> Edit Conditions
+      </button>
+    </div>
+    ${monConditionSummaryDisplayHtml(job)}
+  `;
+}
+
+// Read-only summary of Lot No. + conditions, shown under the Edit button.
+function monConditionSummaryDisplayHtml(job) {
+  const rows = [];
+  if (job.check_lot_no) {
+    rows.push(`
+      <div class="ms-cond-edit-row mon-cond-edit-row ms-lotno-row">
         <div class="ms-cond-edit-meta">
           <span class="ms-cond-edit-name">Lot No.</span>
           <span class="ms-cond-edit-blk mono">Not marked</span>
         </div>
-        <input type="text" class="ms-cond-edit-input mon-lotno-input" value="${escapeHtml(job.lot_no || "")}" />
-        <button type="button" class="btn btn-sm btn-primary mon-lotno-set-btn">Set</button>
-      </div>`
-    : "";
-
-  const condRows = items.length
-    ? items.map((it) => `
-      <div class="ms-cond-edit-row mon-cond-edit-row" data-item-id="${it.id}" data-pallet="${pallet}">
-        <div class="ms-cond-edit-meta">
-          <span class="ms-cond-edit-name">${escapeHtml(it.condition_name)}</span>
-          <span class="ms-cond-edit-blk mono">BLK ${padBlk(it.block_no)}</span>
-        </div>
-        <input type="text" class="ms-cond-edit-input mon-cond-input" value="${escapeHtml(it.condition_value)}" />
-        <button type="button" class="btn btn-sm btn-primary mon-cond-set-btn">Set</button>
-      </div>`).join("")
-    : `<div class="eq-queue-empty">No conditions set.</div>`;
-
-  return cameraRow + lotRow + condRows;
+        <span class="mono">${escapeHtml(job.lot_no || "—")}</span>
+      </div>`);
+  }
+  const items = job.conditions || [];
+  if (items.length) {
+    items.forEach((it) => {
+      rows.push(`
+        <div class="ms-cond-edit-row mon-cond-edit-row">
+          <div class="ms-cond-edit-meta">
+            <span class="ms-cond-edit-name">${escapeHtml(it.condition_name)}</span>
+            <span class="ms-cond-edit-blk mono">BLK ${padBlk(it.block_no)}</span>
+          </div>
+          <span class="mono">${escapeHtml(it.condition_value)}</span>
+        </div>`);
+    });
+  } else if (!job.check_lot_no) {
+    rows.push(`<div class="eq-queue-empty">No conditions set.</div>`);
+  }
+  return rows.join("");
 }
 
 function monCheckBadgesHtml(job) {
@@ -1062,36 +1077,9 @@ function monRenderPalletBlock(pallet) {
     }
   });
 
-  body.querySelectorAll(".mon-cond-set-btn").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      const row = btn.closest(".mon-cond-edit-row");
-      const itemId = row.dataset.itemId;
-      const input = row.querySelector(".mon-cond-input");
-      const item = (job.conditions || []).find((i) => String(i.id) === String(itemId));
-      const newValue = input.value.trim();
-      if (!newValue) { showToast("Value cannot be empty."); return; }
-      if (newValue === item.condition_value) { showToast("No change.", "info"); return; }
-
-      MON.pendingSet = { pallet, modelId: job.id, itemId, newValue, oldValue: item.condition_value, name: item.condition_name };
-      document.getElementById("mon-confirm-text").textContent =
-        `Change "${item.condition_name}" from "${item.condition_value}" to "${newValue}"?`;
-      document.getElementById("mon-confirm-backdrop").classList.add("open");
-    });
-  });
-
-  const lotBtn = body.querySelector(".mon-lotno-set-btn");
-  if (lotBtn) {
-    lotBtn.addEventListener("click", () => {
-      const input = body.querySelector(".mon-lotno-input");
-      const newValue = input.value.trim();
-      if (!newValue) { showToast("Lot No. cannot be empty."); return; }
-      if (newValue === job.lot_no) { showToast("No change.", "info"); return; }
-
-      MON.pendingSet = { pallet, modelId: job.id, itemId: null, newValue, oldValue: job.lot_no, name: "Lot No.", isLotNo: true };
-      document.getElementById("mon-confirm-text").textContent =
-        `Change "Lot No." from "${job.lot_no || "(empty)"}" to "${newValue}"? This is only logged with each part counted — it isn't marked on the workpiece.`;
-      document.getElementById("mon-confirm-backdrop").classList.add("open");
-    });
+  const editBtn = body.querySelector(".mon-edit-btn");
+  if (editBtn) {
+    editBtn.addEventListener("click", () => monOpenEditModal(pallet));
   }
 
   const camGroupId = `mon-cam-toggle-${pallet}`;
@@ -1109,6 +1097,120 @@ function monRenderPalletBlock(pallet) {
       document.getElementById("mon-confirm-backdrop").classList.add("open");
     });
   });
+}
+
+/* ---- Combined "Edit Lot No. & Conditions" modal (Monitor) ---- */
+const MON_EDIT = { pallet: null, job: null };
+
+function monBuildEditModalFieldsHtml(job) {
+  const rows = [];
+  if (job.check_lot_no) {
+    rows.push(`
+      <div class="field">
+        <label for="mon-edit-lotno">Lot No.</label>
+        <input type="text" id="mon-edit-lotno" value="${escapeHtml(job.lot_no || "")}" />
+      </div>`);
+  }
+  (job.conditions || []).forEach((it) => {
+    rows.push(`
+      <div class="field">
+        <label for="mon-edit-cond-${it.id}">${escapeHtml(it.condition_name)} <span style="text-transform:none;font-weight:400;">(BLK ${padBlk(it.block_no)})</span></label>
+        <input type="text" id="mon-edit-cond-${it.id}" data-item-id="${it.id}" value="${escapeHtml(it.condition_value)}" />
+      </div>`);
+  });
+  if (!rows.length) {
+    return `<div class="ms-empty">Nothing to edit for this model.</div>`;
+  }
+  return rows.join("");
+}
+
+function monOpenEditModal(pallet) {
+  const job = getSelectedJob(pallet);
+  if (!job) return;
+  MON_EDIT.pallet = pallet;
+  MON_EDIT.job = job;
+  document.getElementById("mon-edit-modal-title").textContent = `Edit — ${job.model} (${pallet})`;
+  document.getElementById("mon-edit-modal-body").innerHTML = monBuildEditModalFieldsHtml(job);
+  document.getElementById("mon-edit-modal-alert").innerHTML = "";
+  document.getElementById("mon-edit-modal-backdrop").classList.add("open");
+}
+
+function monCloseEditModal() {
+  document.getElementById("mon-edit-modal-backdrop").classList.remove("open");
+  MON_EDIT.pallet = null;
+  MON_EDIT.job = null;
+}
+
+async function monSubmitEditModal() {
+  const { pallet, job } = MON_EDIT;
+  if (!pallet || !job) return;
+
+  const alertBox = document.getElementById("mon-edit-modal-alert");
+  alertBox.innerHTML = "";
+  const updates = [];
+
+  if (job.check_lot_no) {
+    const input = document.getElementById("mon-edit-lotno");
+    if (input) {
+      const newValue = input.value.trim();
+      if (!newValue) {
+        alertBox.innerHTML = `<div class="alert alert-error">Lot No. cannot be empty.</div>`;
+        return;
+      }
+      if (newValue !== (job.lot_no || "")) {
+        updates.push({ url: `/api/models/${job.id}/lotno`, body: { lot_no: newValue }, label: "Lot No." });
+      }
+    }
+  }
+
+  const condInputs = document.querySelectorAll("#mon-edit-modal-body input[data-item-id]");
+  for (const input of condInputs) {
+    const itemId = input.dataset.itemId;
+    const item = (job.conditions || []).find((i) => String(i.id) === String(itemId));
+    if (!item) continue;
+    const newValue = input.value.trim();
+    if (!newValue) {
+      alertBox.innerHTML = `<div class="alert alert-error">"${escapeHtml(item.condition_name)}" cannot be empty.</div>`;
+      return;
+    }
+    if (newValue !== item.condition_value) {
+      updates.push({ url: `/api/models/${job.id}/conditions/${itemId}`, body: { condition_value: newValue }, label: item.condition_name });
+    }
+  }
+
+  if (updates.length === 0) {
+    showToast("No changes to save.", "info");
+    monCloseEditModal();
+    return;
+  }
+
+  const submitBtn = document.getElementById("mon-edit-modal-save-btn");
+  if (submitBtn) submitBtn.disabled = true;
+
+  const failed = [];
+  for (const u of updates) {
+    try {
+      const res = await apiFetch(u.url, { method: "PATCH", body: JSON.stringify(u.body) });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        failed.push(`${u.label}: ${data.error || "update failed"}`);
+      }
+    } catch (err) {
+      failed.push(`${u.label}: could not reach the server`);
+    }
+  }
+
+  if (submitBtn) submitBtn.disabled = false;
+
+  if (failed.length) {
+    alertBox.innerHTML = `<div class="alert alert-error">${failed.map(escapeHtml).join("<br>")}</div>`;
+    await monRefetchJob(pallet);
+    return;
+  }
+
+  showToast("Changes saved.", "success");
+  await monRefetchJob(pallet);
+  monCloseEditModal();
 }
 
 function monRefreshGoals() {
@@ -1433,10 +1535,12 @@ PAGE_INIT.monitor = function () {
     MON.pendingSet = null;
   });
   document.getElementById("mon-confirm-backdrop").addEventListener("click", (e) => {
-    if (e.target.id === "mon-confirm-backdrop") {
-      document.getElementById("mon-confirm-backdrop").classList.remove("open");
-      MON.pendingSet = null;
-    }
+    if (e.target.id === "mon-confirm-backdrop") {document.getElementById("mon-confirm-backdrop").classList.remove("open");MON.pendingSet = null;}
+  });
+  document.getElementById("mon-edit-modal-save-btn").addEventListener("click", monSubmitEditModal);
+  document.getElementById("mon-edit-modal-cancel-btn").addEventListener("click", monCloseEditModal);
+  document.getElementById("mon-edit-modal-backdrop").addEventListener("click", (e) => {
+    if (e.target.id === "mon-edit-modal-backdrop") monCloseEditModal();
   });
 };
 
@@ -2594,52 +2698,22 @@ function msRenderDetail(pallet, condition) {
     <button type="button" class="btn btn-sm btn-primary ms-lotno-set-btn">Set</button>
   </div>`;
 
-  const editableRows = items.length
-    ? items.map((it) => `
-      <div class="ms-cond-edit-row" data-item-id="${it.id}" data-pallet="${pallet}">
-        <div class="ms-cond-edit-meta">
-          <span class="ms-cond-edit-name">${escapeHtml(it.condition_name)}</span>
-          <span class="ms-cond-edit-blk mono">BLK ${padBlk(it.block_no)}</span>
-        </div>
-        <input type="text" class="ms-cond-edit-input" value="${escapeHtml(it.condition_value)}" />
-        <button type="button" class="btn btn-sm btn-primary ms-cond-set-btn">Set</button>
-      </div>`).join("")
-    : `<div class="eq-queue-empty">No conditions set.</div>`;
-
   condWrap.innerHTML = `
-    <div class="card-title" style="margin-top:0;">Conditions <span style="font-weight:400;color:var(--ink-faint);font-size:11px;">(operators can update values)</span></div>
-    <div class="ms-cond-edit-list">${cameraRow}${lotNoRow}${editableRows}</div>
+    <div class="card-title" style="margin-top:0;">Conditions</div>
+    <div class="ms-cond-edit-list">
+      ${cameraRow}
+      <div class="mon-cond-edit-header">
+        <button type="button" class="btn btn-sm btn-primary ms-edit-btn">
+          <i class="fa-solid fa-pen"></i> Edit Conditions
+        </button>
+      </div>
+      ${msConditionSummaryDisplayHtml(condition)}
+    </div>
   `;
 
-  condWrap.querySelectorAll(".ms-cond-set-btn").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      const row = btn.closest(".ms-cond-edit-row");
-      const itemId = row.dataset.itemId;
-      const input = row.querySelector(".ms-cond-edit-input");
-      const item = items.find((i) => String(i.id) === String(itemId));
-      const newValue = input.value.trim();
-      if (!newValue) { showToast("Value cannot be empty."); return; }
-      if (newValue === item.condition_value) { showToast("No change.", "info"); return; }
-
-      MS.pendingSet = { pallet, modelId: condition.id, itemId, newValue, oldValue: item.condition_value, name: item.condition_name };
-      document.getElementById("ms-confirm-text").textContent =
-        `Change "${item.condition_name}" from "${item.condition_value}" to "${newValue}"?`;
-      document.getElementById("ms-confirm-backdrop").classList.add("open");
-    });
-  });
-
-  const lotNoBtn = condWrap.querySelector(".ms-lotno-set-btn");
-  if (lotNoBtn) {
-    lotNoBtn.addEventListener("click", () => {
-      const input = condWrap.querySelector(".ms-lotno-input");
-      const newValue = input.value.trim();
-      if (!newValue) { showToast("Lot No. cannot be empty."); return; }
-      if (newValue === condition.lot_no) { showToast("No change.", "info"); return; }
-      MS.pendingSet = { pallet, modelId: condition.id, itemId: null, newValue, oldValue: condition.lot_no, name: "Lot No.", isLotNo: true };
-      document.getElementById("ms-confirm-text").textContent =
-        `Change "Lot No." from "${condition.lot_no || "(empty)"}" to "${newValue}"? This is only logged with each part counted — it is not marked on the workpiece.`;
-      document.getElementById("ms-confirm-backdrop").classList.add("open");
-    });
+  const editBtn = condWrap.querySelector(".ms-edit-btn");
+  if (editBtn) {
+    editBtn.addEventListener("click", () => msOpenEditModal(pallet, condition));
   }
 
   condWrap.querySelectorAll(`#${camGroupId} .cam-toggle-btn`).forEach((btn) => {
@@ -2842,6 +2916,148 @@ async function msRefreshBothPallets() {
   await Promise.all([msLoadPallet("Pallet1"), msLoadPallet("Pallet2")]);
 }
 
+/* ---- Combined "Edit Lot No. & Conditions" modal (Model Setting) ---- */
+const MS_EDIT = { pallet: null, condition: null };
+
+function msConditionSummaryDisplayHtml(condition) {
+  const rows = [];
+  if (condition.check_lot_no) {
+    rows.push(`
+      <div class="ms-cond-edit-row ms-lotno-row">
+        <div class="ms-cond-edit-meta">
+          <span class="ms-cond-edit-name">Lot No.</span>
+          <span class="ms-cond-edit-blk mono">Not marked</span>
+        </div>
+        <span class="mono">${escapeHtml(condition.lot_no || "—")}</span>
+      </div>`);
+  }
+  const items = condition.conditions || [];
+  if (items.length) {
+    items.forEach((it) => {
+      rows.push(`
+        <div class="ms-cond-edit-row">
+          <div class="ms-cond-edit-meta">
+            <span class="ms-cond-edit-name">${escapeHtml(it.condition_name)}</span>
+            <span class="ms-cond-edit-blk mono">BLK ${padBlk(it.block_no)}</span>
+          </div>
+          <span class="mono">${escapeHtml(it.condition_value)}</span>
+        </div>`);
+    });
+  } else if (!condition.check_lot_no) {
+    rows.push(`<div class="eq-queue-empty">No conditions set.</div>`);
+  }
+  return rows.join("");
+}
+
+function msBuildEditModalFieldsHtml(condition) {
+  const rows = [];
+  if (condition.check_lot_no) {
+    rows.push(`
+      <div class="field">
+        <label for="ms-edit-lotno">Lot No.</label>
+        <input type="text" id="ms-edit-lotno" value="${escapeHtml(condition.lot_no || "")}" />
+      </div>`);
+  }
+  (condition.conditions || []).forEach((it) => {
+    rows.push(`
+      <div class="field">
+        <label for="ms-edit-cond-${it.id}">${escapeHtml(it.condition_name)} <span style="text-transform:none;font-weight:400;">(BLK ${padBlk(it.block_no)})</span></label>
+        <input type="text" id="ms-edit-cond-${it.id}" data-item-id="${it.id}" value="${escapeHtml(it.condition_value)}" />
+      </div>`);
+  });
+  if (!rows.length) {
+    return `<div class="ms-empty">Nothing to edit for this model.</div>`;
+  }
+  return rows.join("");
+}
+
+function msOpenEditModal(pallet, condition) {
+  MS_EDIT.pallet = pallet;
+  MS_EDIT.condition = condition;
+  document.getElementById("ms-edit-modal-title").textContent = `Edit — ${condition.model} (${pallet})`;
+  document.getElementById("ms-edit-modal-body").innerHTML = msBuildEditModalFieldsHtml(condition);
+  document.getElementById("ms-edit-modal-alert").innerHTML = "";
+  document.getElementById("ms-edit-modal-backdrop").classList.add("open");
+}
+
+function msCloseEditModal() {
+  document.getElementById("ms-edit-modal-backdrop").classList.remove("open");
+  MS_EDIT.pallet = null;
+  MS_EDIT.condition = null;
+}
+
+async function msSubmitEditModal() {
+  const { pallet, condition } = MS_EDIT;
+  if (!pallet || !condition) return;
+
+  const alertBox = document.getElementById("ms-edit-modal-alert");
+  alertBox.innerHTML = "";
+  const updates = [];
+
+  if (condition.check_lot_no) {
+    const input = document.getElementById("ms-edit-lotno");
+    if (input) {
+      const newValue = input.value.trim();
+      if (!newValue) {
+        alertBox.innerHTML = `<div class="alert alert-error">Lot No. cannot be empty.</div>`;
+        return;
+      }
+      if (newValue !== (condition.lot_no || "")) {
+        updates.push({ url: `/api/models/${condition.id}/lotno`, body: { lot_no: newValue }, label: "Lot No." });
+      }
+    }
+  }
+
+  const condInputs = document.querySelectorAll("#ms-edit-modal-body input[data-item-id]");
+  for (const input of condInputs) {
+    const itemId = input.dataset.itemId;
+    const item = (condition.conditions || []).find((i) => String(i.id) === String(itemId));
+    if (!item) continue;
+    const newValue = input.value.trim();
+    if (!newValue) {
+      alertBox.innerHTML = `<div class="alert alert-error">"${escapeHtml(item.condition_name)}" cannot be empty.</div>`;
+      return;
+    }
+    if (newValue !== item.condition_value) {
+      updates.push({ url: `/api/models/${condition.id}/conditions/${itemId}`, body: { condition_value: newValue }, label: item.condition_name });
+    }
+  }
+
+  if (updates.length === 0) {
+    showToast("No changes to save.", "info");
+    msCloseEditModal();
+    return;
+  }
+
+  const submitBtn = document.getElementById("ms-edit-modal-save-btn");
+  if (submitBtn) submitBtn.disabled = true;
+
+  const failed = [];
+  for (const u of updates) {
+    try {
+      const res = await apiFetch(u.url, { method: "PATCH", body: JSON.stringify(u.body) });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        failed.push(`${u.label}: ${data.error || "update failed"}`);
+      }
+    } catch (err) {
+      failed.push(`${u.label}: could not reach the server`);
+    }
+  }
+
+  if (submitBtn) submitBtn.disabled = false;
+
+  if (failed.length) {
+    alertBox.innerHTML = `<div class="alert alert-error">${failed.map(escapeHtml).join("<br>")}</div>`;
+    await msLoadPallet(pallet);
+    return;
+  }
+
+  showToast("Changes saved.", "success");
+  await msLoadPallet(pallet);
+  msCloseEditModal();
+}
+
 PAGE_INIT.model_setting = function () {
   msClearAlert();
   msLoadConditionNames();
@@ -2875,14 +3091,14 @@ PAGE_INIT.model_setting = function () {
   document.getElementById("wm-mode-select").value = savedMode || "";
   wmApplyMode(savedMode);
 
-  document.getElementById("wm-set-mode-btn").addEventListener("click", () => {
+  document.getElementById("wm-mode-select").addEventListener("change", () => {
     const value = document.getElementById("wm-mode-select").value;
-    if (!value) { showToast("Choose a mode first."); return; }
+    if (!value) { wmApplyMode(null); return; }
     const isAuto = value === "AUTO1-2" || value === "AUTO1" || value === "AUTO2";
 
     wmApplyMode(value); // renders pallet-status row / block visibility either way
     logClientEvent("workmode.mode_change", `Mode set to ${value}`, { mode: value });
-    
+
     if (!isAuto) {
       showToast(`Mode set to ${value}.`, "success");
       return;
@@ -2900,6 +3116,12 @@ PAGE_INIT.model_setting = function () {
     }
 
     wmActivateAutoMode(value);
+  });
+
+  document.getElementById("ms-edit-modal-save-btn").addEventListener("click", msSubmitEditModal);
+  document.getElementById("ms-edit-modal-cancel-btn").addEventListener("click", msCloseEditModal);
+  document.getElementById("ms-edit-modal-backdrop").addEventListener("click", (e) => {
+    if (e.target.id === "ms-edit-modal-backdrop") msCloseEditModal();
   });
 
   wmRenderFnGroups();
