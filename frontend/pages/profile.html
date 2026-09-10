@@ -52,6 +52,17 @@
     <div class="mp-chart" id="mp-chart"></div>
   </div>
 
+  <!-- ================= MODEL COUNT ================= -->
+  <div class="mp-modelcount-row">
+    <div class="card-title" style="margin-top:14px;">
+      Model Count
+      <span class="mp-modelcount-type" id="mp-modelcount-type-label"></span>
+    </div>
+    <div class="mp-modelcount-list" id="mp-modelcount-list">
+      <div class="eq-queue-empty">Loading…</div>
+    </div>
+  </div>
+
   <div class="card-title" style="margin-top:14px;">Recent Activity</div>
   <div class="mp-table-wrap">
     <table class="data-table mp-table">
@@ -69,6 +80,11 @@
         <tr><td colspan="6" class="eq-queue-empty">Loading…</td></tr>
       </tbody>
     </table>
+  </div>
+  <div class="mp-pager">
+    <button class="btn btn-sm" id="mp-recent-prev-btn">&larr; Prev</button>
+    <span id="mp-recent-page-info" style="font-size:12px;color:var(--ink-soft);"></span>
+    <button class="btn btn-sm" id="mp-recent-next-btn">Next &rarr;</button>
   </div>
   </section>
 </div>

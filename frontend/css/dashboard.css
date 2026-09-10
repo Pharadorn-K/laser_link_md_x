@@ -696,6 +696,62 @@ table.data-table tr:last-child td { border-bottom: none; }
 .mp-table-wrap { flex: 1 1 auto; min-height: 0; overflow: auto; margin-top: 6px; }
 .mp-table td, .mp-table th { font-size: 12.5px; }
 
+.mp-modelcount-row { margin-top: 2px; }
+.mp-modelcount-type {
+  font-weight: 400;
+  color: var(--ink-faint);
+  font-size: 11px;
+  text-transform: none;
+  margin-left: 6px;
+}
+
+.mp-modelcount-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+  max-height: 220px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+.mp-modelcount-row-item {
+  display: grid;
+  grid-template-columns: 140px 1fr 40px;
+  align-items: center;
+  gap: 10px;
+  font-size: 12.5px;
+}
+.mp-modelcount-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+.mp-modelcount-track {
+  height: 10px;
+  background: var(--line-soft);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.mp-modelcount-fill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 999px;
+  transition: width .2s ease;
+}
+.mp-modelcount-count {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  text-align: right;
+}
+
+.mp-pager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 10px;
+}
+
 @media (max-width: 760px) {
   .profile-page { grid-template-columns: 1fr; min-height: auto; }
   .profile-panel { min-height: auto; }
@@ -1383,6 +1439,45 @@ table.data-table tr:last-child td { border-bottom: none; }
 }
 .pl-table-wrap { overflow-x: auto; }
 .pl-table th, .pl-table td { white-space: nowrap; }
+
+/* ---------------------------------------------------------
+   FOR PRODUCTION LOG PAGE — view switch + raw code2d badges
+   --------------------------------------------------------- */
+.pl-view-switch {
+  display: flex;
+  gap: 4px;
+  background: var(--line-soft);
+  padding: 3px;
+  border-radius: 999px;
+  width: fit-content;
+}
+.pl-view-btn {
+  border: none;
+  background: transparent;
+  padding: 7px 14px;
+  border-radius: 999px;
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--ink-soft);
+}
+.pl-view-btn.active { background: var(--bg-sidebar); color: #fff; }
+.pl-pager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 12px;
+}
+.pl-code2d-badge {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 9px;
+  border-radius: 999px;
+}
+.pl-code2d-pass    { background: var(--ok-soft);   color: #14663a; }
+.pl-code2d-fail    { background: var(--err-soft);  color: #93230f; }
+.pl-code2d-skipped { background: var(--line-soft); color: var(--ink-faint); }
+.pl-code2d-none    { color: var(--ink-faint); }
 
 /* ---------------------------------------------------------
    FOR MONITOR PAGE — Production Goal (2nd row in mon-count-side-col,

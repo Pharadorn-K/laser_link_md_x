@@ -4178,15 +4178,25 @@ PAGE_INIT.all_user = function () {
       userFetchAndRender(btn.dataset.filter);
     });
   });
-  userFetchAndRender("pending");
+  userFetchAndRender("");
 };
-
 /* ============================================================
    FOR PROFILE PAGE
    ============================================================ */
 
-/* ---- My Production card: stats / trend chart / recent table ---- */
-const MP = { trend: [], range: 7 };
+/* ---- My Production card: stats / trend chart / model count / recent (paginated) ---- */
+const MP = {
+  trend: [],
+  range: 7,
+  modelCounts: [],
+  modelCountType: "setting",
+  recent: {
+    page: 1,
+    pageSize: 10,
+    total: 0,
+    rows: [],
+  },
+};
 
 function mpFormatDayLabel(iso) {
   // "YYYY-MM-DD" -> "DD" (day-of-month only, kept compact for narrow bars)
@@ -4236,7 +4246,36 @@ function mpRenderChart(trend, rangeDays) {
     .join("");
 }
 
-function mpRenderRecent(rows) {
+// Horizontal bar list: total count per model, for the type matching
+// this user's role (operator -> mass, everyone else -> setting).
+function mpRenderModelCounts(modelCounts, type) {
+  const list = document.getElementById("mp-modelcount-list");
+  const typeLabel = document.getElementById("mp-modelcount-type-label");
+  if (typeLabel) {
+    typeLabel.textContent = type === "mass" ? "(mass production)" : "(setting)";
+  }
+  if (!list) return;
+
+  if (!modelCounts || modelCounts.length === 0) {
+    list.innerHTML = `<div class="eq-queue-empty">No production logged yet.</div>`;
+    return;
+  }
+
+  const max = Math.max(1, ...modelCounts.map((m) => m.count));
+  list.innerHTML = modelCounts
+    .map((m) => {
+      const pct = Math.max(2, Math.round((m.count / max) * 100)); // floor at 2% so tiny counts stay visible
+      return `
+        <div class="mp-modelcount-row-item" title="${escapeHtml(m.model)}: ${m.count} pcs">
+          <span class="mp-modelcount-name">${escapeHtml(m.model)}</span>
+          <div class="mp-modelcount-track"><div class="mp-modelcount-fill" style="width:${pct}%;"></div></div>
+          <span class="mp-modelcount-count">${m.count}</span>
+        </div>`;
+    })
+    .join("");
+}
+
+function mpRenderRecentRows(rows) {
   const tbody = document.getElementById("mp-recent-body");
   if (!tbody) return;
   if (!rows.length) {
@@ -4258,6 +4297,43 @@ function mpRenderRecent(rows) {
     .join("");
 }
 
+function mpRenderRecentPager() {
+  const info = document.getElementById("mp-recent-page-info");
+  const prevBtn = document.getElementById("mp-recent-prev-btn");
+  const nextBtn = document.getElementById("mp-recent-next-btn");
+  if (!info || !prevBtn || !nextBtn) return;
+
+  const { page, pageSize, total, rows } = MP.recent;
+  if (total === 0) {
+    info.textContent = "";
+    prevBtn.disabled = true;
+    nextBtn.disabled = true;
+    return;
+  }
+  const lastPage = Math.max(1, Math.ceil(total / pageSize));
+  info.textContent = `Page ${page} of ${lastPage} · ${rows.length} of ${total} entries`;
+  prevBtn.disabled = page <= 1;
+  nextBtn.disabled = page >= lastPage;
+}
+
+async function mpLoadRecent() {
+  const tbody = document.getElementById("mp-recent-body");
+  if (tbody) tbody.innerHTML = `<tr><td colspan="6" class="eq-queue-empty">Loading…</td></tr>`;
+  try {
+    const res = await apiFetch(`/api/production/my-recent?page=${MP.recent.page}&pageSize=${MP.recent.pageSize}`);
+    if (!res.ok) throw new Error("failed");
+    const data = await res.json();
+    MP.recent.rows = data.rows || [];
+    MP.recent.total = data.total || 0;
+    mpRenderRecentRows(MP.recent.rows);
+    mpRenderRecentPager();
+  } catch (err) {
+    if (tbody) tbody.innerHTML = `<tr><td colspan="6" class="eq-queue-empty">Could not load recent activity.</td></tr>`;
+    MP.recent.total = 0;
+    mpRenderRecentPager();
+  }
+}
+
 async function mpLoadSummary() {
   const grid = document.getElementById("mp-stats-grid");
   if (grid) grid.innerHTML = `<div class="eq-queue-empty">Loading…</div>`;
@@ -4268,7 +4344,9 @@ async function mpLoadSummary() {
     mpRenderStats(data.stats);
     MP.trend = data.trend;
     mpRenderChart(MP.trend, MP.range);
-    mpRenderRecent(data.recent);
+    MP.modelCounts = data.model_counts || [];
+    MP.modelCountType = data.model_count_type || "setting";
+    mpRenderModelCounts(MP.modelCounts, MP.modelCountType);
   } catch (err) {
     if (grid) grid.innerHTML = `<div class="alert alert-error">Could not load production summary.</div>`;
   }
@@ -4310,7 +4388,11 @@ PAGE_INIT.profile = function () {
 
   // ---- My Production ----
   MP.range = 7;
+  MP.recent.page = 1;
+  MP.recent.total = 0;
   mpLoadSummary();
+  mpLoadRecent();
+
   document.querySelectorAll(".mp-trend-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
       document.querySelectorAll(".mp-trend-btn").forEach((b) => b.classList.remove("active"));
@@ -4318,6 +4400,20 @@ PAGE_INIT.profile = function () {
       MP.range = Number(btn.dataset.range);
       mpRenderChart(MP.trend, MP.range);
     });
+  });
+
+  document.getElementById("mp-recent-prev-btn").addEventListener("click", () => {
+    if (MP.recent.page > 1) {
+      MP.recent.page -= 1;
+      mpLoadRecent();
+    }
+  });
+  document.getElementById("mp-recent-next-btn").addEventListener("click", () => {
+    const lastPage = Math.max(1, Math.ceil(MP.recent.total / MP.recent.pageSize));
+    if (MP.recent.page < lastPage) {
+      MP.recent.page += 1;
+      mpLoadRecent();
+    }
   });
 };
 /* ============================================================
@@ -4493,17 +4589,21 @@ PAGE_INIT.system_log = function () {
     }
   });
 };
-
 /* ============================================================
    FOR PRODUCTION LOG PAGE (admin / engineer only)
    ============================================================
-   Reads GET /api/production-log/summary?month=YYYY-MM, which
-   groups production_log rows by (model, job_no, lot_no,
-   conditions) for the given month and returns setting/mass
-   split counts + start/end timestamps per group.
+   Two views (Summary / Detail-raw), paginated 21 rows/page via
+   GET /api/production-log/{summary|raw}?month=YYYY-MM&page=&pageSize=
+   Export opens a modal to pick type + an independent date range,
+   then fetches the full (unpaginated, ?all=1) matching set and
+   downloads it as CSV client-side.
    ============================================================ */
 const PL = {
-  month: null, // "YYYY-MM"
+  view: "summary", // "summary" | "raw"
+  month: null,      // "YYYY-MM", drives the browse table
+  page: 1,
+  pageSize: 21,
+  total: 0,
   rows: [],
 };
 
@@ -4520,29 +4620,64 @@ function plFormatDate(iso) {
   });
 }
 
-async function plFetchAndRender() {
+const PL_CODE2D_LABELS = { R: "Pass", T: "Fail", S: "Skipped" };
+const PL_CODE2D_CLASS = { R: "pass", T: "fail", S: "skipped" };
+
+function plCode2dBadgeHtml(code) {
+  if (!code) return `<span class="pl-code2d-badge pl-code2d-none">—</span>`;
+  const label = PL_CODE2D_LABELS[code] || code;
+  const cls = PL_CODE2D_CLASS[code] || "none";
+  return `<span class="pl-code2d-badge pl-code2d-${cls}">${escapeHtml(label)}</span>`;
+}
+
+const PL_SUMMARY_COLSPAN = 11;
+const PL_RAW_COLSPAN = 9;
+
+function plColspan() {
+  return PL.view === "summary" ? PL_SUMMARY_COLSPAN : PL_RAW_COLSPAN;
+}
+
+function plRenderHead() {
+  const head = document.getElementById("pl-table-head");
+  if (!head) return;
+  head.innerHTML = PL.view === "summary"
+    ? `<tr>
+         <th>Part Name</th>
+         <th>Job No.</th>
+         <th>Lot No.</th>
+         <th>Condition</th>
+         <th>Setting By</th>
+         <th>Mass Production By</th>
+         <th>Count Setting</th>
+         <th>Count Mass</th>
+         <th>Total Count</th>
+         <th>Start</th>
+         <th>End</th>
+       </tr>`
+    : `<tr>
+         <th>When</th>
+         <th>Part Name</th>
+         <th>Job No.</th>
+         <th>Lot No.</th>
+         <th>Pallet</th>
+         <th>Type</th>
+         <th>By</th>
+         <th>2D Code Result</th>
+         <th>Condition</th>
+       </tr>`;
+}
+
+function plRenderRows() {
   const tbody = document.getElementById("pl-table-body");
   if (!tbody) return;
-  tbody.innerHTML = `<tr><td colspan="11" class="eq-queue-empty">Loading…</td></tr>`;
 
-  try {
-    const res = await apiFetch(`/api/production-log/summary?month=${PL.month}`);
-    if (!res.ok) throw new Error("failed");
-    const data = await res.json();
-    PL.rows = data.rows || [];
+  if (PL.rows.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="${plColspan()}" class="eq-queue-empty">No production ${PL.view === "summary" ? "history" : "entries"} for this month.</td></tr>`;
+    return;
+  }
 
-    const note = document.getElementById("pl-summary-note");
-    if (note) {
-      note.textContent = `${data.month} · ${PL.rows.length} group${PL.rows.length === 1 ? "" : "s"}`;
-    }
-
-    if (PL.rows.length === 0) {
-      tbody.innerHTML = `<tr><td colspan="11" class="eq-queue-empty">No production history for this month.</td></tr>`;
-      return;
-    }
-
-    tbody.innerHTML = PL.rows
-      .map((r) => `
+  tbody.innerHTML = PL.view === "summary"
+    ? PL.rows.map((r) => `
         <tr>
           <td>${escapeHtml(r.model)}</td>
           <td class="mono">${padJob(r.job_no)}</td>
@@ -4555,30 +4690,89 @@ async function plFetchAndRender() {
           <td class="mono"><strong>${r.total_count}</strong></td>
           <td class="mono">${plFormatDate(r.start_at)}</td>
           <td class="mono">${plFormatDate(r.end_at)}</td>
-        </tr>`)
-      .join("");
+        </tr>`).join("")
+    : PL.rows.map((r) => `
+        <tr>
+          <td class="mono">${plFormatDate(r.marked_at)}</td>
+          <td>${escapeHtml(r.model)}</td>
+          <td class="mono">${padJob(r.job_no)}</td>
+          <td class="mono">${escapeHtml(r.lot_no || "—")}</td>
+          <td>${escapeHtml(r.pallet_no || "—")}</td>
+          <td><span class="tag ${r.type === "mass" ? "approved" : "pending"}">${r.type === "mass" ? "Mass" : "Setting"}</span></td>
+          <td>${escapeHtml(r.user_name)}${r.employee_id ? ` <span class="mono" style="color:var(--ink-faint)">(${escapeHtml(r.employee_id)})</span>` : ""}</td>
+          <td>${plCode2dBadgeHtml(r.code2d_result)}</td>
+          <td>${escapeHtml(r.condition_summary)}</td>
+        </tr>`).join("");
+}
+
+function plRenderPager() {
+  const info = document.getElementById("pl-page-info");
+  const prevBtn = document.getElementById("pl-prev-btn");
+  const nextBtn = document.getElementById("pl-next-btn");
+  if (!info || !prevBtn || !nextBtn) return;
+
+  if (PL.total === 0) {
+    info.textContent = "";
+    prevBtn.disabled = true;
+    nextBtn.disabled = true;
+    return;
+  }
+
+  const lastPage = Math.max(1, Math.ceil(PL.total / PL.pageSize));
+  info.textContent = `Page ${PL.page} of ${lastPage} · ${PL.rows.length} of ${PL.total} rows`;
+  prevBtn.disabled = PL.page <= 1;
+  nextBtn.disabled = PL.page >= lastPage;
+}
+
+function plSetView(view) {
+  PL.view = view;
+  PL.page = 1;
+  document.querySelectorAll(".pl-view-btn").forEach((b) => {
+    b.classList.toggle("active", b.dataset.view === view);
+  });
+  plRenderHead();
+  plFetchAndRender();
+}
+
+async function plFetchAndRender() {
+  const tbody = document.getElementById("pl-table-body");
+  if (!tbody) return;
+  tbody.innerHTML = `<tr><td colspan="${plColspan()}" class="eq-queue-empty">Loading…</td></tr>`;
+
+  const endpoint = PL.view === "summary" ? "summary" : "raw";
+  const params = new URLSearchParams({
+    month: PL.month,
+    page: PL.page,
+    pageSize: PL.pageSize,
+  });
+
+  try {
+    const res = await apiFetch(`/api/production-log/${endpoint}?${params.toString()}`);
+    if (!res.ok) throw new Error("failed");
+    const data = await res.json();
+    PL.rows = data.rows || [];
+    PL.total = data.total || 0;
+
+    const note = document.getElementById("pl-summary-note");
+    if (note) {
+      const unitLabel = PL.view === "summary"
+        ? `group${PL.total === 1 ? "" : "s"}`
+        : `entr${PL.total === 1 ? "y" : "ies"}`;
+      note.textContent = `${data.month} · ${PL.total} ${unitLabel}`;
+    }
+
+    plRenderRows();
+    plRenderPager();
   } catch (err) {
-    tbody.innerHTML = `<tr><td colspan="11" class="eq-queue-empty">Could not load production log.</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="${plColspan()}" class="eq-queue-empty">Could not load production log.</td></tr>`;
+    PL.total = 0;
+    plRenderPager();
   }
 }
 
-PAGE_INIT.production_log = function () {
-  PL.month = plCurrentMonthStr();
-  document.getElementById("pl-month-input").value = PL.month;
+/* ---- Export modal: pick type + independent date range, fetch ALL
+   matching rows (unpaginated), build + download CSV client-side ---- */
 
-  plFetchAndRender();
-
-  document.getElementById("pl-search-btn").addEventListener("click", () => {
-    const value = document.getElementById("pl-month-input").value;
-    PL.month = value || plCurrentMonthStr();
-    plFetchAndRender();
-  });
-  document.getElementById("pl-refresh-btn").addEventListener("click", plFetchAndRender);
-  document.getElementById("pl-export-btn").addEventListener("click", plDownloadCsv); // NEW
-};
-
-// Escapes a value for a CSV cell: wraps in quotes and doubles any
-// internal quotes if the value contains a comma, quote, or newline.
 function plCsvCell(value) {
   const str = value === null || value === undefined ? "" : String(value);
   if (/[",\n]/.test(str)) {
@@ -4587,22 +4781,15 @@ function plCsvCell(value) {
   return str;
 }
 
-function plDownloadCsv() {
-  if (!PL.rows || PL.rows.length === 0) {
-    showToast("Nothing to export for this month.");
-    return;
-  }
-
+function plBuildSummaryCsv(rows) {
   const headers = [
     "Part Name", "Job No.", "Lot No.", "Condition",
     "Setting By", "Mass Production By",
     "Count Setting", "Count Mass", "Total Count",
     "Start", "End",
   ];
-
   const lines = [headers.map(plCsvCell).join(",")];
-
-  PL.rows.forEach((r) => {
+  rows.forEach((r) => {
     lines.push([
       plCsvCell(r.model),
       plCsvCell(padJob(r.job_no)),
@@ -4617,17 +4804,156 @@ function plDownloadCsv() {
       plCsvCell(plFormatDate(r.end_at)),
     ].join(","));
   });
+  return lines.join("\r\n");
+}
 
-  // Leading BOM so Excel opens UTF-8 (Thai model/condition names) correctly.
-  const csvContent = "\uFEFF" + lines.join("\r\n");
+function plBuildRawCsv(rows) {
+  const headers = [
+    "When", "Part Name", "Job No.", "Lot No.", "Pallet",
+    "Type", "By", "Employee ID", "2D Code Result", "Condition",
+  ];
+  const lines = [headers.map(plCsvCell).join(",")];
+  rows.forEach((r) => {
+    lines.push([
+      plCsvCell(plFormatDate(r.marked_at)),
+      plCsvCell(r.model),
+      plCsvCell(padJob(r.job_no)),
+      plCsvCell(r.lot_no || ""),
+      plCsvCell(r.pallet_no || ""),
+      plCsvCell(r.type === "mass" ? "Mass" : "Setting"),
+      plCsvCell(r.user_name),
+      plCsvCell(r.employee_id || ""),
+      plCsvCell(PL_CODE2D_LABELS[r.code2d_result] || (r.code2d_result || "")),
+      plCsvCell(r.condition_summary),
+    ].join(","));
+  });
+  return lines.join("\r\n");
+}
+
+function plDownloadCsvContent(content, filenamePart) {
+  const csvContent = "\uFEFF" + content; // BOM so Excel opens UTF-8 (Thai text) correctly
   const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
   const url = URL.createObjectURL(blob);
-
   const a = document.createElement("a");
   a.href = url;
-  a.download = `production_log_${PL.month}.csv`;
+  a.download = `production_log_${filenamePart}.csv`;
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
 }
+
+function plMonthRangeDefaults(monthStr) {
+  const [y, m] = monthStr.split("-").map(Number);
+  const from = `${y}-${String(m).padStart(2, "0")}-01`;
+  const lastDay = new Date(y, m, 0).getDate(); // day 0 of next month = last day of this month
+  const to = `${y}-${String(m).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
+  return { from, to };
+}
+
+function plOpenExportModal() {
+  const alertBox = document.getElementById("pl-export-alert");
+  if (alertBox) alertBox.innerHTML = "";
+  document.getElementById("pl-export-type").value = PL.view;
+  const { from, to } = plMonthRangeDefaults(PL.month);
+  document.getElementById("pl-export-from").value = from;
+  document.getElementById("pl-export-to").value = to;
+  document.getElementById("pl-export-backdrop").classList.add("open");
+}
+
+function plCloseExportModal() {
+  document.getElementById("pl-export-backdrop").classList.remove("open");
+}
+
+async function plConfirmExport() {
+  const alertBox = document.getElementById("pl-export-alert");
+  alertBox.innerHTML = "";
+
+  const type = document.getElementById("pl-export-type").value;
+  const from = document.getElementById("pl-export-from").value;
+  const to = document.getElementById("pl-export-to").value;
+
+  if (from && to && from > to) {
+    alertBox.innerHTML = `<div class="alert alert-error">"From" date must be before or equal to "To" date.</div>`;
+    return;
+  }
+
+  const btn = document.getElementById("pl-export-confirm-btn");
+  btn.disabled = true;
+  btn.textContent = "Preparing…";
+
+  try {
+    const params = new URLSearchParams({ all: "1" });
+    if (from) params.set("from", from);
+    if (to) params.set("to", to);
+
+    const res = await apiFetch(`/api/production-log/${type}?${params.toString()}`);
+    const data = await res.json();
+    if (!res.ok) {
+      alertBox.innerHTML = `<div class="alert alert-error">${escapeHtml(data.error || "Export failed.")}</div>`;
+      return;
+    }
+
+    const rows = data.rows || [];
+    if (rows.length === 0) {
+      alertBox.innerHTML = `<div class="alert alert-error">No data found for that range.</div>`;
+      return;
+    }
+
+    const csv = type === "summary" ? plBuildSummaryCsv(rows) : plBuildRawCsv(rows);
+    const rangeLabel = `${from || "start"}_to_${to || "now"}`;
+    plDownloadCsvContent(csv, `${type}_${rangeLabel}`);
+
+    showToast(`Exported ${rows.length} row${rows.length === 1 ? "" : "s"}.`, "success");
+    plCloseExportModal();
+  } catch (err) {
+    alertBox.innerHTML = `<div class="alert alert-error">Could not reach the server.</div>`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Download CSV";
+  }
+}
+
+PAGE_INIT.production_log = function () {
+  PL.view = "summary";
+  PL.month = plCurrentMonthStr();
+  PL.page = 1;
+  PL.total = 0;
+  document.getElementById("pl-month-input").value = PL.month;
+
+  plRenderHead();
+  plFetchAndRender();
+
+  document.querySelectorAll(".pl-view-btn").forEach((btn) => {
+    btn.addEventListener("click", () => plSetView(btn.dataset.view));
+  });
+
+  document.getElementById("pl-search-btn").addEventListener("click", () => {
+    const value = document.getElementById("pl-month-input").value;
+    PL.month = value || plCurrentMonthStr();
+    PL.page = 1;
+    plFetchAndRender();
+  });
+  document.getElementById("pl-refresh-btn").addEventListener("click", plFetchAndRender);
+
+  document.getElementById("pl-prev-btn").addEventListener("click", () => {
+    if (PL.page > 1) {
+      PL.page -= 1;
+      plFetchAndRender();
+    }
+  });
+  document.getElementById("pl-next-btn").addEventListener("click", () => {
+    const lastPage = Math.max(1, Math.ceil(PL.total / PL.pageSize));
+    if (PL.page < lastPage) {
+      PL.page += 1;
+      plFetchAndRender();
+    }
+  });
+
+  document.getElementById("pl-export-btn").addEventListener("click", plOpenExportModal);
+  document.getElementById("pl-export-confirm-btn").addEventListener("click", plConfirmExport);
+  document.getElementById("pl-export-cancel-btn").addEventListener("click", plCloseExportModal);
+  document.getElementById("pl-export-backdrop").addEventListener("click", (e) => {
+    if (e.target.id === "pl-export-backdrop") plCloseExportModal();
+  });
+};

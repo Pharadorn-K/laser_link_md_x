@@ -6,12 +6,13 @@
 //   GET    /goal              -> any authenticated user (read progress)
 //   POST   /goal              -> admin/engineer/machine_controller/operator
 //   DELETE /goal              -> admin/engineer/machine_controller/operator
-//   GET    /my-summary        -> any authenticated user (own stats/recent/trend)
-//   POST   /log              -> any authenticated user
-//   POST   /reset            -> admin/engineer/machine_controller only
+//   GET    /my-summary        -> any authenticated user (own stats/trend/model counts)
+//   GET    /my-recent         -> any authenticated user (own recent activity, paginated)
+//   POST   /log               -> any authenticated user
+//   POST   /reset             -> admin/engineer/machine_controller only
 //   GET    /setting-summary   -> admin/engineer/machine_controller only
 //   POST   /complete-setting  -> admin/engineer/machine_controller only
-//   POST   /continue-lot      -> admin/engineer/machine_controller/operator (NEW)
+//   POST   /continue-lot      -> admin/engineer/machine_controller/operator
 // ============================================================
 const express = require('express');
 const router = express.Router();
@@ -27,10 +28,11 @@ router.get('/goal', requireAuth, ctrl.getGoal);
 router.post('/goal', goalGuard, ctrl.setGoal);
 router.delete('/goal', goalGuard, ctrl.deleteGoal);
 router.get('/my-summary', requireAuth, ctrl.getMySummary);
+router.get('/my-recent', requireAuth, ctrl.getMyRecent); // NEW
 router.post('/log', requireAuth, ctrl.logProduction);
 router.post('/reset', settingGuard, ctrl.resetCount);
 router.get('/setting-summary', settingGuard, ctrl.getSettingSummary);
 router.post('/complete-setting', settingGuard, ctrl.completeSetting);
-router.post('/continue-lot', goalGuard, ctrl.continueLot); // NEW
+router.post('/continue-lot', goalGuard, ctrl.continueLot);
 
 module.exports = router;

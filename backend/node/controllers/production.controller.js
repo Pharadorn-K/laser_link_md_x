@@ -472,8 +472,15 @@ async function deleteGoal(req, res) {
 }
 
 // ---------------- GET /api/production/my-summary ----------------
+// Stats (today/week/month/all-time), 30-day trend, and a Model Count
+// breakdown — total parts per model, filtered to the type that
+// matches this user's role (operator -> mass, everyone else ->
+// setting), since those are the counts that actually represent
+// "what this account produced."
 async function getMySummary(req, res) {
   const userId = req.user.id;
+  const modelCountType = req.user.role === 'operator' ? 'mass' : 'setting';
+
   try {
     const [statRows] = await pool.query(
       `SELECT
@@ -502,15 +509,6 @@ async function getMySummary(req, res) {
       };
     });
 
-    const [recentRows] = await pool.query(
-      `SELECT model, job_no, lot_no, pallet_no, type, marked_at
-         FROM production_log
-        WHERE user_id = ?
-        ORDER BY marked_at DESC
-        LIMIT 20`,
-      [userId]
-    );
-
     const [trendRows] = await pool.query(
       `SELECT DATE(marked_at) AS d, type, COUNT(*) AS cnt
          FROM production_log
@@ -537,9 +535,67 @@ async function getMySummary(req, res) {
       trend.push({ date: key, mass: bucket.mass, setting: bucket.setting });
     }
 
+    // Model Count — total parts per model for the type matching this
+    // user's role. e.g. an operator sees how many of each model they
+    // mass-produced; an engineer/admin/machine_controller sees how
+    // many of each model they set up.
+    const [modelRows] = await pool.query(
+      `SELECT model, COUNT(*) AS cnt
+         FROM production_log
+        WHERE user_id = ? AND type = ?
+        GROUP BY model
+        ORDER BY cnt DESC
+        LIMIT 25`,
+      [userId, modelCountType]
+    );
+    const model_counts = modelRows.map((r) => ({ model: r.model, count: Number(r.cnt) || 0 }));
+
     return res.json({
       stats,
-      recent: recentRows.map((r) => ({
+      trend,
+      model_counts,
+      model_count_type: modelCountType, // so the UI can label the chart correctly
+    });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: 'Server error fetching production summary.' });
+  }
+}
+
+// ---------------- GET /api/production/my-recent?page=&pageSize= ----------------
+// Paginated recent-activity list (own account only), 10/page by
+// default. Split out from my-summary so paging doesn't require
+// refetching stats/trend/model counts every time.
+const MY_RECENT_DEFAULT_PAGE_SIZE = 10;
+const MY_RECENT_MAX_PAGE_SIZE = 100;
+
+async function getMyRecent(req, res) {
+  const userId = req.user.id;
+  const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+  const pageSize = Math.min(
+    MY_RECENT_MAX_PAGE_SIZE,
+    Math.max(1, parseInt(req.query.pageSize, 10) || MY_RECENT_DEFAULT_PAGE_SIZE)
+  );
+  const offset = (page - 1) * pageSize;
+
+  try {
+    const [countRows] = await pool.query(
+      'SELECT COUNT(*) AS total FROM production_log WHERE user_id = ?',
+      [userId]
+    );
+    const total = countRows[0].total;
+
+    const [rows] = await pool.query(
+      `SELECT model, job_no, lot_no, pallet_no, type, marked_at
+         FROM production_log
+        WHERE user_id = ?
+        ORDER BY marked_at DESC
+        LIMIT ? OFFSET ?`,
+      [userId, pageSize, offset]
+    );
+
+    return res.json({
+      rows: rows.map((r) => ({
         model: r.model,
         job_no: r.job_no,
         lot_no: r.lot_no,
@@ -547,11 +603,13 @@ async function getMySummary(req, res) {
         type: r.type,
         marked_at: r.marked_at,
       })),
-      trend,
+      total,
+      page,
+      pageSize,
     });
   } catch (e) {
     console.error(e);
-    return res.status(500).json({ error: 'Server error fetching production summary.' });
+    return res.status(500).json({ error: 'Server error fetching recent activity.' });
   }
 }
 
@@ -567,4 +625,5 @@ module.exports = {
   setGoal,
   deleteGoal,
   getMySummary,
+  getMyRecent, // NEW
 };

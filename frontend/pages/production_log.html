@@ -5,6 +5,10 @@
      Logic lives in dashboard.js, section "FOR PRODUCTION LOG PAGE"
      ============================================================ -->
 <div class="pl-toolbar">
+  <div class="pl-view-switch" id="pl-view-switch">
+    <button type="button" class="pl-view-btn active" data-view="summary">Summary</button>
+    <button type="button" class="pl-view-btn" data-view="raw">Detail (raw)</button>
+  </div>
   <div class="field" style="margin-bottom:0; min-width:180px;">
     <label for="pl-month-input">Month</label>
     <input type="month" id="pl-month-input" />
@@ -18,24 +22,49 @@
 <div class="card">
   <div class="pl-table-wrap">
     <table class="data-table pl-table">
-      <thead>
-        <tr>
-          <th>Part Name</th>
-          <th>Job No.</th>
-          <th>Lot No.</th>
-          <th>Condition</th>
-          <th>Setting By</th>
-          <th>Mass Production By</th>
-          <th>Count Setting</th>
-          <th>Count Mass</th>
-          <th>Total Count</th>
-          <th>Start</th>
-          <th>End</th>
-        </tr>
-      </thead>
+      <thead id="pl-table-head"><!-- filled by JS depending on view --></thead>
       <tbody id="pl-table-body">
         <tr><td colspan="11" class="eq-queue-empty">Loading…</td></tr>
       </tbody>
     </table>
+  </div>
+  <div class="pl-pager">
+    <button class="btn btn-sm" id="pl-prev-btn">&larr; Prev</button>
+    <span id="pl-page-info" style="font-size:12px;color:var(--ink-soft);"></span>
+    <button class="btn btn-sm" id="pl-next-btn">Next &rarr;</button>
+  </div>
+</div>
+
+<!-- ================= Export modal ================= -->
+<div class="ms-modal-backdrop" id="pl-export-backdrop">
+  <div class="ms-modal ms-modal-sm">
+    <div class="ms-modal-title">Export as CSV</div>
+
+    <div class="field">
+      <label for="pl-export-type">Data type</label>
+      <select id="pl-export-type">
+        <option value="summary">Summary (grouped)</option>
+        <option value="raw">Detail (raw — includes 2D code result per count)</option>
+      </select>
+    </div>
+
+    <div class="grid-2">
+      <div class="field">
+        <label for="pl-export-from">From</label>
+        <input type="date" id="pl-export-from" />
+      </div>
+      <div class="field">
+        <label for="pl-export-to">To</label>
+        <input type="date" id="pl-export-to" />
+      </div>
+    </div>
+    <p class="field-hint" style="margin-top:-6px;">Both dates are inclusive. Leave a date blank for an open-ended range.</p>
+
+    <div id="pl-export-alert"></div>
+
+    <div style="display:flex; gap:8px; margin-top:14px;">
+      <button type="button" class="btn btn-primary" id="pl-export-confirm-btn">Download CSV</button>
+      <button type="button" class="btn" id="pl-export-cancel-btn">Cancel</button>
+    </div>
   </div>
 </div>
