@@ -508,8 +508,9 @@ const MON_STEPS = [
 const MON = {
   counts: { Pallet1: 0, Pallet2: 0 },
   timings: { Pallet1: null, Pallet2: null },
-  goals: { Pallet1: null, Pallet2: null },       // NEW
-  goalAlerted: {},                                // NEW
+  goals: { Pallet1: null, Pallet2: null },
+  goalAlerted: {},
+  nextStepPending: {},                            // NEW — tracks alertKey that already triggered the blocking Next Step modal
   lastMarked: { Pallet1: null, Pallet2: null },
   running: false,
   timer: null,
@@ -523,7 +524,7 @@ const MON_AUTO = {
   palletCycleIndex: 0,
 };
 
-const MON_GOAL_ROLES = ["admin", "engineer", "machine_controller"];
+const MON_GOAL_ROLES = ["admin", "engineer", "machine_controller", "operator"];
 
 function monGoalProgressPct(current, goal) {
   if (!goal) return 0;
@@ -644,10 +645,290 @@ async function monRefreshGoal(pallet, job) {
       showToast(`Target reached for "${job.model}" (Lot ${job.lot_no}): ${data.current_count}/${data.goal_count} pcs.`, "success", 4000);
     } else if (!data.reached) {
       MON.goalAlerted[alertKey] = false; // allow re-alert if target is raised later
+      MON.nextStepPending[alertKey] = false; // NEW — allow the blocking modal again once the target is raised (or lowered again) past current count
+    }
+
+    // NEW — operators get a blocking "Next Step" prompt instead of just a toast.
+    // Fires whenever a goal transitions into "reached" for this pallet/model/lot,
+    // whether that's from normal production or from someone lowering the goal
+    // (from this box, or from the Next Step > Update Goal flow) to <= current count.
+    if (data.reached && CURRENT_USER && CURRENT_USER.role === "operator" && !MON.nextStepPending[alertKey]) {
+      MON.nextStepPending[alertKey] = true;
+      monOpenNextStepModal(pallet, job, data, alertKey);
     }
   } catch (err) {
     // keep last known value on failure
   }
+}
+
+/* ============================================================
+   NEXT STEP MODAL — operator hits the production goal.
+   Blocking modal: no backdrop-close, no cancel button. Three paths:
+     1. Continuous   — edit conditions on BOTH pallets, extend the goal
+     2. Update Goal  — correct a wrong target
+     3. Change Model — operator signs out; Admin/Engineer/Machine
+                        Controller sets up the next model
+   ============================================================ */
+const NEXTSTEP = { pallet: null, job: null, data: null, alertKey: null };
+
+function monOpenNextStepModal(pallet, job, data, alertKey) {
+  const backdrop = document.getElementById("mon-nextstep-backdrop");
+  if (!backdrop) return;
+  if (backdrop.classList.contains("open")) return; // already showing (e.g. other pallet hit the same shared goal)
+  NEXTSTEP.pallet = pallet;
+  NEXTSTEP.job = job;
+  NEXTSTEP.data = data;
+  NEXTSTEP.alertKey = alertKey;
+  monRenderNextStepChoices();
+  backdrop.classList.add("open");
+}
+
+function monCloseNextStepModal() {
+  const backdrop = document.getElementById("mon-nextstep-backdrop");
+  if (backdrop) backdrop.classList.remove("open");
+  NEXTSTEP.pallet = null;
+  NEXTSTEP.job = null;
+  NEXTSTEP.data = null;
+  NEXTSTEP.alertKey = null;
+}
+
+function monRenderNextStepChoices() {
+  const { job, data } = NEXTSTEP;
+  document.getElementById("mon-nextstep-body").innerHTML = `
+    <div class="alert alert-success" style="margin-top:10px;">
+      "${escapeHtml(job.model)}" (Lot ${escapeHtml(job.lot_no)}) reached its target:
+      ${data.current_count} / ${data.goal_count} pcs.
+    </div>
+    <div class="ns-choice-grid">
+      <button type="button" class="ns-choice-btn" id="ns-choice-continuous">
+        <i class="fa-solid fa-arrows-rotate"></i>
+        Continuous
+        <span class="ns-choice-desc">Keep running this model — update conditions and extend the target.</span>
+      </button>
+      <button type="button" class="ns-choice-btn" id="ns-choice-updategoal">
+        <i class="fa-solid fa-bullseye"></i>
+        Update Goal
+        <span class="ns-choice-desc">The target was set wrong — correct it and keep going.</span>
+      </button>
+      <button type="button" class="ns-choice-btn" id="ns-choice-changemodel">
+        <i class="fa-solid fa-right-from-bracket"></i>
+        Change Model
+        <span class="ns-choice-desc">Done with this model. Sign out for an Admin, Engineer, or Machine Controller to set up the next one.</span>
+      </button>
+    </div>
+  `;
+  document.getElementById("ns-choice-continuous").addEventListener("click", monRenderNextStepContinuous);
+  document.getElementById("ns-choice-updategoal").addEventListener("click", monRenderNextStepUpdateGoal);
+  document.getElementById("ns-choice-changemodel").addEventListener("click", monRenderNextStepChangeModel);
+}
+
+/* ---- 1. Continuous: edit conditions for BOTH pallets, then extend the goal ---- */
+function monNextStepConditionFieldsHtml(pallet, job) {
+  if (!job) return `<div class="eq-queue-empty">No model selected for ${pallet}.</div>`;
+  const rows = [];
+  if (job.check_lot_no) {
+    rows.push(`
+      <div class="field">
+        <label for="ns-lotno-${pallet}">Lot No.</label>
+        <input type="text" id="ns-lotno-${pallet}" value="${escapeHtml(job.lot_no || "")}" />
+      </div>`);
+  }
+  (job.conditions || []).forEach((it) => {
+    rows.push(`
+      <div class="field">
+        <label for="ns-cond-${pallet}-${it.id}">${escapeHtml(it.condition_name)} <span style="text-transform:none;font-weight:400;">(BLK ${padBlk(it.block_no)})</span></label>
+        <input type="text" id="ns-cond-${pallet}-${it.id}" data-item-id="${it.id}" data-pallet="${pallet}" value="${escapeHtml(it.condition_value)}" />
+      </div>`);
+  });
+  if (!rows.length) rows.push(`<div class="ms-empty">Nothing to edit for this model.</div>`);
+  return rows.join("");
+}
+
+function monRenderNextStepContinuous() {
+  const p1Job = getSelectedJob("Pallet1");
+  const p2Job = getSelectedJob("Pallet2");
+  const { data } = NEXTSTEP;
+  document.getElementById("mon-nextstep-body").innerHTML = `
+    <div class="ns-back-row"><button type="button" class="btn btn-sm btn-ghost" id="ns-back-btn">&larr; Back</button></div>
+    <div id="ns-alert-box"></div>
+    <div class="ns-pallet-block">
+      <div class="card-title">Pallet 1</div>
+      ${monNextStepConditionFieldsHtml("Pallet1", p1Job)}
+    </div>
+    <div class="ns-pallet-block">
+      <div class="card-title">Pallet 2</div>
+      ${monNextStepConditionFieldsHtml("Pallet2", p2Job)}
+    </div>
+    <div class="field">
+      <label for="ns-extend-qty">Extend target by (pcs)</label>
+      <input type="number" min="1" id="ns-extend-qty" value="150" />
+      <p class="field-hint">New target will be current count (${data.current_count}) + this amount.</p>
+    </div>
+    <div style="display:flex; gap:8px; margin-top:10px;">
+      <button type="button" class="btn btn-primary" id="ns-continuous-ok">OK</button>
+    </div>
+  `;
+  document.getElementById("ns-back-btn").addEventListener("click", monRenderNextStepChoices);
+  document.getElementById("ns-continuous-ok").addEventListener("click", monSubmitNextStepContinuous);
+}
+
+async function monSubmitNextStepContinuous() {
+  const alertBox = document.getElementById("ns-alert-box");
+  alertBox.innerHTML = "";
+
+  const extendInput = document.getElementById("ns-extend-qty");
+  const extendBy = extendInput ? parseInt(extendInput.value, 10) : NaN;
+  if (Number.isNaN(extendBy) || extendBy <= 0) {
+    alertBox.innerHTML = `<div class="alert alert-error">Enter a valid extend quantity greater than 0.</div>`;
+    return;
+  }
+
+  const updates = [];
+  ["Pallet1", "Pallet2"].forEach((pallet) => {
+    const job = getSelectedJob(pallet);
+    if (!job) return;
+    const lotInput = document.getElementById(`ns-lotno-${pallet}`);
+    if (lotInput) {
+      const newValue = lotInput.value.trim();
+      if (!newValue) { updates.push({ error: `${pallet}: Lot No. cannot be empty.` }); return; }
+      if (newValue !== (job.lot_no || "")) {
+        updates.push({ url: `/api/models/${job.id}/lotno`, body: { lot_no: newValue }, label: `${pallet} Lot No.` });
+      }
+    }
+    document.querySelectorAll(`input[data-pallet="${pallet}"][data-item-id]`).forEach((input) => {
+      const itemId = input.dataset.itemId;
+      const item = (job.conditions || []).find((i) => String(i.id) === String(itemId));
+      if (!item) return;
+      const newValue = input.value.trim();
+      if (!newValue) { updates.push({ error: `${pallet}: "${item.condition_name}" cannot be empty.` }); return; }
+      if (newValue !== item.condition_value) {
+        updates.push({ url: `/api/models/${job.id}/conditions/${itemId}`, body: { condition_value: newValue }, label: `${pallet} ${item.condition_name}` });
+      }
+    });
+  });
+
+  const preErrors = updates.filter((u) => u.error);
+  if (preErrors.length) {
+    alertBox.innerHTML = `<div class="alert alert-error">${preErrors.map((u) => escapeHtml(u.error)).join("<br>")}</div>`;
+    return;
+  }
+
+  const okBtn = document.getElementById("ns-continuous-ok");
+  if (okBtn) okBtn.disabled = true;
+
+  const failed = [];
+  for (const u of updates) {
+    try {
+      const res = await apiFetch(u.url, { method: "PATCH", body: JSON.stringify(u.body) });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        failed.push(`${u.label}: ${d.error || "update failed"}`);
+      }
+    } catch (err) {
+      failed.push(`${u.label}: could not reach the server`);
+    }
+  }
+
+  // Extend the shared goal so the modal doesn't immediately re-trigger.
+  const { job, data } = NEXTSTEP;
+  const newGoal = data.current_count + extendBy;
+  try {
+    const res = await apiFetch("/api/production/goal", {
+      method: "POST",
+      body: JSON.stringify({ model: job.model, lot_no: job.lot_no, goal_count: newGoal }),
+    });
+    if (!res.ok) {
+      const d = await res.json().catch(() => ({}));
+      failed.push(`Goal: ${d.error || "could not extend target"}`);
+    }
+  } catch (err) {
+    failed.push("Goal: could not reach the server");
+  }
+
+  if (okBtn) okBtn.disabled = false;
+
+  if (failed.length) {
+    alertBox.innerHTML = `<div class="alert alert-error">${failed.map(escapeHtml).join("<br>")}</div>`;
+    return;
+  }
+
+  await monRefetchJob("Pallet1");
+  await monRefetchJob("Pallet2");
+  monCloseNextStepModal();
+  showToast(`Continuing — new target ${newGoal} pcs.`, "success");
+  monRefreshGoals();
+}
+
+/* ---- 2. Update Goal: correct a wrong target ---- */
+function monRenderNextStepUpdateGoal() {
+  const { job, data } = NEXTSTEP;
+  document.getElementById("mon-nextstep-body").innerHTML = `
+    <div class="ns-back-row"><button type="button" class="btn btn-sm btn-ghost" id="ns-back-btn">&larr; Back</button></div>
+    <div id="ns-alert-box"></div>
+    <p style="font-size:13px;color:var(--ink-soft);">Current count: <strong>${data.current_count}</strong> pcs for "${escapeHtml(job.model)}" (Lot ${escapeHtml(job.lot_no)}).</p>
+    <div class="field">
+      <label for="ns-newgoal">New target (pcs)</label>
+      <input type="number" min="1" id="ns-newgoal" value="${data.goal_count || data.current_count}" />
+    </div>
+    <div style="display:flex; gap:8px; margin-top:10px;">
+      <button type="button" class="btn btn-primary" id="ns-updategoal-ok">OK</button>
+    </div>
+  `;
+  document.getElementById("ns-back-btn").addEventListener("click", monRenderNextStepChoices);
+  document.getElementById("ns-updategoal-ok").addEventListener("click", monSubmitNextStepUpdateGoal);
+}
+
+async function monSubmitNextStepUpdateGoal() {
+  const alertBox = document.getElementById("ns-alert-box");
+  alertBox.innerHTML = "";
+  const input = document.getElementById("ns-newgoal");
+  const value = input ? parseInt(input.value, 10) : NaN;
+  if (Number.isNaN(value) || value <= 0) {
+    alertBox.innerHTML = `<div class="alert alert-error">Enter a target greater than 0.</div>`;
+    return;
+  }
+  const { job } = NEXTSTEP;
+  const okBtn = document.getElementById("ns-updategoal-ok");
+  if (okBtn) okBtn.disabled = true;
+  try {
+    const res = await apiFetch("/api/production/goal", {
+      method: "POST",
+      body: JSON.stringify({ model: job.model, lot_no: job.lot_no, goal_count: value }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      alertBox.innerHTML = `<div class="alert alert-error">${escapeHtml(data.error || "Could not update target.")}</div>`;
+      if (okBtn) okBtn.disabled = false;
+      return;
+    }
+  } catch (err) {
+    alertBox.innerHTML = `<div class="alert alert-error">Could not reach the server.</div>`;
+    if (okBtn) okBtn.disabled = false;
+    return;
+  }
+  monCloseNextStepModal();
+  showToast("Target updated.", "success");
+  monRefreshGoals();
+}
+
+/* ---- 3. Change Model: operator signs out ---- */
+function monRenderNextStepChangeModel() {
+  const { job } = NEXTSTEP;
+  document.getElementById("mon-nextstep-body").innerHTML = `
+    <div class="ns-back-row"><button type="button" class="btn btn-sm btn-ghost" id="ns-back-btn">&larr; Back</button></div>
+    <p style="font-size:13.5px;color:var(--ink);">
+      "${escapeHtml(job.model)}" (Lot ${escapeHtml(job.lot_no)}) is done. You'll be signed out now —
+      an Admin, Engineer, or Machine Controller needs to set up the next model on Model Setting.
+    </p>
+    <div style="display:flex; gap:8px; margin-top:10px;">
+      <button type="button" class="btn btn-primary" id="ns-changemodel-ok">Sign Out</button>
+    </div>
+  `;
+  document.getElementById("ns-back-btn").addEventListener("click", monRenderNextStepChoices);
+  document.getElementById("ns-changemodel-ok").addEventListener("click", () => {
+    showToast("Signing out…", "success", 1200);
+    setTimeout(performSignOut, 600);
+  });
 }
 
 // Fire-and-forget: refreshes the Production Goal block for both pallets.
@@ -1548,6 +1829,7 @@ PAGE_TEARDOWN.monitor = function () {
   MON.running = false;
   MON_AUTO.running = false;
   clearTimeout(MON.timer);
+  monCloseNextStepModal(); // NEW
 };
 
 /* ============================================================

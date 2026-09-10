@@ -529,6 +529,45 @@ table.data-table tr:last-child td { border-bottom: none; }
 }
 .mon-setting-count-row input { width: 100px; }
 
+/* ---------------------------------------------------------
+   FOR MONITOR PAGE — Next Step modal (operator, goal reached)
+   --------------------------------------------------------- */
+.ns-choice-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+  margin: 14px 0 4px;
+}
+.ns-choice-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 18px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: #fff;
+  font-weight: 700;
+  font-size: 13px;
+  color: var(--ink);
+  text-align: center;
+}
+.ns-choice-btn i { font-size: 22px; color: var(--accent-strong); }
+.ns-choice-btn:hover { border-color: var(--accent-strong); background: var(--accent-soft); }
+.ns-choice-desc { font-size: 11.5px; color: var(--ink-faint); font-weight: 400; }
+
+.ns-back-row { margin-bottom: 10px; }
+.ns-pallet-block {
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  margin-bottom: 12px;
+}
+.ns-pallet-block .card-title { margin-top: 0; }
+
+@media (max-width: 700px) {
+  .ns-choice-grid { grid-template-columns: 1fr; }
+}
 
 
 /* ---------------------------------------------------------
