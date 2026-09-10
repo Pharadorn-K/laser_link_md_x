@@ -11,6 +11,7 @@
 //   POST   /reset            -> admin/engineer/machine_controller only
 //   GET    /setting-summary   -> admin/engineer/machine_controller only
 //   POST   /complete-setting  -> admin/engineer/machine_controller only
+//   POST   /continue-lot      -> admin/engineer/machine_controller/operator (NEW)
 // ============================================================
 const express = require('express');
 const router = express.Router();
@@ -30,5 +31,6 @@ router.post('/log', requireAuth, ctrl.logProduction);
 router.post('/reset', settingGuard, ctrl.resetCount);
 router.get('/setting-summary', settingGuard, ctrl.getSettingSummary);
 router.post('/complete-setting', settingGuard, ctrl.completeSetting);
+router.post('/continue-lot', goalGuard, ctrl.continueLot); // NEW
 
 module.exports = router;

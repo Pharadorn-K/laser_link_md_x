@@ -9,12 +9,21 @@
 //   - "Complete Setting"     -> base_count = <admin-entered number>,
 //                                reason='setting_complete'
 //     Both just move the reset stamp forward; history is preserved.
+//   - "Continue Lot" (NEW)   -> carries the 'setting_complete' status
+//                                forward onto a NEW lot_no, but ONLY if
+//                                the OLD lot_no already had it. Used by
+//                                the "Continuous" Next-Step flow so
+//                                operators don't get blocked re-running
+//                                Complete Setting for a lot swap that
+//                                isn't a real new setup.
 //   - production_goal holds a shared target per (model, lot_no) — this
 //     lets AUTO1-2 (same model, two different job_no's on Pallet1 /
 //     Pallet2) share ONE combined target instead of one per pallet.
-//   - Mass-production logging (role = operator) is gated: it is
-//     refused until "Complete Setting" has been run at least once for
-//     that (model_condition_id, lot_no) — see isSettingComplete().
+//   - Mass-production logging (role = operator) is gated on TWO things:
+//       1. isSettingComplete() for (model_condition_id, lot_no)
+//       2. a production_goal row with a non-null goal_count exists for
+//          (model, lot_no) — operators must not be able to start mass
+//          production with no target set.
 // ============================================================
 const pool = require('../config/db');
 const systemLog = require('../services/systemLog.service');
@@ -55,6 +64,16 @@ async function isSettingComplete(modelConditionId, lotNo) {
     [modelConditionId, lotNo]
   );
   return rows.length > 0;
+}
+
+// True once a non-null target has been set for (model, lot_no). Used to
+// block operators from starting mass production with no goal defined.
+async function hasGoalSet(model, lotNo) {
+  const [rows] = await pool.query(
+    'SELECT goal_count FROM production_goal WHERE model = ? AND lot_no = ?',
+    [model, lotNo]
+  );
+  return rows.length > 0 && rows[0].goal_count !== null && rows[0].goal_count !== undefined;
 }
 
 // ---------------- GET /api/production/timings?model_condition_id= ----------------
@@ -144,6 +163,15 @@ async function logProduction(req, res) {
       if (!complete) {
         return res.status(409).json({
           error: 'Setting has not been completed for this model/lot yet. Ask an Admin, Engineer, or Machine Controller to run "Complete Setting" on the Monitor page first.',
+        });
+      }
+
+      // NEW — Gate: mass production may not start until a production
+      // target (goal) has been set for this model/lot.
+      const goalSet = await hasGoalSet(model.model, model.lot_no);
+      if (!goalSet) {
+        return res.status(409).json({
+          error: 'No production target has been set for this model/lot yet. Set a target on the Monitor page before starting mass production.',
         });
       }
     }
@@ -290,6 +318,58 @@ async function completeSetting(req, res) {
   } catch (e) {
     console.error(e);
     return res.status(500).json({ error: 'Server error completing setting.' });
+  }
+}
+
+// ---------------- POST /api/production/continue-lot ----------------
+// Used by the Monitor "Next Step > Continuous" flow when the operator
+// changes the Lot No. instead of just extending the goal on the same
+// lot. Carries the 'setting_complete' status from old_lot_no forward
+// onto new_lot_no — but ONLY if old_lot_no genuinely had it. This is
+// intentionally NOT a way to skip Complete Setting for a real new
+// setup: if the old lot never had it, this is a no-op and the normal
+// gate in logProduction() still applies.
+async function continueLot(req, res) {
+  const { model_condition_id, old_lot_no, new_lot_no } = req.body || {};
+  if (!model_condition_id || !old_lot_no || !new_lot_no) {
+    return res.status(400).json({ error: 'model_condition_id, old_lot_no and new_lot_no are required.' });
+  }
+  if (old_lot_no === new_lot_no) {
+    return res.json({ carried: false, reason: 'Lot unchanged.' });
+  }
+
+  try {
+    const model = await resolveModel(model_condition_id);
+    if (!model) return res.status(404).json({ error: 'Model condition not found.' });
+
+    const wasComplete = await isSettingComplete(model_condition_id, old_lot_no);
+    if (!wasComplete) {
+      // Nothing to carry forward — the new lot starts fresh and still
+      // requires a real Complete Setting run, same as any new lot.
+      return res.json({ carried: false, reason: 'Setting was not completed on the previous lot.' });
+    }
+
+    await pool.query(
+      `INSERT INTO production_count_reset (model_condition_id, lot_no, reset_at, base_count, reset_reason, reset_by_user_id)
+       VALUES (?, ?, NOW(), 0, 'setting_complete', ?)
+       ON DUPLICATE KEY UPDATE reset_at = NOW(), base_count = 0,
+         reset_reason = 'setting_complete', reset_by_user_id = VALUES(reset_by_user_id)`,
+      [model_condition_id, new_lot_no, req.user ? req.user.id : null]
+    );
+
+    await systemLog.logAction({
+      req,
+      action: 'production.continue_lot',
+      targetType: 'model_condition',
+      targetId: model_condition_id,
+      description: `Carried "setting complete" from lot "${old_lot_no}" to "${new_lot_no}" on "${model.model}" (Continuous)`,
+      details: { model_condition_id, old_lot_no, new_lot_no },
+    });
+
+    return res.json({ carried: true, lot_no: new_lot_no });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: 'Server error continuing lot setting status.' });
   }
 }
 
@@ -482,6 +562,7 @@ module.exports = {
   resetCount,
   getSettingSummary,
   completeSetting,
+  continueLot,
   getGoal,
   setGoal,
   deleteGoal,

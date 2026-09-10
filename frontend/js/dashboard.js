@@ -531,6 +531,17 @@ function monGoalProgressPct(current, goal) {
   return Math.max(0, Math.min(100, Math.round((current / goal) * 100)));
 }
 
+// NEW — pallets (from the given list) whose job has no goal_count set
+// yet. Used to block operator starts before a target exists.
+function monPalletsMissingGoal(pallets) {
+  return pallets.filter((p) => {
+    const job = getSelectedJob(p);
+    if (!job) return false;
+    const g = MON.goals[p];
+    return !g || g.goal_count === null || g.goal_count === undefined;
+  });
+}
+
 function monGoalInnerHtml(pallet, job) {
   if (!job || !job.lot_no) return `<div class="mon-goal-empty">No model selected</div>`;
 
@@ -762,7 +773,7 @@ function monRenderNextStepContinuous() {
     <div class="field">
       <label for="ns-extend-qty">Extend target by (pcs)</label>
       <input type="number" min="1" id="ns-extend-qty" value="150" />
-      <p class="field-hint">New target will be current count (${data.current_count}) + this amount.</p>
+      <p class="field-hint">New target = production so far for the resulting lot (0 if you're changing lots) + this amount.</p>
     </div>
     <div style="display:flex; gap:8px; margin-top:10px;">
       <button type="button" class="btn btn-primary" id="ns-continuous-ok">OK</button>
@@ -784,6 +795,8 @@ async function monSubmitNextStepContinuous() {
   }
 
   const updates = [];
+  const lotChanges = []; // NEW — {pallet, modelId, oldLot, newLot}, only where lot actually changed
+
   ["Pallet1", "Pallet2"].forEach((pallet) => {
     const job = getSelectedJob(pallet);
     if (!job) return;
@@ -793,6 +806,7 @@ async function monSubmitNextStepContinuous() {
       if (!newValue) { updates.push({ error: `${pallet}: Lot No. cannot be empty.` }); return; }
       if (newValue !== (job.lot_no || "")) {
         updates.push({ url: `/api/models/${job.id}/lotno`, body: { lot_no: newValue }, label: `${pallet} Lot No.` });
+        lotChanges.push({ pallet, modelId: job.id, oldLot: job.lot_no || "", newLot: newValue });
       }
     }
     document.querySelectorAll(`input[data-pallet="${pallet}"][data-item-id]`).forEach((input) => {
@@ -817,6 +831,8 @@ async function monSubmitNextStepContinuous() {
   if (okBtn) okBtn.disabled = true;
 
   const failed = [];
+
+  // 1. Apply Lot No. / condition edits first.
   for (const u of updates) {
     try {
       const res = await apiFetch(u.url, { method: "PATCH", body: JSON.stringify(u.body) });
@@ -829,13 +845,68 @@ async function monSubmitNextStepContinuous() {
     }
   }
 
-  // Extend the shared goal so the modal doesn't immediately re-trigger.
-  const { job, data } = NEXTSTEP;
-  const newGoal = data.current_count + extendBy;
+  if (failed.length) {
+    if (okBtn) okBtn.disabled = false;
+    alertBox.innerHTML = `<div class="alert alert-error">${failed.map(escapeHtml).join("<br>")}</div>`;
+    return;
+  }
+
+  // 2. Carry forward "setting complete" onto any NEW lot, but only where
+  //    the old lot genuinely had it (continueLot no-ops otherwise).
+  for (const lc of lotChanges) {
+    try {
+      await apiFetch("/api/production/continue-lot", {
+        method: "POST",
+        body: JSON.stringify({
+          model_condition_id: lc.modelId,
+          old_lot_no: lc.oldLot,
+          new_lot_no: lc.newLot,
+        }),
+      });
+    } catch (err) {
+      // Non-fatal — worst case the operator gets asked to run Complete
+      // Setting again, which is the safe fallback.
+    }
+  }
+
+  // 3. Refetch both pallets so getSelectedJob() reflects the new lot/conditions.
+  await monRefetchJob("Pallet1");
+  await monRefetchJob("Pallet2");
+
+  // 4. Determine the (model, lot_no) the goal should now target — use
+  //    the FRESH job for the pallet that triggered Next Step, not the
+  //    stale NEXTSTEP.job snapshot. This is the actual fix for the
+  //    "goal doesn't link up" bug.
+  const targetPallet = NEXTSTEP.pallet;
+  const freshJob = getSelectedJob(targetPallet) || getSelectedJob("Pallet1") || getSelectedJob("Pallet2");
+
+  if (!freshJob) {
+    if (okBtn) okBtn.disabled = false;
+    alertBox.innerHTML = `<div class="alert alert-error">Could not determine the model/lot to set a target for — please set it manually from the Production Goal box.</div>`;
+    return;
+  }
+
+  // 5. Fetch the CURRENT count for the (possibly new) lot — this will be
+  //    0 for a brand-new lot, or the real running count if the lot
+  //    wasn't changed — and extend from there.
+  let currentCountForTarget = 0;
+  try {
+    const res = await apiFetch(
+      `/api/production/goal?model=${encodeURIComponent(freshJob.model)}&lot_no=${encodeURIComponent(freshJob.lot_no)}`
+    );
+    if (res.ok) {
+      const data = await res.json();
+      currentCountForTarget = data.current_count || 0;
+    }
+  } catch (err) {
+    // fall back to 0
+  }
+
+  const newGoal = currentCountForTarget + extendBy;
   try {
     const res = await apiFetch("/api/production/goal", {
       method: "POST",
-      body: JSON.stringify({ model: job.model, lot_no: job.lot_no, goal_count: newGoal }),
+      body: JSON.stringify({ model: freshJob.model, lot_no: freshJob.lot_no, goal_count: newGoal }),
     });
     if (!res.ok) {
       const d = await res.json().catch(() => ({}));
@@ -852,10 +923,8 @@ async function monSubmitNextStepContinuous() {
     return;
   }
 
-  await monRefetchJob("Pallet1");
-  await monRefetchJob("Pallet2");
   monCloseNextStepModal();
-  showToast(`Continuing — new target ${newGoal} pcs.`, "success");
+  showToast(`Continuing — new target ${newGoal} pcs for Lot ${freshJob.lot_no}.`, "success");
   monRefreshGoals();
 }
 
@@ -1156,6 +1225,15 @@ function monHandleStartSignal() {
   if (ready.length === 0) {
     showToast(`Select a model for ${info.kind === "single" ? info.pallet : "the active pallet(s)"} on Model Setting first.`);
     return;
+  }
+
+  // NEW — operators cannot start mass production without a target set.
+  if (CURRENT_USER && CURRENT_USER.role === "operator") {
+    const missingGoal = monPalletsMissingGoal(ready);
+    if (missingGoal.length > 0) {
+      showToast(`Set a production target for ${missingGoal.join(" and ")} before starting.`);
+      return;
+    }
   }
 
   MON_AUTO.queue += 1;
@@ -2404,6 +2482,15 @@ async function wmRunStartSequenceForPallet(pallet) {
     return;
   }
 
+  // NEW — operators cannot start mass production without a target set.
+  if (CURRENT_USER && CURRENT_USER.role === "operator") {
+    const missingGoal = monPalletsMissingGoal([pallet]);
+    if (missingGoal.length > 0) {
+      showToast(`Set a production target for ${pallet} on Monitor before starting.`);
+      return;
+    }
+  }
+
   const steps = wmComputeStepsForJob(job);
   WM.manualRunning = true;
   WM.runningPallet = pallet;
@@ -2449,7 +2536,6 @@ async function wmRunStartSequenceForPallet(pallet) {
   wmLog(`--- Start Marking sequence complete (${pallet}) ---`, "ok");
   wmSetStartButtonsState("idle");
 }
-
 /* ============================================================
    FOR ALARM CENTER PAGE
    ============================================================
