@@ -1036,6 +1036,8 @@ function monPeekNextAutoPallet(mode) {
 // Animates step state (pending/active/done) directly on the already-visible
 // First Cycle / Loop Cycle lists built by monRenderSeqPreview(), instead of
 // swapping to a separate flat list. activeIndex === steps.length -> all done.
+
+
 function monSetPreviewStepState(listId, steps, activeIndex) {
   const list = document.getElementById(listId);
   if (!list) return;
@@ -1053,20 +1055,26 @@ function monSetPreviewStepState(listId, steps, activeIndex) {
       li.classList.add("pending");
     }
   });
+
+  // Auto-scroll: keep the active step (or, once the cycle finishes,
+  // the last step) visible inside this list's own scroll box, so the
+  // operator never has to scroll manually to follow along.
+  const clampedIndex = Math.min(activeIndex, items.length - 1);
+  const target = items[clampedIndex];
+  if (target) target.scrollIntoView({ behavior: "smooth", block: "nearest" });
 }
 
 function monResetPreviewStepState(listId, steps) {
   monSetPreviewStepState(listId, steps, -1);
 }
 
-function monRenderSeqPreviewList(elId, steps, round) {
+function monRenderSeqPreviewList(elId, steps) {
   const list = document.getElementById(elId);
   if (!list) return;
   list.innerHTML = steps.map((s, i) => {
-    const label = s.firstLabel ? (round === "first" ? s.firstLabel : s.loopLabel) : s.label;
-    const tooltip = wmTooltipText({ ...s, label }) + (s.skipped ? " — Skipped (not required for this model)" : "");
+    const tooltip = wmTooltipText(s) + (s.skipped ? " — Skipped (not required for this model)" : "");
     const skipTag = s.skipped ? ` <span class="wm-seq-skip-tag">(skipped)</span>` : "";
-    return `<li class="wm-seq-step pending" title="${escapeHtml(tooltip)}"><span class="wm-seq-num">${i + 1}</span>${label}${skipTag}</li>`;
+    return `<li class="wm-seq-step pending" title="${escapeHtml(tooltip)}"><span class="wm-seq-num">${i + 1}</span>${s.label}${skipTag}</li>`;
   }).join("");
 }
 
@@ -1083,22 +1091,25 @@ function monRenderSeqPreview(mode) {
       <ol class="wm-seq-list" id="mon-preview-loop-list"></ol>`;
     monRenderSeqPreviewList("mon-preview-loop-list", steps);
   } else {
-    const nextPallet = monPeekNextAutoPallet(mode);
-    const job = getSelectedJob(nextPallet);
-    const steps = applySkipFlags(AUTO_SEQUENCE_STEPS, job);
+    // AUTO1-2: one column per pallet, each already reflecting that
+    // pallet's own selected model's skip/do flags.
+    const p1Job = getSelectedJob("Pallet1");
+    const p2Job = getSelectedJob("Pallet2");
+    const p1Steps = applySkipFlags(AUTO_SEQUENCE_STEPS, p1Job);
+    const p2Steps = applySkipFlags(AUTO_SEQUENCE_STEPS, p2Job);
     wrap.innerHTML = `
       <div class="wm-auto-seq-cols">
         <div class="wm-auto-seq-col">
-          <div class="card-title" style="margin-top:0;">First Cycle <span style="font-weight:400;color:var(--ink-faint);font-size:11px;">(on the first 2-hand start)</span></div>
-          <ol class="wm-seq-list" id="mon-preview-first-list"></ol>
+          <div class="card-title" style="margin-top:0;">Pallet 1</div>
+          <ol class="wm-seq-list" id="mon-preview-p1-list"></ol>
         </div>
         <div class="wm-auto-seq-col">
-          <div class="card-title" style="margin-top:0;">Loop Cycle <span style="font-weight:400;color:var(--ink-faint);font-size:11px;">(after every following start)</span></div>
-          <ol class="wm-seq-list" id="mon-preview-loop-list"></ol>
+          <div class="card-title" style="margin-top:0;">Pallet 2</div>
+          <ol class="wm-seq-list" id="mon-preview-p2-list"></ol>
         </div>
       </div>`;
-    monRenderSeqPreviewList("mon-preview-first-list", steps, "first");
-    monRenderSeqPreviewList("mon-preview-loop-list", steps, "loop");
+    monRenderSeqPreviewList("mon-preview-p1-list", p1Steps);
+    monRenderSeqPreviewList("mon-preview-p2-list", p2Steps);
   }
 }
 
@@ -1122,7 +1133,7 @@ function monShowLiveList() {
 
 async function monAutoRunOneCycle(mode) {
   const info = wmAutoModeInfo(mode);
-  monShowPreview(); // keep the First/Loop columns visible the whole run
+  monShowPreview(); // keep the Pallet 1 / Pallet 2 columns visible the whole run
 
   if (info.kind === "single") {
     const pallet = info.pallet;
@@ -1157,9 +1168,11 @@ async function monAutoRunOneCycle(mode) {
     return;
   }
 
+  // AUTO1-2: still alternates which pallet runs next, but now animates
+  // that pallet's own column instead of juggling a "first" vs "loop"
+  // list — the steps and skip logic were identical either way.
   const pallet = monAutoNextPallet(mode);
-  const round = MON_AUTO.roundCount[pallet] === 0 ? "first" : "loop";
-  const activeListId = round === "first" ? "mon-preview-first-list" : "mon-preview-loop-list";
+  const activeListId = pallet === "Pallet1" ? "mon-preview-p1-list" : "mon-preview-p2-list";
   MON.activePallet = pallet;
 
   const job = getSelectedJob(pallet);
@@ -1167,7 +1180,7 @@ async function monAutoRunOneCycle(mode) {
   monRenderPalletBlock(pallet);
 
   const steps = applySkipFlags(AUTO_SEQUENCE_STEPS, job);
-  monRenderSeqPreviewList(activeListId, steps, round);
+  monRenderSeqPreviewList(activeListId, steps);
   monResetPreviewStepState(activeListId, steps);
   for (let i = 0; i < steps.length; i++) {
     monSetPreviewStepState(activeListId, steps, i);
@@ -1177,7 +1190,7 @@ async function monAutoRunOneCycle(mode) {
       continue;
     }
     try {
-      await steps[i].fn(round);
+      await steps[i].fn();
       monApplyStepResult(pallet, steps[i], true);
     } catch (err) {
       monApplyStepResult(pallet, steps[i], false);
@@ -1186,7 +1199,6 @@ async function monAutoRunOneCycle(mode) {
     }
   }
   monSetPreviewStepState(activeListId, steps, steps.length);
-  MON_AUTO.roundCount[pallet] += 1;
 
   if (job) monReportCount(pallet, job);
 }
@@ -2125,10 +2137,9 @@ const WM_FUNCTIONS = {
 const AUTO_SEQUENCE_STEPS = [
   {
     id: "cond_start",
-    firstLabel: "Condition Start Loop",
-    loopLabel: "Condition Start Auto",
+    label: "Condition Start",
     note: "D001 ON, D002 ON — 2-hand start pushed",
-    fn: (round) => wmStub(round === "first" ? "CONDITION_START" : "CONDITION_START_AUTO", 200),
+    fn: () => wmStub("CONDITION_START", 200),
   },
   {
     id: "queue_loop",
@@ -2236,14 +2247,13 @@ function wmRenderStepsList(elId, steps, completedCount = 0) {
   }).join("");
 }
 
-function wmRenderAutoSeqPreviewList(elId, steps, round) {
+function wmRenderAutoSeqPreviewList(elId, steps) {
   const list = document.getElementById(elId);
   if (!list) return;
   list.innerHTML = steps.map((s, i) => {
-    const label = s.firstLabel ? (round === "first" ? s.firstLabel : s.loopLabel) : s.label;
-    const tooltip = wmTooltipText({ ...s, label }) + (s.skipped ? " — Skipped (not required for this model)" : "");
+    const tooltip = wmTooltipText(s) + (s.skipped ? " — Skipped (not required for this model)" : "");
     const skipTag = s.skipped ? ` <span class="wm-seq-skip-tag">(skipped)</span>` : "";
-    return `<li class="wm-seq-step pending" title="${escapeHtml(tooltip)}"><span class="wm-seq-num">${i + 1}</span>${label}${skipTag}</li>`;
+    return `<li class="wm-seq-step pending" title="${escapeHtml(tooltip)}"><span class="wm-seq-num">${i + 1}</span>${s.label}${skipTag}</li>`;
   }).join("");
 }
 
@@ -2270,21 +2280,20 @@ function wmRenderAutoSequenceContent(mode) {
         <ol class="wm-seq-list wm-auto-activation-list" id="wm-auto-activation-list"></ol>
         <div class="wm-auto-seq-cols" style="margin-top:10px;">
           <div class="wm-auto-seq-col">
-            <div class="card-title" style="margin-top:4px;">First Cycle <span style="font-weight:400;color:var(--ink-faint);font-size:11px;">(runs once, on the first 2-hand start)</span></div>
-            <ol class="wm-seq-list" id="wm-auto-first-list"></ol>
+            <div class="card-title" style="margin-top:4px;">Pallet 1</div>
+            <ol class="wm-seq-list" id="wm-auto-p1-list"></ol>
           </div>
           <div class="wm-auto-seq-col">
-            <div class="card-title" style="margin-top:4px;">Loop Cycle <span style="font-weight:400;color:var(--ink-faint);font-size:11px;">(repeats after every following 2-hand start)</span></div>
-            <ol class="wm-seq-list" id="wm-auto-loop-list"></ol>
+            <div class="card-title" style="margin-top:4px;">Pallet 2</div>
+            <ol class="wm-seq-list" id="wm-auto-p2-list"></ol>
           </div>
         </div>
       </div>`;
-    const nextPallet = monPeekNextAutoPallet(mode);
-    const job = getSelectedJob(nextPallet);
-    const steps = applySkipFlags(AUTO_SEQUENCE_STEPS, job);
+    const p1Job = getSelectedJob("Pallet1");
+    const p2Job = getSelectedJob("Pallet2");
     wmRenderStepsList("wm-auto-activation-list", AUTO_DUAL_ACTIVATION_STEPS);
-    wmRenderAutoSeqPreviewList("wm-auto-first-list", steps, "first");
-    wmRenderAutoSeqPreviewList("wm-auto-loop-list", steps, "loop");
+    wmRenderAutoSeqPreviewList("wm-auto-p1-list", applySkipFlags(AUTO_SEQUENCE_STEPS, p1Job));
+    wmRenderAutoSeqPreviewList("wm-auto-p2-list", applySkipFlags(AUTO_SEQUENCE_STEPS, p2Job));
   }
 }
 
