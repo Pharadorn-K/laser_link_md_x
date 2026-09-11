@@ -3886,71 +3886,7 @@ PAGE_INIT.add_new_model = function () {
   if (eqIpInput) eqIpInput.value = savedConn.ip;
   if (eqPortInput) eqPortInput.value = savedConn.port;
 
-  document.getElementById("eq-connect-btn").addEventListener("click", async () => {
-    const { ip, port } = eqGetIpPort();
-    eqSetStatusPill("busy");
-    const res = await apiFetch("/api/equipment/connect", {
-      method: "POST",
-      body: JSON.stringify({ ip, port }),
-    });
-    const data = await res.json();
-    eqSetStatusPill(res.ok && data.connected ? "ready" : "error");
-    eqPollStatus();
-  });
-
-  document.getElementById("eq-add-custom-btn").addEventListener("click", () => {
-    const raw = document.getElementById("eq-custom-job").value.trim();
-    const n = parseInt(raw, 10);
-    if (Number.isNaN(n) || n < 0 || n > 1999) {
-      alert("Enter a job number between 0 and 1999.");
-      return;
-    }
-    eqAddJob(n);
-    document.getElementById("eq-custom-job").value = "";
-  });
-
-  document.getElementById("eq-clear-queue-btn").addEventListener("click", async () => {
-    await apiFetch("/api/equipment/queue", { method: "DELETE" });
-    eqPollStatus();
-  });
-
-  document.getElementById("eq-raw-send-btn").addEventListener("click", async () => {
-    const { ip, port } = eqGetIpPort();
-    const command = document.getElementById("eq-raw-cmd").value.trim();
-    if (!command) return;
-    await apiFetch("/api/equipment/raw", {
-      method: "POST",
-      body: JSON.stringify({ ip, port, command }),
-    });
-    eqPollStatus();
-  });
-
-  document.getElementById("eq-cat-select").addEventListener("change", eqOnCategoryChange);
-  document.getElementById("eq-cmd-select").addEventListener("change", eqOnCommandChange);
-  document.getElementById("eq-mode-wx").addEventListener("click", () => eqSetMode("wx"));
-  document.getElementById("eq-mode-rx").addEventListener("click", () => eqSetMode("rx"));
-
-  document.getElementById("eq-run-cmd-btn").addEventListener("click", async () => {
-    const { ip, port } = eqGetIpPort();
-    const command = document.getElementById("eq-preview-box").textContent.trim();
-    if (!command || command.startsWith("(invalid")) {
-      alert("Invalid or empty command.");
-      return;
-    }
-    await apiFetch("/api/equipment/raw", {
-      method: "POST",
-      body: JSON.stringify({ ip, port, command }),
-    });
-    eqPollStatus();
-  });
-
-  document.getElementById("eq-copy-raw-btn").addEventListener("click", () => {
-    document.getElementById("eq-raw-cmd").value = document.getElementById("eq-preview-box").textContent.trim();
-  });
-
-  document.getElementById("eq-clear-log-btn").addEventListener("click", () => {
-    document.getElementById("eq-log").innerHTML = "";
-  });
+  eqWirePageControls();
 
   eqPollStatus();
   EQ.pollTimer = setInterval(eqPollStatus, 1500);
@@ -4045,6 +3981,21 @@ function eqRenderQueue(queue) {
   }).join("");
 }
 
+function eqRenderLog(lines) {
+  const log = document.getElementById("eq-log");
+  if (!log) return;
+  log.innerHTML = "";
+  (lines || []).forEach((line) => {
+    const entry = document.createElement("div");
+    entry.textContent = line;
+    if (line.includes("!!!")) entry.className = "line-err";
+    else if (line.includes(">>>")) entry.className = "line-warn";
+    else if (line.includes("<<<") || line.includes("complete")) entry.className = "line-ok";
+    log.appendChild(entry);
+  });
+  log.scrollTop = log.scrollHeight;
+}
+
 async function eqPollStatus() {
   try {
     const res = await apiFetch("/api/equipment/status");
@@ -4055,10 +4006,12 @@ async function eqPollStatus() {
     const data = await res.json();
     eqSetStatusPill(data.connection && data.connection.connected ? "ready" : "offline");
     eqRenderQueue(data.queue || []);
+    eqRenderLog(data.log || []);
   } catch (err) {
     eqSetStatusPill("offline");
     const list = document.getElementById("eq-queue-list");
     if (list) list.innerHTML = '<li class="eq-queue-empty">Queue unavailable.</li>';
+    eqRenderLog([`!!! Equipment status unavailable: ${err.message}`]);
   }
 }
 
@@ -4162,18 +4115,19 @@ function eqWirePageControls() {
   const connectBtn = document.getElementById("eq-connect-btn");
   if (connectBtn) {
     connectBtn.addEventListener("click", async () => {
-      const { ip, port } = eqGetIpPort();
-      eqSetStatusPill("busy");
       try {
+        const { ip, port } = eqGetIpPort();
+        eqSetStatusPill("busy");
         const res = await apiFetch("/api/equipment/connect", {
           method: "POST",
           body: JSON.stringify({ ip, port }),
         });
-        const data = await res.json();
+        const data = await res.json().catch(() => ({}));
         eqSetStatusPill(res.ok && data.connected ? "ready" : "error");
         eqPollStatus();
       } catch (err) {
         eqSetStatusPill("error");
+        eqRenderLog([`!!! Connection request failed: ${err.message}`]);
       }
     });
   }
@@ -4203,14 +4157,19 @@ function eqWirePageControls() {
   const rawSendBtn = document.getElementById("eq-raw-send-btn");
   if (rawSendBtn) {
     rawSendBtn.addEventListener("click", async () => {
-      const { ip, port } = eqGetIpPort();
-      const command = document.getElementById("eq-raw-cmd").value.trim();
-      if (!command) return;
-      await apiFetch("/api/equipment/raw", {
-        method: "POST",
-        body: JSON.stringify({ ip, port, command }),
-      });
-      eqPollStatus();
+      try {
+        const { ip, port } = eqGetIpPort();
+        const command = document.getElementById("eq-raw-cmd").value.trim();
+        if (!command) return;
+        const res = await apiFetch("/api/equipment/raw", {
+          method: "POST",
+          body: JSON.stringify({ ip, port, command }),
+        });
+        if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `Command failed (${res.status})`);
+        eqPollStatus();
+      } catch (err) {
+        eqRenderLog([`!!! Raw command failed: ${err.message}`]);
+      }
     });
   }
 
@@ -4229,17 +4188,22 @@ function eqWirePageControls() {
   const runBtn = document.getElementById("eq-run-cmd-btn");
   if (runBtn) {
     runBtn.addEventListener("click", async () => {
-      const { ip, port } = eqGetIpPort();
-      const command = document.getElementById("eq-preview-box").textContent.trim();
-      if (!command || command.startsWith("(invalid")) {
-        alert("Invalid or empty command.");
-        return;
+      try {
+        const { ip, port } = eqGetIpPort();
+        const command = document.getElementById("eq-preview-box").textContent.trim();
+        if (!command || command.startsWith("(invalid")) {
+          alert("Invalid or empty command.");
+          return;
+        }
+        const res = await apiFetch("/api/equipment/raw", {
+          method: "POST",
+          body: JSON.stringify({ ip, port, command }),
+        });
+        if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `Command failed (${res.status})`);
+        eqPollStatus();
+      } catch (err) {
+        eqRenderLog([`!!! Command failed: ${err.message}`]);
       }
-      await apiFetch("/api/equipment/raw", {
-        method: "POST",
-        body: JSON.stringify({ ip, port, command }),
-      });
-      eqPollStatus();
     });
   }
 
