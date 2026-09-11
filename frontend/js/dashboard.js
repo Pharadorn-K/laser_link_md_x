@@ -387,15 +387,22 @@ function setCheckStatus(pallet, status) {
 
 // Resets a pallet's status block to reflect the currently selected job:
 // "Skipped" for any check disabled on that job, "—" (pending) otherwise.
-// Call this whenever a new cycle starts, so stale results don't linger.
+// Also clears MON.code2d[pallet] so Total Grade / Matching Lv. / Read data
+// reflect only THIS cycle's capture, not a stale one from the last run.
 function monInitCheckStatusForJob(pallet, job) {
+  const code2dUnused = job && !job.check_start2dcode && !job.check_read2dcode;
   const status = {
     jobId: job ? job.id : null,
     camera: job && !job.check_camera ? "Skipped" : "—",
-    code2dRead: job && !job.check_read2dcode ? "Skipped" : "—",
-    code2dGrade: job && !job.check_grade2dcode ? "Skipped" : "—",
+    startReader: job && !job.check_start2dcode ? "Skipped" : "—",
+    codeResult: job && !job.check_read2dcode ? "Skipped" : "—",
+    totalGrade: code2dUnused ? "Skipped" : "—",
+    gradeCheck: job && !job.check_grade2dcode ? "Skipped" : "—",
+    matchingLv: code2dUnused ? "Skipped" : "—",
+    readData: code2dUnused ? "Skipped" : "—",
   };
   setCheckStatus(pallet, status);
+  MON.code2d[pallet] = null; // NEW — start each cycle with no stale capture
   return status;
 }
 
@@ -405,7 +412,10 @@ function monGetOrInitCheckStatus(pallet, job) {
   const existing = getCheckStatus(pallet);
   if (!job) {
     setCheckStatus(pallet, null);
-    return { camera: "—", code2dRead: "—", code2dGrade: "—" };
+    return {
+      camera: "—", startReader: "—", codeResult: "—",
+      totalGrade: "—", gradeCheck: "—", matchingLv: "—", readData: "—",
+    };
   }
   if (existing && existing.jobId === job.id) return existing;
   return monInitCheckStatusForJob(pallet, job);
@@ -418,6 +428,36 @@ function monStatusClass(value) {
   return "bad"; // Incorrect / Not Pass / Error / R / S / T
 }
 
+// For Total Grade specifically: A-D = good, F (or unrecognized) = bad,
+// same Error/Skipped/pending handling as monStatusClass.
+function monGradeStatusClass(value) {
+  if (value === "Error") return "bad";
+  if (value === "Skipped") return "skip";
+  if (value === "—" || !value) return "pending";
+  const letter = String(value).trim().toUpperCase().charAt(0);
+  return ["A", "B", "C", "D"].includes(letter) ? "good" : "bad";
+}
+
+// For raw/numeric readout fields (Matching Lv., Read data) — no pass/fail
+// semantics, just show the value; only Error/Skipped/pending get colored.
+function monNeutralStatusClass(value) {
+  if (value === "Error") return "bad";
+  if (value === "Skipped") return "skip";
+  if (value === "—" || !value) return "pending";
+  return "good";
+}
+
+// Maps each check-result field to the classifier that colors its pill.
+const MON_CHK_CLASS_RESOLVER = {
+  camera: monStatusClass,
+  startReader: monStatusClass,
+  codeResult: monStatusClass,
+  totalGrade: monGradeStatusClass,
+  gradeCheck: monStatusClass,
+  matchingLv: monNeutralStatusClass,
+  readData: monNeutralStatusClass,
+};
+
 // Updates the stored value AND the live DOM (if the Monitor page's
 // pallet block happens to be mounted right now).
 function monSetCheckStatus(pallet, field, value) {
@@ -425,20 +465,30 @@ function monSetCheckStatus(pallet, field, value) {
   current[field] = value;
   setCheckStatus(pallet, current);
 
-  const idMap = { camera: "camera", code2dRead: "code2dread", code2dGrade: "code2dgrade" };
+  const idMap = {
+    camera: "camera",
+    startReader: "startreader",
+    codeResult: "coderesult",
+    totalGrade: "totalgrade",
+    gradeCheck: "gradecheck",
+    matchingLv: "matchinglv",
+    readData: "readdata",
+  };
   const el = document.getElementById(`mon-chk-${idMap[field]}-${pallet}`);
   if (!el) return;
   el.textContent = value;
-  el.className = `mon-chkval mon-chkval-${monStatusClass(value)}`;
+  const resolver = MON_CHK_CLASS_RESOLVER[field] || monStatusClass;
+  el.className = `mon-chkval mon-chkval-${resolver(value)}`;
 }
 
 // Maps a sequence step's id to the field it should update, and derives
-// the simulated result value. `ok` is the step's success/failure.
+// the simulated/real result value. `ok` is the step's success/failure.
 function monApplyStepResult(pallet, step, ok) {
   const fieldByStepId = {
     camera_check: "camera",
-    code_result: "code2dRead",
-    code_grade: "code2dGrade",
+    code_start: "startReader",
+    code_result: "codeResult",
+    code_grade: "gradeCheck",
   };
   const field = fieldByStepId[step.id];
   if (!field) return;
@@ -450,24 +500,82 @@ function monApplyStepResult(pallet, step, ok) {
     value = "Error";
   } else if (field === "camera") {
     value = "Correct";
-  } else if (field === "code2dRead") {
+  } else if (field === "startReader" || field === "codeResult") {
     value = "OK";
   } else {
-    value = "Pass";
+    value = "Pass"; // gradeCheck
   }
   monSetCheckStatus(pallet, field, value);
+
+  // Total Grade / Matching Lv. / Read data are derived from whichever of
+  // Start Reader / Code Result most recently captured real data — not
+  // tied 1:1 to a single step, since either one can populate them.
+  if (field === "startReader" || field === "codeResult") {
+    monApplyCode2DDerivedFields(pallet, ok, step.skipped);
+  }
+}
+
+// ASSUMPTION (no equipment connected yet — adjust once real replies are
+// confirmed): reads MON.code2d[pallet], set by wmRunCode2DStartReader()
+// (values v1/v2/v3 from WX,Check2DCode5's WX,OK,<v1>,<v2>,<v3> reply) or
+// wmRunCode2DResultReader() (grade B + values w/x/y or c/v/w/x/y from
+// RX,CodeReadResult). Currently:
+//   Total Grade  -> captured.grade   (v1, or B)
+//   Matching Lv. -> v2 (start_reader) / w (read_result)
+//   Read data    -> v3 (start_reader) / y (read_result)
+// If the real protocol puts these values in different positions, only
+// this function needs to change — everything else keys off its output.
+function monApplyCode2DDerivedFields(pallet, ok, skipped) {
+  if (skipped) {
+    // Don't let a skipped step erase a real capture the OTHER 2D-code
+    // step already made earlier in this same cycle.
+    if (!MON.code2d[pallet]) {
+      monSetCheckStatus(pallet, "totalGrade", "Skipped");
+      monSetCheckStatus(pallet, "matchingLv", "Skipped");
+      monSetCheckStatus(pallet, "readData", "Skipped");
+    }
+    return;
+  }
+  if (!ok) {
+    monSetCheckStatus(pallet, "totalGrade", "Error");
+    monSetCheckStatus(pallet, "matchingLv", "Error");
+    monSetCheckStatus(pallet, "readData", "Error");
+    return;
+  }
+
+  const captured = MON.code2d[pallet];
+  if (!captured) {
+    monSetCheckStatus(pallet, "totalGrade", "—");
+    monSetCheckStatus(pallet, "matchingLv", "—");
+    monSetCheckStatus(pallet, "readData", "—");
+    return;
+  }
+
+  const grade = captured.grade ? String(captured.grade).trim().toUpperCase() : "—";
+  monSetCheckStatus(pallet, "totalGrade", grade || "—");
+
+  let matching = "—";
+  let read = "—";
+  if (captured.source === "start_reader") {
+    matching = (captured.values && captured.values.v2) || "—";
+    read = (captured.values && captured.values.v3) || "—";
+  } else if (captured.source === "read_result") {
+    matching = (captured.values && captured.values.w) || "—";
+    read = (captured.values && captured.values.y) || "—";
+  }
+  monSetCheckStatus(pallet, "matchingLv", matching);
+  monSetCheckStatus(pallet, "readData", read);
 }
 
 
 // Maps your existing check-status tracking to the R/S/T result code.
 // ASSUMPTION: S = both 2D checks skipped for this model, T = read or
 // grade came back Error, R = otherwise (read+grade OK or not tracked).
-// Adjust this mapping if R/S/T means something specific in your process.
 function monDeriveCode2DResult(pallet, job) {
   if (!job.check_read2dcode && !job.check_grade2dcode) return null;
   const status = getCheckStatus(pallet) || {};
-  if (status.code2dRead === "Skipped" && status.code2dGrade === "Skipped") return "S";
-  if (status.code2dRead === "Error" || status.code2dGrade === "Error") return "T";
+  if (status.codeResult === "Skipped" && status.gradeCheck === "Skipped") return "S";
+  if (status.codeResult === "Error" || status.gradeCheck === "Error") return "T";
   return "R";
 }
 
@@ -1394,11 +1502,14 @@ function monRenderPalletBlock(pallet) {
     ? `<img src="${job.photo_path}" alt="${escapeHtml(job.model)}" />`
     : `<div class="ms-photo-placeholder"><i class="fa-regular fa-image"></i><span>No photo</span></div>`;
 
-  const chkRow = (label, field, idSuffix) => `
+  const chkRow = (label, field, idSuffix) => {
+    const resolver = MON_CHK_CLASS_RESOLVER[field] || monStatusClass;
+    return `
     <div class="mon-chk-item">
       <span class="mon-chk-label">${label}</span>
-      <span class="mon-chkval mon-chkval-${monStatusClass(checkStatus[field])}" id="mon-chk-${idSuffix}-${pallet}">${escapeHtml(checkStatus[field])}</span>
+      <span class="mon-chkval mon-chkval-${resolver(checkStatus[field])}" id="mon-chk-${idSuffix}-${pallet}">${escapeHtml(checkStatus[field])}</span>
     </div>`;
+  };
 
   body.innerHTML = `
     <div class="mon-model-row">
@@ -1423,8 +1534,12 @@ function monRenderPalletBlock(pallet) {
           <div class="mon-count-label">Check Results</div>
           <div class="mon-chk-list">
             ${chkRow("Camera Check", "camera", "camera")}
-            ${chkRow("2D Code Read", "code2dRead", "code2dread")}
-            ${chkRow("2D Code Grade", "code2dGrade", "code2dgrade")}
+            ${chkRow("Start Reader", "startReader", "startreader")}
+            ${chkRow("Code Result", "codeResult", "coderesult")}
+            ${chkRow("Total Grade", "totalGrade", "totalgrade")}
+            ${chkRow("Grade Check", "gradeCheck", "gradecheck")}
+            ${chkRow("Matching Lv.", "matchingLv", "matchinglv")}
+            ${chkRow("Read data", "readData", "readdata")}
           </div>
         </div>
         <div class="mon-count-col mon-timing-col">
@@ -2241,22 +2356,61 @@ function code2dGradeRank(letter) {
 }
 
 /* ---- Shared interlock check: RX,Ready ----
-   0 = ready (proceed), 1 = active error (hard alarm), 2 = busy
-   (soft block, retry later), anything else = unexpected (soft block). ---- */
-async function eqCheckLaserReady(conn) {
-  const raw = await eqSendRaw(conn, "RX,Ready");
-  if (!raw.ok) {
-    return { ready: false, alarm: true, message: raw.message };
+   0 = ready (proceed), 1 = active error (hard alarm), 2 = busy.
+   IMPORTANT: WX,StartMarking's WX,OK reply can arrive slightly before
+   the marker's internal state actually drops back to Ready=0 (observed
+   in the field: RX,Ready still reports 2/busy for a short window right
+   after StartMarking completes). A single-shot check here caused
+   spurious "Read 2D Code" failures immediately after marking. This now
+   polls RX,Ready for up to maxWaitMs, backing off between attempts,
+   instead of failing on the first busy reading. A hard error (status 1)
+   still fails immediately — that's a real fault, not a timing issue. ---- */
+async function eqCheckLaserReady(conn, opts = {}) {
+  const maxWaitMs = opts.maxWaitMs ?? 10000;   // total time willing to wait
+  const pollIntervalMs = opts.pollIntervalMs ?? 500; // gap between polls
+  const deadline = Date.now() + maxWaitMs;
+  let attempt = 0;
+  let lastMessage = "";
+
+  while (true) {
+    attempt += 1;
+    const raw = await eqSendRaw(conn, "RX,Ready");
+
+    if (!raw.ok) {
+      lastMessage = raw.message;
+      // Transport/comm hiccup — treat like busy and retry rather than
+      // aborting instantly, since the marker may just be mid-operation.
+    } else {
+      const status = (raw.response.split(",")[2] || "").trim();
+      if (status === "0") {
+        return { ready: true };
+      }
+      if (status === "1") {
+        // Genuine active error — don't waste time retrying this one.
+        return {
+          ready: false,
+          alarm: true,
+          message: "Laser reports an active error (RX,Ready=1). Clear it on the unit first.",
+        };
+      }
+      if (status === "2") {
+        lastMessage = "Laser is busy (marking/expansion in progress).";
+      } else {
+        lastMessage = `Unexpected RX,Ready response: ${raw.response}`;
+      }
+    }
+
+    if (Date.now() >= deadline) {
+      return {
+        ready: false,
+        alarm: false,
+        message: `${lastMessage} (gave up after ${attempt} attempt(s), ${Math.round(maxWaitMs / 1000)}s).`,
+      };
+    }
+
+    wmLog(`    [retry ${attempt}] ${lastMessage} — waiting before next check...`, "warn");
+    await new Promise((r) => setTimeout(r, pollIntervalMs));
   }
-  const status = (raw.response.split(",")[2] || "").trim();
-  if (status === "0") return { ready: true };
-  if (status === "1") {
-    return { ready: false, alarm: true, message: "Laser reports an active error (RX,Ready=1). Clear it on the unit first." };
-  }
-  if (status === "2") {
-    return { ready: false, alarm: false, message: "Laser is busy (marking/expansion in progress)." };
-  }
-  return { ready: false, alarm: false, message: `Unexpected RX,Ready response: ${raw.response}` };
 }
 
 /* ---- 1. 2D Code: Start Reader ----
