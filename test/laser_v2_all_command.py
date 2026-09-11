@@ -38,8 +38,8 @@ from tkinter import ttk, scrolledtext, messagebox
 # ----------------------------------------------------------------------
 # LASER_IP_DEFAULT = "192.168.1.20"
 # LASER_PORT_DEFAULT = 50002
-LASER_IP_DEFAULT = "10.207.1.123"
-LASER_PORT_DEFAULT = 9999
+LASER_IP_DEFAULT = "10.207.1.202"
+LASER_PORT_DEFAULT = 50002
 DELIMITER = b"\r"
 
 PROGRAM_BUTTONS = list(range(1, 5))  # Job 0001 .. 0004
