@@ -535,8 +535,12 @@ const MON = {
   timings: { Pallet1: null, Pallet2: null },
   goals: { Pallet1: null, Pallet2: null },
   goalAlerted: {},
-  nextStepPending: {},                            // NEW — tracks alertKey that already triggered the blocking Next Step modal
+  nextStepPending: {},
   lastMarked: { Pallet1: null, Pallet2: null },
+  // NEW — last captured 2D-code result per pallet, set by either
+  // CODE2D_START_READER or CODE2D_RESULT_READER, consumed by
+  // CODE2D_GRADE_RESULT. Shape: { grade, values, source, raw }
+  code2d: { Pallet1: null, Pallet2: null },
   running: false,
   timer: null,
   mode: null,
@@ -1171,6 +1175,7 @@ async function monAutoRunOneCycle(mode) {
     const steps = applySkipFlags(AUTO_SINGLE_LOOP_STEPS, job);
     monRenderSeqPreviewList("mon-preview-loop-list", steps);
     monResetPreviewStepState("mon-preview-loop-list", steps);
+    
     for (let i = 0; i < steps.length; i++) {
       monSetPreviewStepState("mon-preview-loop-list", steps, i);
       if (steps[i].skipped) {
@@ -1178,12 +1183,17 @@ async function monAutoRunOneCycle(mode) {
         await new Promise((r) => setTimeout(r, 150)); // brief pause so the yellow state is visible
         continue;
       }
+      let verdict;
       try {
-        await steps[i].fn();
-        monApplyStepResult(pallet, steps[i], true);
+        verdict = await steps[i].fn();
       } catch (err) {
+        verdict = { ok: false, alarm: true, message: String(err) };
+      }
+      if (!verdict || verdict.ok !== false) {
+        monApplyStepResult(pallet, steps[i], true);
+      } else {
         monApplyStepResult(pallet, steps[i], false);
-        showToast(`Auto cycle error: ${err}`);
+        showToast(verdict.alarm ? `Alarm: ${steps[i].label} — ${verdict.message}` : `${steps[i].label}: ${verdict.message}`);
         break;
       }
     }
@@ -1214,17 +1224,21 @@ async function monAutoRunOneCycle(mode) {
       await new Promise((r) => setTimeout(r, 150));
       continue;
     }
+    let verdict;
     try {
-      await steps[i].fn();
-      monApplyStepResult(pallet, steps[i], true);
+      verdict = await steps[i].fn();
     } catch (err) {
+      verdict = { ok: false, alarm: true, message: String(err) };
+    }
+    if (!verdict || verdict.ok !== false) {
+      monApplyStepResult(pallet, steps[i], true);
+    } else {
       monApplyStepResult(pallet, steps[i], false);
-      showToast(`Auto cycle error: ${err}`);
+      showToast(verdict.alarm ? `Alarm: ${steps[i].label} — ${verdict.message}` : `${steps[i].label}: ${verdict.message}`);
       break;
     }
   }
   monSetPreviewStepState(activeListId, steps, steps.length);
-
   if (job) monReportCount(pallet, job);
 }
 
@@ -2125,7 +2139,6 @@ async function ioReadPalletInMachineRoom(expectedPallet) {
    Setting's manual sequence sets WM.runningPallet); falls back to
    the pallet currently in the Operator Room if called stand-alone
    from the quick manual-function button grid. ---- */
-// frontend/js/dashboard.js — replaces the existing wmRunStartMarking()
 async function wmRunStartMarking() {
   const pallet = MON.activePallet || WM.runningPallet || WM_PALLET_STATE.operatorRoomPallet;
   const job = getSelectedJob(pallet);
@@ -2213,6 +2226,190 @@ async function wmRunStartMarking() {
 
   return { ok: true, message: "Marking complete." };
 }
+
+/* ---- 2D Code grade ranking ----
+   Letter grade scale, worst -> best. "-" / empty / unrecognized = -1
+   (fails against any real threshold). Update this array if your
+   process uses a different scale. ---- */
+const CODE2D_GRADE_ORDER = ["F", "D", "C", "B", "A"];
+
+function code2dGradeRank(letter) {
+  if (letter === null || letter === undefined) return -1;
+  const ch = String(letter).trim().toUpperCase().charAt(0);
+  if (!ch || ch === "-") return -1;
+  return CODE2D_GRADE_ORDER.indexOf(ch); // -1 if not A/B/C/D/F
+}
+
+/* ---- Shared interlock check: RX,Ready ----
+   0 = ready (proceed), 1 = active error (hard alarm), 2 = busy
+   (soft block, retry later), anything else = unexpected (soft block). ---- */
+async function eqCheckLaserReady(conn) {
+  const raw = await eqSendRaw(conn, "RX,Ready");
+  if (!raw.ok) {
+    return { ready: false, alarm: true, message: raw.message };
+  }
+  const status = (raw.response.split(",")[2] || "").trim();
+  if (status === "0") return { ready: true };
+  if (status === "1") {
+    return { ready: false, alarm: true, message: "Laser reports an active error (RX,Ready=1). Clear it on the unit first." };
+  }
+  if (status === "2") {
+    return { ready: false, alarm: false, message: "Laser is busy (marking/expansion in progress)." };
+  }
+  return { ready: false, alarm: false, message: `Unexpected RX,Ready response: ${raw.response}` };
+}
+
+/* ---- 1. 2D Code: Start Reader ----
+   Interlock -> WX,Check2DCode5=A,B,...,Q (this model's 17 stored
+   params) -> expects WX,OK,<v1>,<v2>,<v3>. v1 is the grade-bearing
+   value (positionally analogous to "B" in CodeReadResult's reply —
+   see CODE2D_RESULT_READER below). ---- */
+async function wmRunCode2DStartReader() {
+  const pallet = MON.activePallet || WM.runningPallet || WM_PALLET_STATE.operatorRoomPallet;
+  const job = getSelectedJob(pallet);
+  if (!job) return { ok: false, alarm: true, message: `No model selected for ${pallet}.` };
+  const conn = getEquipmentConnection();
+
+  wmLog(`>>> 2D CODE START READER interlock check (${pallet})`);
+  const interlock = await eqCheckLaserReady(conn);
+  if (!interlock.ready) {
+    wmLog(`!!! ${interlock.message}`, interlock.alarm ? "error" : "warn");
+    return { ok: false, alarm: !!interlock.alarm, message: interlock.message };
+  }
+  wmLog(`<<< Laser ready`, "ok");
+
+  const params = Array.isArray(job.start2dcode_params) ? job.start2dcode_params : [];
+  if (params.length !== 17 || params.some((p) => p === undefined || p === null || String(p).trim() === "")) {
+    wmLog(`!!! Check2DCode5 parameters are not fully defined for this model`, "error");
+    return {
+      ok: false,
+      alarm: true,
+      message: "Check2DCode5 parameters (A-Q) are not fully defined for this model. Set them on Add New Model / Model Setting.",
+    };
+  }
+
+  const command = `WX,Check2DCode5=${params.join(",")}`;
+  wmLog(`>>> ${command}`);
+  const raw = await eqSendRaw(conn, command);
+  if (!raw.ok) {
+    wmLog(`!!! Could not reach laser: ${raw.message}`, "error");
+    return { ok: false, alarm: true, message: raw.message };
+  }
+  if (!raw.response.startsWith("WX,OK")) {
+    wmLog(`!!! Check2DCode5 failed: ${raw.response}`, "error");
+    return { ok: false, alarm: true, message: raw.response };
+  }
+  wmLog(`<<< ${raw.response}`, "ok");
+
+  const parts = raw.response.split(",");
+  const values = { v1: parts[2] || "", v2: parts[3] || "", v3: parts[4] || "" };
+  MON.code2d[pallet] = { grade: values.v1, values, source: "start_reader", raw: raw.response };
+
+  return { ok: true, message: raw.response };
+}
+
+/* ---- 2. 2D Code: Read Result ----
+   Interlock -> RX,CodeReadResult=<0|1> (this model's stored
+   read2dcode_detailed flag) -> expects:
+     not detailed:  RX,OK,B,W,X,Y
+     detailed (=1): RX,OK,B,C,V,W,X,Y
+   B is the grade-bearing value. ---- */
+async function wmRunCode2DResultReader() {
+  const pallet = MON.activePallet || WM.runningPallet || WM_PALLET_STATE.operatorRoomPallet;
+  const job = getSelectedJob(pallet);
+  if (!job) return { ok: false, alarm: true, message: `No model selected for ${pallet}.` };
+  const conn = getEquipmentConnection();
+
+  wmLog(`>>> 2D CODE READ RESULT interlock check (${pallet})`);
+  const interlock = await eqCheckLaserReady(conn);
+  if (!interlock.ready) {
+    wmLog(`!!! ${interlock.message}`, interlock.alarm ? "error" : "warn");
+    return { ok: false, alarm: !!interlock.alarm, message: interlock.message };
+  }
+  wmLog(`<<< Laser ready`, "ok");
+
+  const detailed =
+    job.read2dcode_detailed !== undefined && job.read2dcode_detailed !== null && String(job.read2dcode_detailed).trim() !== ""
+      ? String(job.read2dcode_detailed).trim()
+      : "0";
+  const command = `RX,CodeReadResult=${detailed}`;
+  wmLog(`>>> ${command}`);
+  const raw = await eqSendRaw(conn, command);
+  if (!raw.ok) {
+    wmLog(`!!! Could not reach laser: ${raw.message}`, "error");
+    return { ok: false, alarm: true, message: raw.message };
+  }
+  if (!raw.response.startsWith("RX,OK")) {
+    wmLog(`!!! CodeReadResult failed: ${raw.response}`, "error");
+    return { ok: false, alarm: true, message: raw.response };
+  }
+  wmLog(`<<< ${raw.response}`, "ok");
+
+  const parts = raw.response.split(",");
+  let grade, extra;
+  if (detailed === "1" && parts.length >= 8) {
+    grade = parts[2] || "";
+    extra = { c: parts[3] || "", v: parts[4] || "", w: parts[5] || "", x: parts[6] || "", y: parts[7] || "" };
+  } else {
+    grade = parts[2] || "";
+    extra = { w: parts[3] || "", x: parts[4] || "", y: parts[5] || "" };
+  }
+  MON.code2d[pallet] = { grade, values: extra, source: "read_result", raw: raw.response };
+
+  return { ok: true, message: raw.response };
+}
+
+/* ---- 3. 2D Code: Grade Result (analysis only — no command sent) ----
+   Compares the last captured grade (from Start Reader OR Read
+   Result, whichever ran most recently for this pallet) against the
+   model's Control Grade threshold. Alarms if either side is missing
+   or unrecognized; otherwise ok=true/false carries pass/fail without
+   raising an alarm (a failing grade is a process result, not an
+   equipment fault). ---- */
+async function wmRunCode2DGradeResult() {
+  const pallet = MON.activePallet || WM.runningPallet || WM_PALLET_STATE.operatorRoomPallet;
+  const job = getSelectedJob(pallet);
+  if (!job) return { ok: false, alarm: true, message: `No model selected for ${pallet}.` };
+
+  const threshold = job.control_grade ? String(job.control_grade).trim() : "";
+  if (!threshold) {
+    wmLog(`!!! No Control Grade defined for ${job.model} — cannot grade`, "error");
+    return {
+      ok: false,
+      alarm: true,
+      message: "Control Grade is not defined for this model. Set it on Add New Model / Model Setting before running the grade check.",
+    };
+  }
+
+  const captured = MON.code2d[pallet];
+  if (!captured || !captured.grade) {
+    wmLog(`!!! No 2D code result captured yet for ${pallet} — run Start Reader or Read Result first`, "error");
+    return {
+      ok: false,
+      alarm: true,
+      message: "No 2D code result available yet. Run 2D Code Start Reader or Read Result before Grade Result.",
+    };
+  }
+
+  const actualRank = code2dGradeRank(captured.grade);
+  const thresholdRank = code2dGradeRank(threshold);
+  if (actualRank === -1 || thresholdRank === -1) {
+    wmLog(`!!! Unrecognized grade value ("${captured.grade}" vs threshold "${threshold}")`, "error");
+    return { ok: false, alarm: true, message: `Unrecognized grade ("${captured.grade}") or threshold ("${threshold}").` };
+  }
+
+  const pass = actualRank >= thresholdRank;
+  wmLog(`${pass ? "<<<" : "!!!"} Grade ${captured.grade} vs threshold ${threshold}: ${pass ? "PASS" : "FAIL"}`, pass ? "ok" : "warn");
+
+  return {
+    ok: pass,
+    alarm: false,
+    message: pass
+      ? `Grade ${captured.grade} meets threshold ${threshold}.`
+      : `Grade ${captured.grade} is below threshold ${threshold}.`,
+  };
+}
+
 const WM_FUNCTIONS = {
   OPEN_FRONT_DOOR: {
     label: "Open Front Door",
@@ -2269,20 +2466,20 @@ const WM_FUNCTIONS = {
   CODE2D_START_READER: {
     label: "2D Code: Start Reader",
     group: "vision",
-    desc: "WX,Check2DCode5 — starts 2D code verification on the marked part.",
-    run: () => wmStub("2DCODE_START_READER"),
+    desc: "Interlock check, then WX,Check2DCode5 with this model's 17 A-Q parameters.",
+    run: () => wmRunCode2DStartReader(),
   },
   CODE2D_RESULT_READER: {
     label: "2D Code: Read Result",
     group: "vision",
-    desc: "RX,CodeReadResult — reads back the last 2D code read result.",
-    run: () => wmStub("2DCODE_RESULT_READER"),
+    desc: "Interlock check, then RX,CodeReadResult — reads back the last 2D code read.",
+    run: () => wmRunCode2DResultReader(),
   },
   CODE2D_GRADE_RESULT: {
     label: "2D Code: Grade Result",
     group: "vision",
-    desc: "Reads the ISO grade of the last read, checked against Control Grade.",
-    run: () => wmStub("2DCODE_GRADE_RESULT"),
+    desc: "Compares the last captured grade against this model's Control Grade threshold. No command sent.",
+    run: () => wmRunCode2DGradeResult(),
   },
   START_MARKING: {
     label: "Start Marking",
