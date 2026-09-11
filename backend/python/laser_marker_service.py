@@ -171,7 +171,7 @@ def connect():
 def _send_raw_command(ip, port, command):
     state.log(f">>> [cmd] {command}")
     try:
-        c = LaserClient(ip, port, timeout=15)
+        c = LaserClient(ip, port, timeout=30)
         response = c.send_raw(command)
         c.close()
         state.log(f"<<< [cmd] {response}")

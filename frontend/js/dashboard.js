@@ -335,6 +335,31 @@ function getSelectedJobCommand(station) {
   return buildBaseCommand(getSelectedJob(station));
 }
 
+/* ---- Shared equipment connection (IP/port), persisted across pages ----
+   Lets the auto/manual sequences use whatever connection the Add New
+   Model page's Test Connection panel is currently pointed at, instead
+   of each side guessing its own default. ---- */
+const EQ_CONN_KEY = "nlm_equipment_conn";
+const EQ_CONN_DEFAULT = { ip: "10.207.1.202", port: 50002 };
+
+function getEquipmentConnection() {
+  try {
+    const stored = JSON.parse(localStorage.getItem(EQ_CONN_KEY) || "null");
+    if (stored && stored.ip && stored.port) return stored;
+  } catch (err) {
+    // fall through to default
+  }
+  return { ...EQ_CONN_DEFAULT };
+}
+
+function setEquipmentConnection(ip, port) {
+  const portNum = Number(port);
+  localStorage.setItem(
+    EQ_CONN_KEY,
+    JSON.stringify({ ip, port: Number.isFinite(portNum) ? portNum : EQ_CONN_DEFAULT.port })
+  );
+}
+
 /* ---- Check-result status (Camera / 2D Read / 2D Grade) per pallet ----
    Simulated for now — no equipment signal wired up yet. Persisted so
    Monitor reflects the latest result even if the sequence that produced
@@ -2050,6 +2075,124 @@ async function wmStub(name, ms = 500) {
   return { ok: true, message: `${name} OK (simulated)` };
 }
 
+/* ---- Raw equipment command helper (transport-level only) ----
+   Returns { ok, response, message }. ok=false means the HTTP call
+   itself failed (unreachable service, connection error) — it does
+   NOT parse WX,OK vs WX,NG; callers check that themselves since the
+   right check differs per command (RX,Ready's status digit vs a
+   plain WX,OK/WX,NG). ---- */
+async function eqSendRaw(conn, command) {
+  try {
+    const res = await apiFetch("/api/equipment/raw", {
+      method: "POST",
+      body: JSON.stringify({ ip: conn.ip, port: conn.port, command }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || data.ok === false) {
+      return { ok: false, response: null, message: (data && data.error) || `Command failed (${command}).` };
+    }
+    return { ok: true, response: data.response || "", message: data.response || "" };
+  } catch (err) {
+    return { ok: false, response: null, message: "Could not reach the equipment service." };
+  }
+}
+
+// TODO: read the middle-door / side-door state via the Modbus I/O
+// service once it exists (README "Recommended next step" #2). Until
+// then this always reports closed so the laser-side steps built here
+// aren't blocked on hardware that isn't wired up yet.
+async function ioCheckDoorsClosed() {
+  return { ok: true, closed: true };
+}
+
+// TODO: read EC-S7H-500-3-WA #2/#3 limit switches via the Modbus I/O
+// service once it exists:
+//   #2 LS0=1 & #3 LS1=1 -> Pallet1 physically in the Machine Room
+//   #2 LS1=1 & #3 LS0=1 -> Pallet2 physically in the Machine Room
+// Until then this trusts whichever pallet the software believes
+// CHANGE_PALLET most recently moved in, rather than a real sensor.
+async function ioReadPalletInMachineRoom(expectedPallet) {
+  return { ok: true, pallet: expectedPallet };
+}
+
+/* ---- Real Start Marking sequence ----
+   1. Interlock: doors closed + laser RX,Ready
+   2. Confirm which pallet is physically in the Machine Room
+   3/4. Send JobNo + BLK/CharacterString conditions, wait for WX,OK
+   5/6. Send WX,StartMarking=1, wait for WX,OK
+   Active pallet comes from whichever context is currently running
+   this step (Monitor's auto cycle sets MON.activePallet; Model
+   Setting's manual sequence sets WM.runningPallet); falls back to
+   the pallet currently in the Operator Room if called stand-alone
+   from the quick manual-function button grid. ---- */
+async function wmRunStartMarking() {
+  const pallet = MON.activePallet || WM.runningPallet || WM_PALLET_STATE.operatorRoomPallet;
+  const job = getSelectedJob(pallet);
+  if (!job) {
+    return { ok: false, alarm: true, message: `No model selected for ${pallet}.` };
+  }
+  const conn = getEquipmentConnection();
+
+  // ---- 1. Interlock ----
+  wmLog(`>>> START_MARKING interlock check (${pallet})`);
+  const doors = await ioCheckDoorsClosed();
+  if (!doors.ok || !doors.closed) {
+    wmLog(`!!! Door interlock not satisfied`, "error");
+    return { ok: false, alarm: true, message: "Middle or side door is not closed." };
+  }
+  const readyRaw = await eqSendRaw(conn, "RX,Ready");
+  if (!readyRaw.ok) {
+    wmLog(`!!! Could not reach laser: ${readyRaw.message}`, "error");
+    return { ok: false, alarm: true, message: readyRaw.message };
+  }
+  const readyStatus = (readyRaw.response.split(",")[2] || "").trim();
+  if (readyStatus === "1") {
+    wmLog(`!!! Laser has an active error (RX,Ready=1)`, "error");
+    return { ok: false, alarm: true, message: "Laser reports an active error. Clear it on the unit first." };
+  }
+  if (readyStatus !== "0") {
+    wmLog(`!!! Laser not ready (RX,Ready=${readyStatus || "?"})`, "warn");
+    return { ok: false, alarm: false, message: `Laser is not ready yet (status ${readyStatus || "unknown"}).` };
+  }
+  wmLog(`<<< Interlock OK — doors closed, laser ready`, "ok");
+
+  // ---- 2. Confirm pallet physically in the Machine Room ----
+  const palletCheck = await ioReadPalletInMachineRoom(pallet);
+  if (!palletCheck.ok || palletCheck.pallet !== pallet) {
+    wmLog(`!!! Pallet mismatch: expected ${pallet}, sensors report ${palletCheck.pallet || "unknown"}`, "error");
+    return { ok: false, alarm: true, message: "Pallet position sensors do not match the expected pallet." };
+  }
+
+  // ---- 3/4. Send job number + conditions, wait for WX,OK ----
+  const baseCommand = `WX,${buildBaseCommand(job)}`;
+  wmLog(`>>> ${baseCommand}`);
+  const setRaw = await eqSendRaw(conn, baseCommand);
+  if (!setRaw.ok) {
+    wmLog(`!!! Could not reach laser: ${setRaw.message}`, "error");
+    return { ok: false, alarm: true, message: setRaw.message };
+  }
+  if (!setRaw.response.startsWith("WX,OK")) {
+    wmLog(`!!! Job/condition set failed: ${setRaw.response}`, "error");
+    return { ok: false, alarm: true, message: setRaw.response };
+  }
+  wmLog(`<<< ${setRaw.response}`, "ok");
+
+  // ---- 5/6. Trigger marking, wait for WX,OK ----
+  wmLog(`>>> WX,StartMarking=1`);
+  const markRaw = await eqSendRaw(conn, "WX,StartMarking=1");
+  if (!markRaw.ok) {
+    wmLog(`!!! Could not reach laser: ${markRaw.message}`, "error");
+    return { ok: false, alarm: true, message: markRaw.message };
+  }
+  if (!markRaw.response.startsWith("WX,OK")) {
+    wmLog(`!!! Marking failed: ${markRaw.response}`, "error");
+    return { ok: false, alarm: true, message: markRaw.response };
+  }
+  wmLog(`<<< ${markRaw.response}`, "ok");
+
+  return { ok: true, message: "Marking complete." };
+}
+
 const WM_FUNCTIONS = {
   OPEN_FRONT_DOOR: {
     label: "Open Front Door",
@@ -2124,8 +2267,8 @@ const WM_FUNCTIONS = {
   START_MARKING: {
     label: "Start Marking",
     group: "laser",
-    desc: "WX,StartMarking — triggers the laser on the currently selected job.",
-    run: () => wmStub("START_MARKING", 1200),
+    desc: "Interlock + pallet check, then WX,JobNo/BLK/CharacterString and WX,StartMarking=1 against the MD-X2520A.",
+    run: () => wmRunStartMarking(),
   },
 };
 
@@ -3716,6 +3859,13 @@ PAGE_INIT.add_new_model = function () {
   eqBuildJobButtons();
   eqLoadCommands();
 
+  // Show the shared/persisted connection, not just the HTML default.
+  const savedConn = getEquipmentConnection();
+  const eqIpInput = document.getElementById("eq-ip");
+  const eqPortInput = document.getElementById("eq-port");
+  if (eqIpInput) eqIpInput.value = savedConn.ip;
+  if (eqPortInput) eqPortInput.value = savedConn.port;
+
   document.getElementById("eq-connect-btn").addEventListener("click", async () => {
     const { ip, port } = eqGetIpPort();
     eqSetStatusPill("busy");
@@ -3818,9 +3968,12 @@ function eqSetStatusPill(mode) {
 function eqGetIpPort() {
   const ipInput = document.getElementById("eq-ip");
   const portInput = document.getElementById("eq-port");
-  const ip = ipInput ? ipInput.value.trim() : "10.207.1.254";
-  const port = portInput ? Number(portInput.value || 50002) : 50002;
-  return { ip, port: Number.isFinite(port) ? port : 50002 };
+  const conn = getEquipmentConnection();
+  const ip = ipInput ? (ipInput.value.trim() || conn.ip) : conn.ip;
+  const port = Number((portInput && portInput.value) || conn.port);
+  const result = { ip, port: Number.isFinite(port) ? port : conn.port };
+  setEquipmentConnection(result.ip, result.port);
+  return result;
 }
 
 function eqBuildJobButtons() {

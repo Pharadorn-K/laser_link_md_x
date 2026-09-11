@@ -26,6 +26,7 @@ Protocol notes (Keyence MD-X2000/2500 series command reference):
     reply of WX,OK to StartMarking means marking has actually finished.
 """
 
+import sys
 import socket
 import threading
 import queue
@@ -37,8 +38,8 @@ import itertools
 # ----------------------------------------------------------------------
 # LASER_IP_DEFAULT = "192.168.1.20"
 # LASER_PORT_DEFAULT = 50002
-LASER_IP_DEFAULT = "10.207.1.123"
-LASER_PORT_DEFAULT = 9999
+LASER_IP_DEFAULT = "10.207.1.202"
+LASER_PORT_DEFAULT = 50002
 DELIMITER = b"\r"
 
 PROGRAM_BUTTONS = list(range(1, 5))  # Job 0001 .. 0004
