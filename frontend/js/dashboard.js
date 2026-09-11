@@ -2125,6 +2125,7 @@ async function ioReadPalletInMachineRoom(expectedPallet) {
    Setting's manual sequence sets WM.runningPallet); falls back to
    the pallet currently in the Operator Room if called stand-alone
    from the quick manual-function button grid. ---- */
+// frontend/js/dashboard.js — replaces the existing wmRunStartMarking()
 async function wmRunStartMarking() {
   const pallet = MON.activePallet || WM.runningPallet || WM_PALLET_STATE.operatorRoomPallet;
   const job = getSelectedJob(pallet);
@@ -2163,21 +2164,41 @@ async function wmRunStartMarking() {
     return { ok: false, alarm: true, message: "Pallet position sensors do not match the expected pallet." };
   }
 
-  // ---- 3/4. Send job number + conditions, wait for WX,OK ----
-  const baseCommand = `WX,${buildBaseCommand(job)}`;
-  wmLog(`>>> ${baseCommand}`);
-  const setRaw = await eqSendRaw(conn, baseCommand);
-  if (!setRaw.ok) {
-    wmLog(`!!! Could not reach laser: ${setRaw.message}`, "error");
-    return { ok: false, alarm: true, message: setRaw.message };
+  // ---- 3. Select the job (its own command) ----
+  const jobNoCommand = `WX,JobNo=${padJob(job.job_no)}`;
+  wmLog(`>>> ${jobNoCommand}`);
+  const jobNoRaw = await eqSendRaw(conn, jobNoCommand);
+  if (!jobNoRaw.ok) {
+    wmLog(`!!! Could not reach laser: ${jobNoRaw.message}`, "error");
+    return { ok: false, alarm: true, message: jobNoRaw.message };
   }
-  if (!setRaw.response.startsWith("WX,OK")) {
-    wmLog(`!!! Job/condition set failed: ${setRaw.response}`, "error");
-    return { ok: false, alarm: true, message: setRaw.response };
+  if (!jobNoRaw.response.startsWith("WX,OK")) {
+    wmLog(`!!! Job selection failed: ${jobNoRaw.response}`, "error");
+    return { ok: false, alarm: true, message: jobNoRaw.response };
   }
-  wmLog(`<<< ${setRaw.response}`, "ok");
+  wmLog(`<<< ${jobNoRaw.response}`, "ok");
 
-  // ---- 5/6. Trigger marking, wait for WX,OK ----
+  // ---- 4. Push every condition value individually. The marker treats
+  // "WX,JOB=..,BLK=..,CharacterString=.." as ONE command per block — a
+  // single line can't carry two BLKs, so each condition must be its
+  // own command with its own WX,OK reply before the next one goes out.
+  const conditions = job.conditions || [];
+  for (const item of conditions) {
+    const condCommand = `WX,JOB=${padJob(job.job_no)},BLK=${padBlk(item.block_no)},CharacterString=${item.condition_value}`;
+    wmLog(`>>> ${condCommand}`);
+    const condRaw = await eqSendRaw(conn, condCommand);
+    if (!condRaw.ok) {
+      wmLog(`!!! Could not reach laser: ${condRaw.message}`, "error");
+      return { ok: false, alarm: true, message: condRaw.message };
+    }
+    if (!condRaw.response.startsWith("WX,OK")) {
+      wmLog(`!!! Setting "${item.condition_name}" (BLK ${padBlk(item.block_no)}) failed: ${condRaw.response}`, "error");
+      return { ok: false, alarm: true, message: condRaw.response };
+    }
+    wmLog(`<<< ${condRaw.response}`, "ok");
+  }
+
+  // ---- 5. Trigger marking, wait for WX,OK ----
   wmLog(`>>> WX,StartMarking=1`);
   const markRaw = await eqSendRaw(conn, "WX,StartMarking=1");
   if (!markRaw.ok) {
@@ -2192,7 +2213,6 @@ async function wmRunStartMarking() {
 
   return { ok: true, message: "Marking complete." };
 }
-
 const WM_FUNCTIONS = {
   OPEN_FRONT_DOOR: {
     label: "Open Front Door",

@@ -171,7 +171,7 @@ def connect():
 def _send_raw_command(ip, port, command):
     state.log(f">>> [cmd] {command}")
     try:
-        c = LaserClient(ip, port, timeout=30)
+        c = LaserClient(ip, port, timeout=90)   # was 30 — real marking needs more headroom
         response = c.send_raw(command)
         c.close()
         state.log(f"<<< [cmd] {response}")
@@ -256,4 +256,4 @@ def clear_queue():
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=True, use_reloader=False)
+    app.run(host="0.0.0.0", port=5000, debug=True, use_reloader=False, threaded=True)

@@ -1,15 +1,14 @@
 // backend/node/services/laserService.js
-// ============================================================
-// Bridge to backend/python (laser_marker_service.py Flask API)
-// Node stays the single frontend-facing API; it forwards
-// equipment calls to the Python service and returns the result.
-// ============================================================
 const axios = require('axios');
 require('dotenv').config();
 
 const BASE = process.env.PYTHON_SERVICE_URL || 'http://localhost:5000';
 
-const client = axios.create({ baseURL: BASE, timeout: 20000 });
+// Marking (especially StartMarking) can legitimately take a long time
+// on real hardware — waiting for camera/2D-code checks etc. The old
+// 20s timeout was fine while these were 500ms stubs; now it can cut
+// off a request the Python service is still faithfully processing.
+const client = axios.create({ baseURL: BASE, timeout: 90000 });
 
 async function forward(method, path, data) {
   try {
