@@ -18,8 +18,8 @@ IPC/
 **Physical layout / interlocks:**
 
 - **Side door** — mechanical, spring-return. The user opens it manually
-  during Setting; a spring closes it again over time. Not powered or
-  monitored by the app.
+  during Setting; a spring closes it again over time. and also have
+  D4SL-N2FFA-D4 for safety side doors.
 - **Middle door** — mechanical. Separates the **Machine Room** (where
   the laser fires) from the **Operator Room** (where parts are loaded
   and unloaded). Opens/closes as a side effect of the pallet-swap
@@ -194,16 +194,16 @@ User** page before you can sign in.
 
 ## Roles & page access
 
-| Page              | admin | engineer | machine_controller | operator |
-|-------------------|:-----:|:--------:|:-------------------:|:--------:|
-| Monitor           |  ✓    |    ✓     |         ✓           |    ✓     |
-| Production Log    |  ✓    |    ✓     |         —           |    —     |
-| Model Setting     |  ✓    |    ✓     |         ✓           |    —     |
-| Add New Model     |  ✓    |    ✓     |         —           |    —     |
-| Alarm Center      |  ✓    |    ✓     |         ✓           |    ✓     |
-| Profile           |  ✓    |    ✓     |         ✓           |    ✓     |
-| All User          |  ✓    |    —     |         —           |    —     |
-| System Log        |  ✓    |    —     |         —           |    —     |
+| Page           | admin | engineer | machine_controller | operator |
+| -------------- | :---: | :------: | :----------------: | :------: |
+| Monitor        |   ✓   |    ✓     |         ✓          |    ✓     |
+| Production Log |   ✓   |    ✓     |         —          |    —     |
+| Model Setting  |   ✓   |    ✓     |         ✓          |    —     |
+| Add New Model  |   ✓   |    ✓     |         —          |    —     |
+| Alarm Center   |   ✓   |    ✓     |         ✓          |    ✓     |
+| Profile        |   ✓   |    ✓     |         ✓          |    ✓     |
+| All User       |   ✓   |    —     |         —          |    —     |
+| System Log     |   ✓   |    —     |         —          |    —     |
 
 Enforced both in the UI (`PAGE_ROLES` in `dashboard.js`) and on every
 Node API route via `requireRole(...)`.
