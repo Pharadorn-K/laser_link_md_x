@@ -22,3 +22,4 @@ pywin32-ctypes==0.2.3
 redis==8.1.0
 setuptools==83.0.0
 Werkzeug==3.1.8
+pymodbus==3.6.9
