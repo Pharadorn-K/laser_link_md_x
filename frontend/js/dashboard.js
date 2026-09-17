@@ -2575,7 +2575,7 @@ async function wmRunCode2DGradeResult() {
 }
 
 const WM_FUNCTIONS = {
-OPEN_FRONT_DOOR: {
+  OPEN_FRONT_DOOR: {
   label: "Open Front Door",
   group: "io",
   desc: "IAI EC-R6H-250-3-WA. BACKWARD cylinder = open. Confirmed by DI06 (backward_comp_frontdoor).",
@@ -2598,8 +2598,8 @@ OPEN_FRONT_DOOR: {
       return { ok: false, alarm: true, message: "Could not reach I/O service." };
     }
   },
-},
-CLOSE_FRONT_DOOR: {
+  },
+  CLOSE_FRONT_DOOR: {
   label: "Close Front Door",
   group: "io",
   desc: "IAI EC-R6H-250-3-WA. FORWARD cylinder = close. Confirmed by DI07 + DI13 + DI14.",
@@ -2622,64 +2622,83 @@ CLOSE_FRONT_DOOR: {
       return { ok: false, alarm: true, message: "Could not reach I/O service." };
     }
   },
-},
-CHANGE_PALLET: {
+  },
+  CHANGE_PALLET: {
   label: "Change Pallet",
   group: "pallet",
   desc: "Swaps Pallet1/Pallet2 via the middle door. Interlocks TBD: front door closed, side door closed.",
   run: async () => {
     const target = WM_PALLET_STATE.operatorRoomPallet === "Pallet1" ? 2 : 1;
+    wmLog(`>>> CHANGE_PALLET — swapping to bring Pallet ${target} into the Operator Room...`);
     try {
       const res = await apiFetch("/api/io/change-pallet", {
         method: "POST",
         body: JSON.stringify({ target_pallet: target }),
       });
       const data = await res.json();
-      if (!res.ok || !data.ok) return { ok: false, alarm: true, message: data.error || "Change pallet failed." };
+      if (!res.ok || !data.ok) {
+        wmLog(`!!! Change pallet failed: ${data.error || "unknown error"}`, "error");
+        return { ok: false, alarm: true, message: data.error || "Change pallet failed." };
+      }
       WM_PALLET_STATE.operatorRoomPallet = target === 1 ? "Pallet1" : "Pallet2";
       wmUpdatePalletLocationUI();
+      wmLog("<<< Pallet changed.", "ok");
       return { ok: true, message: `Pallet${target} now in Operator Room.` };
     } catch (err) {
+      wmLog("!!! Could not reach I/O service.", "error");
       return { ok: false, alarm: true, message: "Could not reach I/O service." };
     }
   },
-},
-CALL_PALLET1: {
+  },
+  CALL_PALLET1: {
   label: "Call Pallet 1",
   group: "pallet",
   desc: "Bring Pallet 1 to the Operator Room (swaps with Pallet 2 if needed).",
   run: async () => {
+    wmLog(">>> CALL_PALLET1 — bringing Pallet 1 to the Operator Room...");
     try {
       const res = await apiFetch("/api/io/call-pallet/1", { method: "POST", body: JSON.stringify({}) });
       const data = await res.json();
-      if (!res.ok || !data.ok) return { ok: false, alarm: true, message: data.error || "Call Pallet 1 failed." };
+      if (!res.ok || !data.ok) {
+        wmLog(`!!! Call Pallet 1 failed: ${data.error || "unknown error"}`, "error");
+        return { ok: false, alarm: true, message: data.error || "Call Pallet 1 failed." };
+      }
       const inOperator = data.state ? !!data.state.p1_operator : true;
       WM_PALLET_STATE.operatorRoomPallet = inOperator ? "Pallet1" : WM_PALLET_STATE.operatorRoomPallet;
       wmUpdatePalletLocationUI();
+      wmLog("<<< Pallet changed.", "ok");
       return { ok: true, message: "Pallet 1 in Operator Room." };
     } catch (err) {
+      wmLog("!!! Could not reach I/O service.", "error");
       return { ok: false, alarm: true, message: "Could not reach I/O service." };
     }
   },
-},
-CALL_PALLET2: {
+  },
+  CALL_PALLET2: {
   label: "Call Pallet 2",
   group: "pallet",
   desc: "Bring Pallet 2 to the Operator Room (swaps with Pallet 1 if needed).",
   run: async () => {
+    wmLog(">>> CALL_PALLET2 — bringing Pallet 2 to the Operator Room...");
     try {
       const res = await apiFetch("/api/io/call-pallet/2", { method: "POST", body: JSON.stringify({}) });
       const data = await res.json();
-      if (!res.ok || !data.ok) return { ok: false, alarm: true, message: data.error || "Call Pallet 2 failed." };
+      if (!res.ok || !data.ok) {
+        wmLog(`!!! Call Pallet 2 failed: ${data.error || "unknown error"}`, "error");
+        return { ok: false, alarm: true, message: data.error || "Call Pallet 2 failed." };
+      }
       const inOperator = data.state ? !!data.state.p2_operator : true;
       WM_PALLET_STATE.operatorRoomPallet = inOperator ? "Pallet2" : WM_PALLET_STATE.operatorRoomPallet;
       wmUpdatePalletLocationUI();
+      wmLog("<<< Pallet changed.", "ok");
       return { ok: true, message: "Pallet 2 in Operator Room." };
     } catch (err) {
+      wmLog("!!! Could not reach I/O service.", "error");
       return { ok: false, alarm: true, message: "Could not reach I/O service." };
     }
   },
-},
+  },
+
   CAMERA_TRIGGER: {
     label: "Camera Trigger",
     group: "vision",
