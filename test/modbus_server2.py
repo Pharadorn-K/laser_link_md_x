@@ -217,7 +217,7 @@ class ModbusServerApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Modbus TCP Server — Station 2 (safety relays / shutdown)")
-        self.root.geometry("760x680")
+        self.root.geometry("630x800")
         self.root.configure(bg="#1e1e2e")
 
         self.ds = ModbusDataStore()
@@ -379,7 +379,7 @@ class ModbusServerApp:
 
     def _client_handler(self, conn, addr, handler):
         try:
-            conn.settimeout(30)
+            conn.settimeout(None)
             while self.running:
                 data = conn.recv(1024)
                 if not data:

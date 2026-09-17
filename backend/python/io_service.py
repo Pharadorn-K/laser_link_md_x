@@ -32,24 +32,46 @@ def front_door():
         return jsonify({"ok": False, "error": str(e)}), 502
 
 
-@app.post("/api/io/swap-pallets")
-def swap_pallets():
+def _run_change_pallet(target_pallet):
     logs = []
     try:
-        _client.swap_pallets(log_fn=lambda m: logs.append(m))
-        return jsonify({"ok": True, "log": logs})
+        final_state = _client.change_pallet_to_operator(target_pallet, log_fn=lambda m: logs.append(m))
+        return jsonify({"ok": True, "log": logs, "state": final_state})
     except IOError_ as e:
         return jsonify({"ok": False, "error": str(e), "log": logs}), 502
 
 
-@app.post("/api/io/call-pallet/<int:pallet_no>")
-def call_pallet(pallet_no):
-    return swap_pallets()  # mechanism is coupled — same underlying action
-
-
 @app.post("/api/io/change-pallet")
 def change_pallet():
-    return swap_pallets()
+    data = request.get_json(force=True) or {}
+    # Node sends {"target_pallet": 1|2} -- which pallet should end up
+    # in the Operator Room.
+    try:
+        target = int(data.get("target_pallet"))
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "target_pallet (1 or 2) is required."}), 400
+    if target not in (1, 2):
+        return jsonify({"ok": False, "error": "target_pallet must be 1 or 2."}), 400
+    return _run_change_pallet(target)
+
+
+@app.post("/api/io/call-pallet/<int:pallet_no>")
+def call_pallet(pallet_no):
+    if pallet_no not in (1, 2):
+        return jsonify({"ok": False, "error": "pallet_no must be 1 or 2."}), 400
+    return _run_change_pallet(pallet_no)
+
+
+# Kept for backward compatibility with any old caller that still hits
+# this path with no target — just toggles based on current position.
+@app.post("/api/io/swap-pallets")
+def swap_pallets():
+    try:
+        state = _client.pallet_state()
+    except IOError_ as e:
+        return jsonify({"ok": False, "error": str(e), "log": []}), 502
+    target = 1 if state["p2_operator"] else 2
+    return _run_change_pallet(target)
 
 
 @app.post("/api/io/alarm-reset/<axis>")

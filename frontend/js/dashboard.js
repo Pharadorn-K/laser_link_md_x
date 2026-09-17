@@ -2647,13 +2647,14 @@ CHANGE_PALLET: {
 CALL_PALLET1: {
   label: "Call Pallet 1",
   group: "pallet",
-  desc: "IAI EC-S7H-500-3-WA #2 — bring Pallet 1 to the operator-side load position.",
+  desc: "Bring Pallet 1 to the Operator Room (swaps with Pallet 2 if needed).",
   run: async () => {
     try {
       const res = await apiFetch("/api/io/call-pallet/1", { method: "POST", body: JSON.stringify({}) });
       const data = await res.json();
       if (!res.ok || !data.ok) return { ok: false, alarm: true, message: data.error || "Call Pallet 1 failed." };
-      WM_PALLET_STATE.operatorRoomPallet = "Pallet1";
+      const inOperator = data.state ? !!data.state.p1_operator : true;
+      WM_PALLET_STATE.operatorRoomPallet = inOperator ? "Pallet1" : WM_PALLET_STATE.operatorRoomPallet;
       wmUpdatePalletLocationUI();
       return { ok: true, message: "Pallet 1 in Operator Room." };
     } catch (err) {
@@ -2664,13 +2665,14 @@ CALL_PALLET1: {
 CALL_PALLET2: {
   label: "Call Pallet 2",
   group: "pallet",
-  desc: "IAI EC-S7H-500-3-WA #3 — bring Pallet 2 to the operator-side load position.",
+  desc: "Bring Pallet 2 to the Operator Room (swaps with Pallet 1 if needed).",
   run: async () => {
     try {
       const res = await apiFetch("/api/io/call-pallet/2", { method: "POST", body: JSON.stringify({}) });
       const data = await res.json();
       if (!res.ok || !data.ok) return { ok: false, alarm: true, message: data.error || "Call Pallet 2 failed." };
-      WM_PALLET_STATE.operatorRoomPallet = "Pallet2";
+      const inOperator = data.state ? !!data.state.p2_operator : true;
+      WM_PALLET_STATE.operatorRoomPallet = inOperator ? "Pallet2" : WM_PALLET_STATE.operatorRoomPallet;
       wmUpdatePalletLocationUI();
       return { ok: true, message: "Pallet 2 in Operator Room." };
     } catch (err) {

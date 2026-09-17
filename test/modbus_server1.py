@@ -29,7 +29,7 @@ STATION1_DI_LABELS = {
     # 12 = SPARE
     13: "frontdoor_limit_left_close",
     14: "frontdoor_limit_right_close",
-    15: "safety_door_side_close",
+    15: "safety_door_side_open",
 }
 
 STATION1_COIL_LABELS = {
@@ -257,7 +257,7 @@ class ModbusServerApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Modbus TCP Server — Station 1 (pallets / front door / lamps)")
-        self.root.geometry("980x760")
+        self.root.geometry("700x900")
         self.root.configure(bg="#1e1e2e")
 
         self.ds = ModbusDataStore()
@@ -270,7 +270,6 @@ class ModbusServerApp:
             7: True,   # forward_comp_frontdoor -> front door confirmed CLOSED (forward = close)
             13: True,  # frontdoor_limit_left_close
             14: True,  # frontdoor_limit_right_close
-            15: True,  # safety_door_side_close
         }
         for addr, val in preset_di.items():
             self.ds.discrete_inputs[addr] = val
@@ -494,7 +493,7 @@ class ModbusServerApp:
 
     def _client_handler(self, conn, addr, handler):
         try:
-            conn.settimeout(30)
+            conn.settimeout(None)
             while self.running:
                 data = conn.recv(1024)
                 if not data:
