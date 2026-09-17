@@ -19,7 +19,7 @@ IPC/
 
 - **Side door** — mechanical, spring-return. The user opens it manually
   during Setting; a spring closes it again over time. and also have
-  D4SL-N2FFA-D4 for safety side doors.
+  D4SL-N2FFA-D4 for safety side doors. it NC contact so ON = OPEN, OFF = CLOSED.
 - **Middle door** — mechanical. Separates the **Machine Room** (where
   the laser fires) from the **Operator Room** (where parts are loaded
   and unloaded). Opens/closes as a side effect of the pallet-swap
