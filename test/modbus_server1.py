@@ -1,49 +1,109 @@
-# /laser_link_md_x/test/modbus_server.py
+# test/modbus_server1.py
+# ============================================================
+# Station 1 simulator (LAN-3/HUB3): pallet cylinders, front door
+# cylinder, lamps, side-door status, laser alarm/warning inputs.
+# Signal names are pulled straight from io_core.py's STATION1_DI /
+# STATION1_COIL maps so the UI never drifts from the real mapping.
+# ============================================================
 import tkinter as tk
 from tkinter import ttk, scrolledtext
 import threading
 import socket
 import struct
-import time
 from datetime import datetime
+
+# ---- Signal maps (mirrors io_core.py — keep in sync if that file changes) ----
+STATION1_DI_LABELS = {
+    0: "backward_comp_pallet1",
+    1: "forward_comp_pallet1",
+    2: "alarm_pallet1",
+    3: "backward_comp_pallet2",
+    4: "forward_comp_pallet2",
+    5: "alarm_pallet2",
+    6: "backward_comp_frontdoor",
+    7: "forward_comp_frontdoor",
+    8: "alarm_frontdoor",
+    9: "alarm_lasermark",
+    10: "warning_lasermark",
+    11: "two_hand",
+    # 12 = SPARE
+    13: "frontdoor_limit_left_close",
+    14: "frontdoor_limit_right_close",
+    15: "safety_door_side_close",
+}
+
+STATION1_COIL_LABELS = {
+    0: "backward_command_pallet1",
+    1: "forward_command_pallet1",
+    2: "alarm_reset_pallet1",
+    3: "backward_command_pallet2",
+    4: "forward_command_pallet2",
+    5: "alarm_reset_pallet2",
+    # 6, 7 = SPARE
+    8: "backward_command_frontdoor",
+    9: "forward_command_frontdoor",
+    10: "alarm_reset_frontdoor",
+    11: "alarm_reset_lasermark",
+    12: "side_safety_door_open",
+    13: "alarm_lamp_red",
+    14: "running_lamp_yellow",
+    15: "ready_lamp_green",
+}
+
+# ---- Command -> confirm-signal map, SAME-STATION pairs only ----
+# (backward_command_pallet2's confirm, limit_pallet2_down, lives on
+# Station 2 — a separate process — so it can't be auto-verified here.
+# See the note logged for that coil below.)
+CONFIRM_MAP = {
+    9:  {"command_name": "forward_command_frontdoor",  "requires": [7, 13, 14], "confirm_label": "Front Door CLOSE"},
+    8:  {"command_name": "backward_command_frontdoor", "requires": [6],         "confirm_label": "Front Door OPEN"},
+    1:  {"command_name": "forward_command_pallet1",     "requires": [1],        "confirm_label": "Pallet 1 forward complete"},
+    0:  {"command_name": "backward_command_pallet1",    "requires": [0],        "confirm_label": "Pallet 1 backward complete"},
+    4:  {"command_name": "forward_command_pallet2",     "requires": [4],        "confirm_label": "Pallet 2 forward complete"},
+}
+CROSS_STATION_NOTE = {
+    3: "backward_command_pallet2 -> confirmed by limit_pallet2_down, which lives on "
+       "Station 2 (separate process) and cannot be auto-verified here.",
+}
+
 
 # ========== Modbus Data Store ==========
 class ModbusDataStore:
     def __init__(self):
-        self.coils = [False] * 256          # 0x coils (DO)
-        self.discrete_inputs = [False] * 256 # 1x discrete inputs (DI)
-        self.holding_registers = [0] * 256   # 4x holding registers
-        self.input_registers = [0] * 256     # 3x input registers
+        self.coils = [False] * 256
+        self.discrete_inputs = [False] * 256
+        self.holding_registers = [0] * 256
+        self.input_registers = [0] * 256
         self.lock = threading.Lock()
 
     def get_coils(self, addr, count):
         with self.lock:
-            return self.coils[addr:addr+count]
+            return self.coils[addr:addr + count]
 
     def set_coils(self, addr, values):
         with self.lock:
             for i, v in enumerate(values):
-                self.coils[addr+i] = bool(v)
+                self.coils[addr + i] = bool(v)
 
     def get_discrete_inputs(self, addr, count):
         with self.lock:
-            return self.discrete_inputs[addr:addr+count]
+            return self.discrete_inputs[addr:addr + count]
 
     def get_holding_registers(self, addr, count):
         with self.lock:
-            return self.holding_registers[addr:addr+count]
+            return self.holding_registers[addr:addr + count]
 
     def set_holding_registers(self, addr, values):
         with self.lock:
             for i, v in enumerate(values):
-                self.holding_registers[addr+i] = v & 0xFFFF
+                self.holding_registers[addr + i] = v & 0xFFFF
 
     def get_input_registers(self, addr, count):
         with self.lock:
-            return self.input_registers[addr:addr+count]
+            return self.input_registers[addr:addr + count]
 
 
-# ========== Modbus TCP Handler ==========
+# ========== Modbus TCP Handler (protocol layer — unchanged) ==========
 class ModbusTCPHandler:
     def __init__(self, datastore, log_callback, update_callback):
         self.ds = datastore
@@ -53,29 +113,25 @@ class ModbusTCPHandler:
     def handle_request(self, data):
         if len(data) < 8:
             return None
-        
-        # MBAP Header
-        transaction_id = struct.unpack('>H', data[0:2])[0]
-        protocol_id    = struct.unpack('>H', data[2:4])[0]
-        unit_id        = data[6]
-        function_code  = data[7]
-
+        transaction_id = struct.unpack(">H", data[0:2])[0]
+        unit_id = data[6]
+        function_code = data[7]
         try:
-            if function_code == 0x01:   # Read Coils
+            if function_code == 0x01:
                 return self._fc01(data, transaction_id, unit_id)
-            elif function_code == 0x02: # Read Discrete Inputs
+            elif function_code == 0x02:
                 return self._fc02(data, transaction_id, unit_id)
-            elif function_code == 0x03: # Read Holding Registers
+            elif function_code == 0x03:
                 return self._fc03(data, transaction_id, unit_id)
-            elif function_code == 0x04: # Read Input Registers
+            elif function_code == 0x04:
                 return self._fc04(data, transaction_id, unit_id)
-            elif function_code == 0x05: # Write Single Coil
+            elif function_code == 0x05:
                 return self._fc05(data, transaction_id, unit_id)
-            elif function_code == 0x06: # Write Single Register
+            elif function_code == 0x06:
                 return self._fc06(data, transaction_id, unit_id)
-            elif function_code == 0x0F: # Write Multiple Coils
+            elif function_code == 0x0F:
                 return self._fc0F(data, transaction_id, unit_id)
-            elif function_code == 0x10: # Write Multiple Registers
+            elif function_code == 0x10:
                 return self._fc10(data, transaction_id, unit_id)
             else:
                 return self._error_response(transaction_id, unit_id, function_code, 0x01)
@@ -83,199 +139,161 @@ class ModbusTCPHandler:
             self.log(f"[ERROR] FC={function_code:#04x}: {e}")
             return self._error_response(transaction_id, unit_id, function_code, 0x04)
 
-    def _mbap(self, transaction_id, unit_id, pdu):
-        length = len(pdu) + 1  # unit_id + pdu
-        return struct.pack('>HHH', transaction_id, 0, length) + bytes([unit_id]) + pdu
+    def _mbap(self, tid, uid, pdu):
+        length = len(pdu) + 1
+        return struct.pack(">HHH", tid, 0, length) + bytes([uid]) + pdu
 
     def _error_response(self, tid, uid, fc, ec):
-        pdu = bytes([fc | 0x80, ec])
-        return self._mbap(tid, uid, pdu)
+        return self._mbap(tid, uid, bytes([fc | 0x80, ec]))
 
     def _fc01(self, data, tid, uid):
-        addr  = struct.unpack('>H', data[8:10])[0]
-        count = struct.unpack('>H', data[10:12])[0]
+        addr = struct.unpack(">H", data[8:10])[0]
+        count = struct.unpack(">H", data[10:12])[0]
         coils = self.ds.get_coils(addr, count)
         byte_count = (count + 7) // 8
         coil_bytes = bytearray(byte_count)
         for i, c in enumerate(coils):
             if c:
                 coil_bytes[i // 8] |= (1 << (i % 8))
-        pdu = bytes([0x01, byte_count]) + bytes(coil_bytes)
-        self.log(f"[FC01] Read Coils addr={addr} count={count} → {list(coils[:count])}")
-        return self._mbap(tid, uid, pdu)
+        self.log(f"[FC01] Read Coils addr={addr} count={count} -> {list(coils[:count])}")
+        return self._mbap(tid, uid, bytes([0x01, byte_count]) + bytes(coil_bytes))
 
     def _fc02(self, data, tid, uid):
-        addr  = struct.unpack('>H', data[8:10])[0]
-        count = struct.unpack('>H', data[10:12])[0]
+        addr = struct.unpack(">H", data[8:10])[0]
+        count = struct.unpack(">H", data[10:12])[0]
         di = self.ds.get_discrete_inputs(addr, count)
         byte_count = (count + 7) // 8
         di_bytes = bytearray(byte_count)
         for i, c in enumerate(di):
             if c:
                 di_bytes[i // 8] |= (1 << (i % 8))
-        pdu = bytes([0x02, byte_count]) + bytes(di_bytes)
-        self.log(f"[FC02] Read DI addr={addr} count={count} → {list(di[:count])}")
-        return self._mbap(tid, uid, pdu)
+        self.log(f"[FC02] Read DI addr={addr} count={count} -> {list(di[:count])}")
+        return self._mbap(tid, uid, bytes([0x02, byte_count]) + bytes(di_bytes))
 
     def _fc03(self, data, tid, uid):
-        addr  = struct.unpack('>H', data[8:10])[0]
-        count = struct.unpack('>H', data[10:12])[0]
-        regs  = self.ds.get_holding_registers(addr, count)
-        byte_count = count * 2
-        pdu = bytes([0x03, byte_count])
+        addr = struct.unpack(">H", data[8:10])[0]
+        count = struct.unpack(">H", data[10:12])[0]
+        regs = self.ds.get_holding_registers(addr, count)
+        pdu = bytes([0x03, count * 2])
         for r in regs:
-            pdu += struct.pack('>H', r)
-        self.log(f"[FC03] Read HR addr={addr} count={count} → {regs}")
+            pdu += struct.pack(">H", r)
         return self._mbap(tid, uid, pdu)
 
     def _fc04(self, data, tid, uid):
-        addr  = struct.unpack('>H', data[8:10])[0]
-        count = struct.unpack('>H', data[10:12])[0]
-        regs  = self.ds.get_input_registers(addr, count)
-        byte_count = count * 2
-        pdu = bytes([0x04, byte_count])
+        addr = struct.unpack(">H", data[8:10])[0]
+        count = struct.unpack(">H", data[10:12])[0]
+        regs = self.ds.get_input_registers(addr, count)
+        pdu = bytes([0x04, count * 2])
         for r in regs:
-            pdu += struct.pack('>H', r)
-        self.log(f"[FC04] Read IR addr={addr} count={count} → {regs}")
+            pdu += struct.pack(">H", r)
         return self._mbap(tid, uid, pdu)
 
     def _fc05(self, data, tid, uid):
-        addr  = struct.unpack('>H', data[8:10])[0]
-        value = struct.unpack('>H', data[10:12])[0]
+        addr = struct.unpack(">H", data[8:10])[0]
+        value = struct.unpack(">H", data[10:12])[0]
         coil_val = (value == 0xFF00)
         self.ds.set_coils(addr, [coil_val])
-        self.log(f"[FC05] Write Coil addr={addr} → {coil_val}")
+        self.log(f"[FC05] Write Coil addr={addr} -> {coil_val}")
         self.update_ui()
-        pdu = bytes([0x05]) + data[8:12]
-        return self._mbap(tid, uid, pdu)
+        return self._mbap(tid, uid, bytes([0x05]) + data[8:12])
 
     def _fc06(self, data, tid, uid):
-        addr  = struct.unpack('>H', data[8:10])[0]
-        value = struct.unpack('>H', data[10:12])[0]
+        addr = struct.unpack(">H", data[8:10])[0]
+        value = struct.unpack(">H", data[10:12])[0]
         self.ds.set_holding_registers(addr, [value])
-        self.log(f"[FC06] Write HR addr={addr} → {value}")
         self.update_ui()
-        pdu = bytes([0x06]) + data[8:12]
-        return self._mbap(tid, uid, pdu)
+        return self._mbap(tid, uid, bytes([0x06]) + data[8:12])
 
     def _fc0F(self, data, tid, uid):
-        addr       = struct.unpack('>H', data[8:10])[0]
-        count      = struct.unpack('>H', data[10:12])[0]
+        addr = struct.unpack(">H", data[8:10])[0]
+        count = struct.unpack(">H", data[10:12])[0]
         byte_count = data[12]
-        coil_bytes = data[13:13+byte_count]
-        values = []
-        for i in range(count):
-            bit = (coil_bytes[i // 8] >> (i % 8)) & 1
-            values.append(bool(bit))
+        coil_bytes = data[13:13 + byte_count]
+        values = [bool((coil_bytes[i // 8] >> (i % 8)) & 1) for i in range(count)]
         self.ds.set_coils(addr, values)
-        self.log(f"[FC0F] Write Coils addr={addr} count={count} → {values}")
+        self.log(f"[FC0F] Write Coils addr={addr} count={count} -> {values}")
         self.update_ui()
-        pdu = bytes([0x0F]) + data[8:12]
-        return self._mbap(tid, uid, pdu)
+        return self._mbap(tid, uid, bytes([0x0F]) + data[8:12])
 
     def _fc10(self, data, tid, uid):
-        addr       = struct.unpack('>H', data[8:10])[0]
-        count      = struct.unpack('>H', data[10:12])[0]
-        byte_count = data[12]
-        values = []
-        for i in range(count):
-            v = struct.unpack('>H', data[13+i*2:15+i*2])[0]
-            values.append(v)
+        addr = struct.unpack(">H", data[8:10])[0]
+        count = struct.unpack(">H", data[10:12])[0]
+        values = [struct.unpack(">H", data[13 + i * 2:15 + i * 2])[0] for i in range(count)]
         self.ds.set_holding_registers(addr, values)
-        self.log(f"[FC10] Write HR addr={addr} count={count} → {values}")
         self.update_ui()
-        pdu = bytes([0x10]) + data[8:12]
-        return self._mbap(tid, uid, pdu)
+        return self._mbap(tid, uid, bytes([0x10]) + data[8:12])
 
 
-# ========== Server App ==========
+class ToolTip:
+    """Small hover tooltip — shows the full signal description on hover."""
+    def __init__(self, widget, text):
+        self.widget = widget
+        self.text = text
+        self.tip = None
+        widget.bind("<Enter>", self.show)
+        widget.bind("<Leave>", self.hide)
+
+    def show(self, _event=None):
+        if self.tip or not self.text:
+            return
+        x = self.widget.winfo_rootx() + 20
+        y = self.widget.winfo_rooty() + self.widget.winfo_height() + 6
+        self.tip = tk.Toplevel(self.widget)
+        self.tip.wm_overrideredirect(True)
+        self.tip.wm_geometry(f"+{x}+{y}")
+        tk.Label(self.tip, text=self.text, bg="#f9e2af", fg="#1e1e2e",
+                 font=("Consolas", 9), padx=6, pady=3, relief=tk.SOLID, bd=1,
+                 justify=tk.LEFT).pack()
+
+    def hide(self, _event=None):
+        if self.tip:
+            self.tip.destroy()
+            self.tip = None
+
+
 class ModbusServerApp:
+    STATION_LABEL = "Station 1 (LAN-3/HUB3)"
+
     def __init__(self, root):
         self.root = root
-        self.root.title("🖥️  MT3A Modbus TCP Server (Slave)")
-        self.root.geometry("900x700")
+        self.root.title("Modbus TCP Server — Station 1 (pallets / front door / lamps)")
+        self.root.geometry("980x760")
         self.root.configure(bg="#1e1e2e")
 
         self.ds = ModbusDataStore()
+        self.armed = {}  # coil_idx -> bool, True while waiting for its confirm DI(s)
+
         # ---- Preset: idle "already wired" machine state ----
-        # STATION_ROLE: set to "station1" or "station2" per which port
-        # this process instance is simulating (run it twice).
-        STATION_ROLE = "station1"   # <-- change to "station2" for the 2nd instance
-
-        if STATION_ROLE == "station1":
-            PRESET_DI = {
-                0: True,   # backward_comp_pallet1 -> Pallet1 parked in "at rest" backward position
-                1: False,  # forward_comp_pallet1
-                2: False,  # alarm_pallet1
-                3: False,  # backward_comp_pallet2
-                4: True,   # forward_comp_pallet2 -> Pallet2 parked in "at rest" forward/up position
-                5: False,  # alarm_pallet2
-                6: True,   # backward_comp_frontdoor -> front door treated as "closed" side confirmed
-                7: False,  # forward_comp_frontdoor
-                8: False,  # alarm_frontdoor
-                9: False,  # alarm_lasermark
-                10: False, # warning_lasermark
-                11: False, # two_hand
-                13: True,  # frontdoor_limit_left_close
-                14: True,  # frontdoor_limit_right_close
-                15: True,  # safety_door_side_close
-            }
-        else:  # station2
-            PRESET_DI = {
-                0: True,  # safety_relay1_status
-                1: True,  # safety_relay2_status
-                2: False, # alarm_reset_in
-                3: False, # limit_pallet2_down (not mid-swap)
-                4: False, # shutdown_ipc
-            }
-        for addr, val in PRESET_DI.items():
-            self.ds.discrete_inputs[addr] = val
-
-        # ---- Preset: simulate an idle, already-wired machine ----
-        # Indices match io_core.py's INPUT_MAP for whichever module this
-        # instance represents. Run separate instances for Module A vs B
-        # and edit PRESET_DI accordingly (see comments below).
-        PRESET_DI = {
-            # --- If this instance is "Module A" (doors/safety), use: ---
-            0: False,  # front_door_open_sensor  -> door not open
-            1: True,   # front_door_closed_sensor -> door closed
-            2: True,   # side_door_closed (D4SL-N2FFA-D4) -> closed/safe
-
-            # --- If this instance is "Module B" (pallet cylinders),
-            #     comment the block above out and use this instead: ---
-            # 0: False,  # limit_pallet2_down  -> not currently mid-swap
-            # 1: True,   # limit_pallet1_atpos -> Pallet 1 resting in place
-            # 2: True,   # limit_pallet2_atpos -> Pallet 2 resting in place
+        preset_di = {
+            0: True,   # backward_comp_pallet1 -> Pallet1 parked backward/at-rest
+            4: True,   # forward_comp_pallet2  -> Pallet2 parked forward/up
+            7: True,   # forward_comp_frontdoor -> front door confirmed CLOSED (forward = close)
+            13: True,  # frontdoor_limit_left_close
+            14: True,  # frontdoor_limit_right_close
+            15: True,  # safety_door_side_close
         }
-        for addr, val in PRESET_DI.items():
+        for addr, val in preset_di.items():
             self.ds.discrete_inputs[addr] = val
 
         self.server_thread = None
         self.running = False
-        self.client_count = 0
 
-        # Demo: ตั้งค่า input registers จำลอง analog/temperature
-        for i in range(8):
-            self.ds.input_registers[i] = 5000 + i * 100  # analog ~5.0V
-        for i in range(8):
-            self.ds.input_registers[8+i] = 2500 + i * 10  # temp ~25.00°C
+        self.di_buttons = {}
+        self.coil_buttons = {}
 
         self.build_ui()
 
+    # ---------------- UI ----------------
     def build_ui(self):
         style = ttk.Style()
-        style.theme_use('clam')
-        style.configure('TLabel', background='#1e1e2e', foreground='#cdd6f4')
-        style.configure('TFrame', background='#1e1e2e')
-        style.configure('TLabelframe', background='#1e1e2e', foreground='#89b4fa')
-        style.configure('TLabelframe.Label', background='#1e1e2e', foreground='#89b4fa', font=('Arial', 10, 'bold'))
-        style.configure('TButton', background='#313244', foreground='#cdd6f4')
-        style.configure('TEntry', fieldbackground='#313244', foreground='#cdd6f4')
-        style.configure('Green.TButton', background='#a6e3a1', foreground='#1e1e2e')
-        style.configure('Red.TButton', background='#f38ba8', foreground='#1e1e2e')
+        style.theme_use("clam")
+        style.configure("TLabel", background="#1e1e2e", foreground="#cdd6f4")
+        style.configure("TFrame", background="#1e1e2e")
+        style.configure("TLabelframe", background="#1e1e2e", foreground="#89b4fa")
+        style.configure("TLabelframe.Label", background="#1e1e2e", foreground="#89b4fa", font=("Arial", 10, "bold"))
+        style.configure("TEntry", fieldbackground="#313244", foreground="#cdd6f4")
 
-        # ---- Top Control Frame ----
-        ctrl = ttk.LabelFrame(self.root, text=" ⚙️  Server Control ", padding=10)
+        ctrl = ttk.LabelFrame(self.root, text=f" Server Control — {self.STATION_LABEL} ", padding=10)
         ctrl.pack(fill=tk.X, padx=10, pady=5)
 
         ttk.Label(ctrl, text="IP:").grid(row=0, column=0, padx=5)
@@ -290,288 +308,167 @@ class ModbusServerApp:
         self.uid_var = tk.StringVar(value="1")
         ttk.Entry(ctrl, textvariable=self.uid_var, width=5).grid(row=0, column=5, padx=5)
 
-        self.start_btn = tk.Button(ctrl, text="▶ Start Server",
-                                   bg="#a6e3a1", fg="#1e1e2e", font=('Arial',10,'bold'),
-                                   command=self.start_server)
+        self.start_btn = tk.Button(ctrl, text="Start Server", bg="#a6e3a1", fg="#1e1e2e",
+                                    font=("Arial", 10, "bold"), command=self.start_server)
         self.start_btn.grid(row=0, column=6, padx=10)
 
-        self.stop_btn = tk.Button(ctrl, text="■ Stop",
-                                  bg="#f38ba8", fg="#1e1e2e", font=('Arial',10,'bold'),
-                                  command=self.stop_server, state=tk.DISABLED)
+        self.stop_btn = tk.Button(ctrl, text="Stop", bg="#f38ba8", fg="#1e1e2e",
+                                   font=("Arial", 10, "bold"), command=self.stop_server, state=tk.DISABLED)
         self.stop_btn.grid(row=0, column=7, padx=5)
 
-        self.status_lbl = tk.Label(ctrl, text="● STOPPED", fg="#f38ba8",
-                                   bg="#1e1e2e", font=('Arial',10,'bold'))
+        self.status_lbl = tk.Label(ctrl, text="STOPPED", fg="#f38ba8", bg="#1e1e2e", font=("Arial", 10, "bold"))
         self.status_lbl.grid(row=0, column=8, padx=10)
 
-        # ---- Data Frame (Notebook) ----
-        nb = ttk.Notebook(self.root)
-        nb.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+        io_frame = ttk.LabelFrame(self.root, text=" I/O — DI (left) + DO/Coils (right), merged ", padding=8)
+        io_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+        self.build_merged_io_tab(io_frame)
 
-        # Tab 1: Coils (DO) - 16 channels
-        coil_frame = ttk.Frame(nb)
-        nb.add(coil_frame, text="  🔴 Coils (DO) FC01/05/0F  ")
-        self.build_coils_tab(coil_frame)
-
-        # Tab 2: Discrete Inputs (DI)
-        di_frame = ttk.Frame(nb)
-        nb.add(di_frame, text="  🟢 Discrete Input (DI) FC02  ")
-        self.build_di_tab(di_frame)
-
-        # Tab 3: Input Registers (Analog/Temp)
-        ir_frame = ttk.Frame(nb)
-        nb.add(ir_frame, text="  📊 Input Registers FC04  ")
-        self.build_ir_tab(ir_frame)
-
-        # Tab 4: Holding Registers
-        hr_frame = ttk.Frame(nb)
-        nb.add(hr_frame, text="  📝 Holding Registers FC03/06/10  ")
-        self.build_hr_tab(hr_frame)
-
-        # ---- Log Frame ----
-        log_frame = ttk.LabelFrame(self.root, text=" 📋 Communication Log ", padding=5)
+        log_frame = ttk.LabelFrame(self.root, text=" Output Log ", padding=5)
         log_frame.pack(fill=tk.BOTH, expand=False, padx=10, pady=5)
-
-        self.log_text = scrolledtext.ScrolledText(
-            log_frame, height=8, bg="#181825", fg="#a6e3a1",
-            font=('Consolas', 9), insertbackground='white')
+        self.log_text = scrolledtext.ScrolledText(log_frame, height=10, bg="#181825", fg="#a6e3a1",
+                                                    font=("Consolas", 9), insertbackground="white")
         self.log_text.pack(fill=tk.BOTH, expand=True)
-
         btn_f = tk.Frame(log_frame, bg="#1e1e2e")
         btn_f.pack(fill=tk.X)
         tk.Button(btn_f, text="Clear Log", bg="#313244", fg="#cdd6f4",
                   command=lambda: self.log_text.delete(1.0, tk.END)).pack(side=tk.RIGHT, padx=5)
 
-    def build_coils_tab(self, parent):
-        parent.configure(style='TFrame')
-        ttk.Label(parent, text="คลิกปุ่มเพื่อ Toggle Coil (จำลอง Digital Output)", 
-                  font=('Arial',9)).pack(pady=5)
-        
-        frame = tk.Frame(parent, bg="#1e1e2e")
-        frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+    def build_merged_io_tab(self, parent):
+        ttk.Label(parent, text="Click a bit to toggle it. Hover any button for the full signal description.",
+                  font=("Arial", 9)).pack(pady=(0, 6))
 
-        self.coil_buttons = []
-        self.coil_vars = []
-        cols = 8
-        for i in range(16):
-            row, col = divmod(i, cols)
-            f = tk.Frame(frame, bg="#1e1e2e", bd=1, relief=tk.GROOVE)
-            f.grid(row=row, column=col, padx=5, pady=5, sticky='nsew')
-            
-            tk.Label(f, text=f"DO {i:02d}", bg="#1e1e2e", fg="#89b4fa",
-                     font=('Arial',8,'bold')).pack()
-            
-            var = tk.BooleanVar(value=False)
-            self.coil_vars.append(var)
-            
-            btn = tk.Button(f, text="OFF", width=6, bg="#45475a", fg="#cdd6f4",
-                           command=lambda idx=i: self.toggle_coil(idx))
-            btn.pack(pady=2)
-            self.coil_buttons.append(btn)
+        canvas_wrap = tk.Frame(parent, bg="#1e1e2e")
+        canvas_wrap.pack(fill=tk.BOTH, expand=True)
 
-    def build_di_tab(self, parent):
-        ttk.Label(parent, text="Discrete Input (DI) - จำลอง Digital Input จาก sensor",
-                  font=('Arial',9)).pack(pady=5)
-        
-        frame = tk.Frame(parent, bg="#1e1e2e")
-        frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+        tk.Label(canvas_wrap, text="Bit", bg="#313244", fg="#89b4fa", font=("Arial", 9, "bold"),
+                 width=5, relief=tk.GROOVE).grid(row=0, column=0, padx=1, pady=1, sticky="ew")
+        tk.Label(canvas_wrap, text="Discrete Input (DI) — sensors, read-only", bg="#313244", fg="#a6e3a1",
+                 font=("Arial", 9, "bold"), width=40, relief=tk.GROOVE).grid(row=0, column=1, padx=1, pady=1, sticky="ew")
+        tk.Label(canvas_wrap, text="Coil / Output (DO) — commands", bg="#313244", fg="#f38ba8",
+                 font=("Arial", 9, "bold"), width=40, relief=tk.GROOVE).grid(row=0, column=2, padx=1, pady=1, sticky="ew")
 
-        self.di_buttons = []
-        self.di_vars = []
-        cols = 8
-        for i in range(16):
-            row, col = divmod(i, cols)
-            f = tk.Frame(frame, bg="#1e1e2e", bd=1, relief=tk.GROOVE)
-            f.grid(row=row, column=col, padx=5, pady=5, sticky='nsew')
-            
-            tk.Label(f, text=f"DI {i:02d}", bg="#1e1e2e", fg="#a6e3a1",
-                     font=('Arial',8,'bold')).pack()
-            
-            var = tk.BooleanVar(value=False)
-            self.di_vars.append(var)
-            self.ds.discrete_inputs[i] = False
-            
-            btn = tk.Button(f, text="LOW", width=6, bg="#45475a", fg="#cdd6f4",
-                           command=lambda idx=i: self.toggle_di(idx))
-            btn.pack(pady=2)
-            self.di_buttons.append(btn)
+        max_rows = max(max(STATION1_DI_LABELS, default=-1), max(STATION1_COIL_LABELS, default=-1)) + 1
+        for i in range(max_rows):
+            r = i + 1
+            tk.Label(canvas_wrap, text=f"{i:02d}", bg="#1e1e2e", fg="#cdd6f4", width=5).grid(
+                row=r, column=0, padx=1, pady=1)
+
+            di_name = STATION1_DI_LABELS.get(i)
+            if di_name:
+                btn = tk.Button(canvas_wrap, text=f"DI{i:02d} -> {di_name}", width=38, anchor="w",
+                                 bg="#45475a", fg="#cdd6f4", command=lambda idx=i: self.toggle_di(idx))
+                btn.grid(row=r, column=1, padx=1, pady=1, sticky="ew")
+                ToolTip(btn, f"Discrete Input {i:02d}\nSignal: {di_name}\n{self.STATION_LABEL}")
+                self.di_buttons[i] = btn
+            else:
+                tk.Label(canvas_wrap, text="(SPARE)", bg="#1e1e2e", fg="#585b70", width=38, anchor="w").grid(
+                    row=r, column=1, padx=1, pady=1, sticky="ew")
+
+            coil_name = STATION1_COIL_LABELS.get(i)
+            if coil_name:
+                btn = tk.Button(canvas_wrap, text=f"DO{i:02d} -> {coil_name}", width=38, anchor="w",
+                                 bg="#45475a", fg="#cdd6f4", command=lambda idx=i: self.toggle_coil(idx))
+                btn.grid(row=r, column=2, padx=1, pady=1, sticky="ew")
+                tip = f"Coil {i:02d}\nSignal: {coil_name}\n{self.STATION_LABEL}"
+                if i in CONFIRM_MAP:
+                    info = CONFIRM_MAP[i]
+                    req = ", ".join(f"DI{d:02d}" for d in info["requires"])
+                    tip += f"\nConfirmed by: {req}\n({info['confirm_label']})"
+                if i in CROSS_STATION_NOTE:
+                    tip += f"\nNote: {CROSS_STATION_NOTE[i]}"
+                ToolTip(btn, tip)
+                self.coil_buttons[i] = btn
+            else:
+                tk.Label(canvas_wrap, text="(SPARE)", bg="#1e1e2e", fg="#585b70", width=38, anchor="w").grid(
+                    row=r, column=2, padx=1, pady=1, sticky="ew")
+
         self.refresh_di_ui()
-
-    def build_ir_tab(self, parent):
-        ttk.Label(parent, text="Input Registers (Read-Only) - Analog/Temp/Weight",
-                  font=('Arial',9)).pack(pady=5)
-        
-        scroll_frame = tk.Frame(parent, bg="#1e1e2e")
-        scroll_frame.pack(fill=tk.BOTH, expand=True, padx=10)
-
-        headers = ["Address", "Type", "Raw Value", "Actual Value", "Set Value"]
-        for col, h in enumerate(headers):
-            tk.Label(scroll_frame, text=h, bg="#313244", fg="#89b4fa",
-                     font=('Arial',9,'bold'), width=12, relief=tk.GROOVE).grid(
-                         row=0, column=col, padx=1, pady=1)
-
-        self.ir_vars = []
-        ir_info = [
-            (0, "Analog 0~10V"), (1, "Analog 0~10V"), (2, "Analog 0~10V"), (3, "Analog 0~10V"),
-            (4, "Analog 0~20mA"), (5, "Analog 0~20mA"), (6, "Analog 0~20mA"), (7, "Analog 0~20mA"),
-            (8, "Temp PT100"), (9, "Temp PT100"), (10, "Temp PT100"), (11, "Temp PT100"),
-            (12, "Temp TC-K"), (13, "Temp TC-K"), (14, "Temp TC-K"), (15, "Temp TC-K"),
-        ]
-        for row, (addr, typ) in enumerate(ir_info, 1):
-            tk.Label(scroll_frame, text=f"3{addr+1:04d} / 0x{addr:04X}",
-                     bg="#1e1e2e", fg="#cdd6f4", width=14).grid(row=row, column=0, padx=1, pady=1)
-            tk.Label(scroll_frame, text=typ,
-                     bg="#1e1e2e", fg="#fab387", width=12).grid(row=row, column=1, padx=1, pady=1)
-            
-            raw_var = tk.StringVar(value=str(self.ds.input_registers[addr]))
-            tk.Label(scroll_frame, textvariable=raw_var, bg="#1e1e2e",
-                     fg="#f9e2af", width=10).grid(row=row, column=2, padx=1, pady=1)
-            
-            actual_var = tk.StringVar()
-            tk.Label(scroll_frame, textvariable=actual_var, bg="#1e1e2e",
-                     fg="#a6e3a1", width=12).grid(row=row, column=3, padx=1, pady=1)
-
-            set_entry = tk.Entry(scroll_frame, bg="#313244", fg="#cdd6f4", width=10)
-            set_entry.insert(0, str(self.ds.input_registers[addr]))
-            set_entry.grid(row=row, column=4, padx=2, pady=1)
-
-            tk.Button(scroll_frame, text="Set", bg="#313244", fg="#cdd6f4",
-                      command=lambda a=addr, e=set_entry: self.set_ir(a, e)).grid(
-                          row=row, column=5, padx=2)
-
-            self.ir_vars.append((addr, typ, raw_var, actual_var))
-
-        self.update_ir_display()
-
-    def build_hr_tab(self, parent):
-        ttk.Label(parent, text="Holding Registers - อ่าน/เขียนได้ (Analog Output / Config)",
-                  font=('Arial',9)).pack(pady=5)
-        
-        frame = tk.Frame(parent, bg="#1e1e2e")
-        frame.pack(fill=tk.BOTH, expand=True, padx=10)
-
-        headers = ["Address", "Hex", "Dec", "Set Value"]
-        for col, h in enumerate(headers):
-            tk.Label(frame, text=h, bg="#313244", fg="#89b4fa",
-                     font=('Arial',9,'bold'), width=12, relief=tk.GROOVE).grid(
-                         row=0, column=col, padx=1, pady=1)
-
-        self.hr_vars = []
-        for i in range(16):
-            tk.Label(frame, text=f"4{i+1:04d} / 0x{i:04X}",
-                     bg="#1e1e2e", fg="#cdd6f4", width=14).grid(row=i+1, column=0, padx=1, pady=1)
-            
-            hex_var = tk.StringVar(value=f"0x{self.ds.holding_registers[i]:04X}")
-            dec_var = tk.StringVar(value=str(self.ds.holding_registers[i]))
-            
-            tk.Label(frame, textvariable=hex_var, bg="#1e1e2e",
-                     fg="#f38ba8", width=8).grid(row=i+1, column=1, padx=1)
-            tk.Label(frame, textvariable=dec_var, bg="#1e1e2e",
-                     fg="#f9e2af", width=8).grid(row=i+1, column=2, padx=1)
-
-            entry = tk.Entry(frame, bg="#313244", fg="#cdd6f4", width=10)
-            entry.insert(0, "0")
-            entry.grid(row=i+1, column=3, padx=2)
-
-            tk.Button(frame, text="Set", bg="#313244", fg="#cdd6f4",
-                      command=lambda idx=i, e=entry: self.set_hr(idx, e)).grid(
-                          row=i+1, column=4, padx=2)
-
-            self.hr_vars.append((hex_var, dec_var))
-
-    # ---- Actions ----
-    def toggle_coil(self, idx):
-        current = self.ds.coils[idx]
-        self.ds.set_coils(idx, [not current])
         self.refresh_coil_ui()
 
+    # ---------------- Actions ----------------
+    def toggle_coil(self, idx):
+        new_val = not self.ds.coils[idx]
+        self.ds.set_coils(idx, [new_val])
+        name = STATION1_COIL_LABELS.get(idx, f"coil{idx}")
+        self.log_msg(f"[UI] DO{idx:02d} ({name}) -> {'ON' if new_val else 'OFF'}")
+
+        info = CONFIRM_MAP.get(idx)
+        if info:
+            if new_val:
+                self.armed[idx] = True
+                req_desc = ", ".join(f"DI{d:02d} ({STATION1_DI_LABELS.get(d, '?')})" for d in info["requires"])
+                self.log_msg(f"    >>> waiting for {req_desc} to confirm {info['confirm_label']}...")
+            else:
+                if self.armed.get(idx):
+                    self.log_msg(f"    --- {info['confirm_label']}: DO{idx:02d} turned OFF before confirmation.")
+                self.armed[idx] = False
+        elif idx in CROSS_STATION_NOTE and new_val:
+            self.log_msg(f"    i  {CROSS_STATION_NOTE[idx]}")
+
+        self.refresh_coil_ui()
+        self._check_confirmations()
+
     def toggle_di(self, idx):
-        current = self.ds.discrete_inputs[idx]
-        self.ds.discrete_inputs[idx] = not current
+        new_val = not self.ds.discrete_inputs[idx]
+        self.ds.discrete_inputs[idx] = new_val
+        name = STATION1_DI_LABELS.get(idx, f"di{idx}")
+        self.log_msg(f"[UI] DI{idx:02d} ({name}) -> {'HIGH' if new_val else 'LOW'}")
         self.refresh_di_ui()
+        self._check_confirmations()
 
-    def set_ir(self, addr, entry):
-        try:
-            val = int(entry.get()) & 0xFFFF
-            self.ds.input_registers[addr] = val
-            self.update_ir_display()
-            self.log_msg(f"[UI] Set IR[{addr}] = {val}")
-        except ValueError:
-            pass
-
-    def set_hr(self, idx, entry):
-        try:
-            val = int(entry.get()) & 0xFFFF
-            self.ds.set_holding_registers(idx, [val])
-            self.refresh_hr_ui()
-            self.log_msg(f"[UI] Set HR[{idx}] = {val}")
-        except ValueError:
-            pass
+    def _check_confirmations(self):
+        for coil_idx, info in CONFIRM_MAP.items():
+            if not self.armed.get(coil_idx):
+                continue
+            if not self.ds.coils[coil_idx]:
+                continue
+            if all(self.ds.discrete_inputs[d] for d in info["requires"]):
+                req_desc = ", ".join(f"DI{d:02d} ({STATION1_DI_LABELS.get(d, '?')})" for d in info["requires"])
+                self.log_msg(
+                    f"✓ CONFIRMED: {req_desc} — {info['confirm_label']} verified "
+                    f"(DO{coil_idx:02d} {info['command_name']})."
+                )
+                self.armed[coil_idx] = False  # re-arms next time the coil goes OFF then ON again
 
     def refresh_coil_ui(self):
-        for i, btn in enumerate(self.coil_buttons):
-            val = self.ds.coils[i]
-            btn.config(text="ON " if val else "OFF",
-                       bg="#a6e3a1" if val else "#45475a",
-                       fg="#1e1e2e" if val else "#cdd6f4")
+        for idx, btn in self.coil_buttons.items():
+            val = self.ds.coils[idx]
+            name = STATION1_COIL_LABELS.get(idx, f"coil{idx}")
+            btn.config(text=f"DO{idx:02d} -> {name}  [{'ON' if val else 'off'}]",
+                       bg="#a6e3a1" if val else "#45475a", fg="#1e1e2e" if val else "#cdd6f4")
 
     def refresh_di_ui(self):
-        for i, btn in enumerate(self.di_buttons):
-            val = self.ds.discrete_inputs[i]
-            btn.config(text="HIGH" if val else "LOW",
-                       bg="#89dceb" if val else "#45475a",
-                       fg="#1e1e2e" if val else "#cdd6f4")
-
-    def refresh_hr_ui(self):
-        for i, (hv, dv) in enumerate(self.hr_vars):
-            v = self.ds.holding_registers[i]
-            hv.set(f"0x{v:04X}")
-            dv.set(str(v))
-
-    def update_ir_display(self):
-        for addr, typ, raw_var, actual_var in self.ir_vars:
-            v = self.ds.input_registers[addr]
-            raw_var.set(str(v))
-            if "Analog 0~10V" in typ:
-                actual_var.set(f"{v/1000:.3f} V")
-            elif "0~20mA" in typ:
-                actual_var.set(f"{v/1000:.3f} mA")
-            elif "PT100" in typ:
-                actual_var.set(f"{v/100:.2f} °C")
-            elif "TC-K" in typ:
-                actual_var.set(f"{v/10:.1f} °C")
+        for idx, btn in self.di_buttons.items():
+            val = self.ds.discrete_inputs[idx]
+            name = STATION1_DI_LABELS.get(idx, f"di{idx}")
+            btn.config(text=f"DI{idx:02d} -> {name}  [{'HIGH' if val else 'low'}]",
+                       bg="#89dceb" if val else "#45475a", fg="#1e1e2e" if val else "#cdd6f4")
 
     def update_all_ui(self):
         self.root.after(0, self.refresh_coil_ui)
         self.root.after(0, self.refresh_di_ui)
-        self.root.after(0, self.refresh_hr_ui)
-        self.root.after(0, self.update_ir_display)
 
     def log_msg(self, msg):
         ts = datetime.now().strftime("%H:%M:%S.%f")[:-3]
         line = f"[{ts}] {msg}\n"
-        self.root.after(0, lambda: (
-            self.log_text.insert(tk.END, line),
-            self.log_text.see(tk.END)
-        ))
+        self.root.after(0, lambda: (self.log_text.insert(tk.END, line), self.log_text.see(tk.END)))
 
-    # ---- Server Thread ----
+    # ---------------- Server thread ----------------
     def start_server(self):
         self.running = True
         port = int(self.port_var.get())
-        self.server_thread = threading.Thread(
-            target=self._server_loop, args=(port,), daemon=True)
+        self.server_thread = threading.Thread(target=self._server_loop, args=(port,), daemon=True)
         self.server_thread.start()
         self.start_btn.config(state=tk.DISABLED)
         self.stop_btn.config(state=tk.NORMAL)
-        self.status_lbl.config(text="● RUNNING", fg="#a6e3a1")
+        self.status_lbl.config(text="RUNNING", fg="#a6e3a1")
         self.log_msg(f"[SERVER] Started on port {port}")
 
     def stop_server(self):
         self.running = False
         self.start_btn.config(state=tk.NORMAL)
         self.stop_btn.config(state=tk.DISABLED)
-        self.status_lbl.config(text="● STOPPED", fg="#f38ba8")
+        self.status_lbl.config(text="STOPPED", fg="#f38ba8")
         self.log_msg("[SERVER] Stopped")
 
     def _server_loop(self, port):
@@ -579,7 +476,7 @@ class ModbusServerApp:
         try:
             server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            server_sock.bind(('0.0.0.0', port))
+            server_sock.bind(("0.0.0.0", port))
             server_sock.listen(5)
             server_sock.settimeout(1.0)
             self.log_msg(f"[SERVER] Listening on 0.0.0.0:{port}")
@@ -587,10 +484,7 @@ class ModbusServerApp:
                 try:
                     conn, addr = server_sock.accept()
                     self.log_msg(f"[CONNECT] Client {addr[0]}:{addr[1]}")
-                    t = threading.Thread(
-                        target=self._client_handler,
-                        args=(conn, addr, handler), daemon=True)
-                    t.start()
+                    threading.Thread(target=self._client_handler, args=(conn, addr, handler), daemon=True).start()
                 except socket.timeout:
                     continue
         except Exception as e:
@@ -605,12 +499,10 @@ class ModbusServerApp:
                 data = conn.recv(1024)
                 if not data:
                     break
-                self.log_msg(f"[RX] {data.hex().upper()}")
                 response = handler.handle_request(data)
                 if response:
                     conn.sendall(response)
-                    self.log_msg(f"[TX] {response.hex().upper()}")
-        except Exception as e:
+        except Exception:
             pass
         finally:
             conn.close()

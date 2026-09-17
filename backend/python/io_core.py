@@ -170,27 +170,32 @@ class IOClient:
         self.write_s1_coil(coil, False)
 
     # ---- Front door (IAI EC-R6H-250-3-WA) ----
-    # ASSUMPTION: FORWARD = open, BACKWARD = close. Confirm/flip if wrong.
+    # CONFIRMED: FORWARD = close (DO09), confirmed by DI07 + DI13 + DI14
+    #            BACKWARD = open (DO08), confirmed by DI06 only
     def open_front_door(self):
         if self.check_axis_alarm("frontdoor"):
             raise IOError_("Front door axis has an active alarm — reset it first.")
-        self.write_s1_coil("forward_command_frontdoor", True)
-        ok = self.wait_for(lambda: self.read_s1_di("forward_comp_frontdoor"), True)
-        self.write_s1_coil("forward_command_frontdoor", False)
+        self.write_s1_coil("backward_command_frontdoor", True)
+        ok = self.wait_for(lambda: self.read_s1_di("backward_comp_frontdoor"), True)
+        self.write_s1_coil("backward_command_frontdoor", False)
         if not ok:
-            raise IOError_("Front door did not confirm OPEN within timeout.")
+            raise IOError_("Front door did not confirm OPEN (backward_comp_frontdoor) within timeout.")
 
     def close_front_door(self):
         if self.check_axis_alarm("frontdoor"):
             raise IOError_("Front door axis has an active alarm — reset it first.")
-        self.write_s1_coil("backward_command_frontdoor", True)
+        self.write_s1_coil("forward_command_frontdoor", True)
         ok = self.wait_for(
-            lambda: self.read_s1_di("frontdoor_limit_left_close") and self.read_s1_di("frontdoor_limit_right_close"),
+            lambda: (
+                self.read_s1_di("forward_comp_frontdoor")
+                and self.read_s1_di("frontdoor_limit_left_close")
+                and self.read_s1_di("frontdoor_limit_right_close")
+            ),
             True,
         )
-        self.write_s1_coil("backward_command_frontdoor", False)
+        self.write_s1_coil("forward_command_frontdoor", False)
         if not ok:
-            raise IOError_("Front door did not confirm CLOSED (left+right limits) within timeout.")
+            raise IOError_("Front door did not confirm CLOSED (forward_comp + both limits) within timeout.")
 
     # ---- Pallet swap — the 5-step sequence you described ----
     # ASSUMPTION: BACKWARD = the "move down" direction for Pallet2's
@@ -243,10 +248,11 @@ class IOClient:
             "safety_relay1_status": self.read_s2_di("safety_relay1_status"),
             "safety_relay2_status": self.read_s2_di("safety_relay2_status"),
             "frontdoor_closed": (
-                self.read_s1_di("frontdoor_limit_left_close")
+                self.read_s1_di("forward_comp_frontdoor")
+                and self.read_s1_di("frontdoor_limit_left_close")
                 and self.read_s1_di("frontdoor_limit_right_close")
             ),
-            "frontdoor_open": self.read_s1_di("forward_comp_frontdoor"),
+            "frontdoor_open": self.read_s1_di("backward_comp_frontdoor"),
             "alarm_pallet1": self.read_s1_di("alarm_pallet1"),
             "alarm_pallet2": self.read_s1_di("alarm_pallet2"),
             "alarm_frontdoor": self.read_s1_di("alarm_frontdoor"),

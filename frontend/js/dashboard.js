@@ -2578,17 +2578,23 @@ const WM_FUNCTIONS = {
 OPEN_FRONT_DOOR: {
   label: "Open Front Door",
   group: "io",
-  desc: "IAI EC-R6H-250-3-WA. Interlocks TBD: pallet not mid-travel, middle door state OK.",
+  desc: "IAI EC-R6H-250-3-WA. BACKWARD cylinder = open. Confirmed by DI06 (backward_comp_frontdoor).",
   run: async () => {
+    wmLog(">>> OPEN_FRONT_DOOR — commanding backward (open)...");
     try {
       const res = await apiFetch("/api/io/front-door", {
         method: "POST",
         body: JSON.stringify({ action: "open" }),
       });
       const data = await res.json();
-      if (!res.ok || !data.ok) return { ok: false, alarm: true, message: data.error || "Front door open failed." };
+      if (!res.ok || !data.ok) {
+        wmLog(`!!! Front door open failed: ${data.error || "unknown error"}`, "error");
+        return { ok: false, alarm: true, message: data.error || "Front door open failed." };
+      }
+      wmLog("<<< Door opened.", "ok");
       return { ok: true, message: "Front door open confirmed." };
     } catch (err) {
+      wmLog("!!! Could not reach I/O service.", "error");
       return { ok: false, alarm: true, message: "Could not reach I/O service." };
     }
   },
@@ -2596,17 +2602,23 @@ OPEN_FRONT_DOOR: {
 CLOSE_FRONT_DOOR: {
   label: "Close Front Door",
   group: "io",
-  desc: "IAI EC-R6H-250-3-WA. Closes before pallet change or marking.",
+  desc: "IAI EC-R6H-250-3-WA. FORWARD cylinder = close. Confirmed by DI07 + DI13 + DI14.",
   run: async () => {
+    wmLog(">>> CLOSE_FRONT_DOOR — commanding forward (close)...");
     try {
       const res = await apiFetch("/api/io/front-door", {
         method: "POST",
         body: JSON.stringify({ action: "close" }),
       });
       const data = await res.json();
-      if (!res.ok || !data.ok) return { ok: false, alarm: true, message: data.error || "Front door close failed." };
+      if (!res.ok || !data.ok) {
+        wmLog(`!!! Front door close failed: ${data.error || "unknown error"}`, "error");
+        return { ok: false, alarm: true, message: data.error || "Front door close failed." };
+      }
+      wmLog("<<< Door closed.", "ok");
       return { ok: true, message: "Front door close confirmed." };
     } catch (err) {
+      wmLog("!!! Could not reach I/O service.", "error");
       return { ok: false, alarm: true, message: "Could not reach I/O service." };
     }
   },
