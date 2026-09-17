@@ -200,7 +200,7 @@ class ModbusServerApp:
         # ---- Preset: idle "already wired" machine state ----
         # STATION_ROLE: set to "station1" or "station2" per which port
         # this process instance is simulating (run it twice).
-        STATION_ROLE = "station1"   # <-- change to "station2" for the 2nd instance
+        STATION_ROLE = "station2"   # <-- change to "station2" for the 2nd instance
 
         if STATION_ROLE == "station1":
             PRESET_DI = {
@@ -283,7 +283,7 @@ class ModbusServerApp:
         ttk.Entry(ctrl, textvariable=self.ip_var, width=15).grid(row=0, column=1, padx=5)
 
         ttk.Label(ctrl, text="Port:").grid(row=0, column=2, padx=5)
-        self.port_var = tk.StringVar(value="502")
+        self.port_var = tk.StringVar(value="5021")
         ttk.Entry(ctrl, textvariable=self.port_var, width=8).grid(row=0, column=3, padx=5)
 
         ttk.Label(ctrl, text="Unit ID:").grid(row=0, column=4, padx=5)

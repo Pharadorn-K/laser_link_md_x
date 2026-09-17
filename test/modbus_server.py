@@ -230,7 +230,7 @@ class ModbusServerApp:
             }
         for addr, val in PRESET_DI.items():
             self.ds.discrete_inputs[addr] = val
-            
+
         # ---- Preset: simulate an idle, already-wired machine ----
         # Indices match io_core.py's INPUT_MAP for whichever module this
         # instance represents. Run separate instances for Module A vs B
@@ -283,7 +283,7 @@ class ModbusServerApp:
         ttk.Entry(ctrl, textvariable=self.ip_var, width=15).grid(row=0, column=1, padx=5)
 
         ttk.Label(ctrl, text="Port:").grid(row=0, column=2, padx=5)
-        self.port_var = tk.StringVar(value="502")
+        self.port_var = tk.StringVar(value="5020")
         ttk.Entry(ctrl, textvariable=self.port_var, width=8).grid(row=0, column=3, padx=5)
 
         ttk.Label(ctrl, text="Unit ID:").grid(row=0, column=4, padx=5)
