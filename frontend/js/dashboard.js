@@ -2226,16 +2226,22 @@ async function eqSendRaw(conn, command) {
   }
 }
 
-// TODO: read the middle-door / side-door state via the Modbus I/O
-// service once it exists (README "Recommended next step" #2). Until
-// then this always reports closed so the laser-side steps built here
-// aren't blocked on hardware that isn't wired up yet.
-async function ioCheckDoorsClosed() {
+// TODO: read the middle-door state via the Modbus I/O service once a
+// sensor exists for it (README "Recommended next step" #2). Until then
+// the middle door's "closed and protecting the operator" state is
+// inferred from the pallet-position check (ioReadPalletInMachineRoom)
+// that runs right after this one — not from a direct signal.
+async function ioCheckSideDoorSafe() {
   try {
     const res = await apiFetch("/api/io/status");
     const data = await res.json();
     if (!res.ok || !data.ok) return { ok: false, closed: false };
-    return { ok: true, closed: !!data.frontdoor_closed && !!data.side_door_safe };
+    // Only the side door (D4SL-N2FFA-D4) belongs in this check. The
+    // front door is INTENTIONALLY open at this point in the sequence —
+    // it reopens right before Start Marking so the operator can load/
+    // unload the next part while marking proceeds behind the middle
+    // door — so front-door state must never gate Start Marking.
+    return { ok: true, closed: !!data.side_door_safe };
   } catch (err) {
     return { ok: false, closed: false };
   }
@@ -2274,10 +2280,10 @@ async function wmRunStartMarking() {
 
   // ---- 1. Interlock ----
   wmLog(`>>> START_MARKING interlock check (${pallet})`);
-  const doors = await ioCheckDoorsClosed();
-  if (!doors.ok || !doors.closed) {
-    wmLog(`!!! Door interlock not satisfied`, "error");
-    return { ok: false, alarm: true, message: "Middle or side door is not closed." };
+  const doorSafe = await ioCheckSideDoorSafe();
+  if (!doorSafe.ok || !doorSafe.closed) {
+    wmLog(`!!! Side door interlock not satisfied`, "error");
+    return { ok: false, alarm: true, message: "Side door is not closed/safe." };
   }
   const readyRaw = await eqSendRaw(conn, "RX,Ready");
   if (!readyRaw.ok) {
@@ -2293,8 +2299,9 @@ async function wmRunStartMarking() {
     wmLog(`!!! Laser not ready (RX,Ready=${readyStatus || "?"})`, "warn");
     return { ok: false, alarm: false, message: `Laser is not ready yet (status ${readyStatus || "unknown"}).` };
   }
-  wmLog(`<<< Interlock OK — doors closed, laser ready`, "ok");
+  wmLog(`<<< Interlock OK — side door safe, laser ready`, "ok");
 
+  // ---- rest of the function (pallet check, JobNo, conditions, StartMarking) is unchanged ----
   // ---- 2. Confirm pallet physically in the Machine Room ----
   const palletCheck = await ioReadPalletInMachineRoom(pallet);
   if (!palletCheck.ok || palletCheck.pallet !== pallet) {
