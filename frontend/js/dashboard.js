@@ -2226,22 +2226,38 @@ async function eqSendRaw(conn, command) {
   }
 }
 
-// TODO: read the middle-door / side-door state via the Modbus I/O
-// service once it exists (README "Recommended next step" #2). Until
-// then this always reports closed so the laser-side steps built here
-// aren't blocked on hardware that isn't wired up yet.
-async function ioCheckDoorsClosed() {
-  return { ok: true, closed: true };
+// TODO: read the middle-door state via the Modbus I/O service once a
+// sensor exists for it (README "Recommended next step" #2). Until then
+// the middle door's "closed and protecting the operator" state is
+// inferred from the pallet-position check (ioReadPalletInMachineRoom)
+// that runs right after this one — not from a direct signal.
+async function ioCheckSideDoorSafe() {
+  try {
+    const res = await apiFetch("/api/io/status");
+    const data = await res.json();
+    if (!res.ok || !data.ok) return { ok: false, closed: false };
+    // Only the side door (D4SL-N2FFA-D4) belongs in this check. The
+    // front door is INTENTIONALLY open at this point in the sequence —
+    // it reopens right before Start Marking so the operator can load/
+    // unload the next part while marking proceeds behind the middle
+    // door — so front-door state must never gate Start Marking.
+    return { ok: true, closed: !!data.side_door_safe };
+  } catch (err) {
+    return { ok: false, closed: false };
+  }
 }
-
-// TODO: read EC-S7H-500-3-WA #2/#3 limit switches via the Modbus I/O
-// service once it exists:
-//   #2 LS0=1 & #3 LS1=1 -> Pallet1 physically in the Machine Room
-//   #2 LS1=1 & #3 LS0=1 -> Pallet2 physically in the Machine Room
-// Until then this trusts whichever pallet the software believes
-// CHANGE_PALLET most recently moved in, rather than a real sensor.
 async function ioReadPalletInMachineRoom(expectedPallet) {
-  return { ok: true, pallet: expectedPallet };
+  try {
+    const res = await apiFetch("/api/io/status");
+    const data = await res.json();
+    if (!res.ok || !data.ok) return { ok: false, pallet: null };
+    const p1 = data.pallet1_in_machine_room;
+    const p2 = data.pallet2_in_machine_room;
+    const pallet = p1 ? "Pallet1" : p2 ? "Pallet2" : null;
+    return { ok: true, pallet };
+  } catch (err) {
+    return { ok: false, pallet: null };
+  }
 }
 
 /* ---- Real Start Marking sequence ----
@@ -2264,10 +2280,10 @@ async function wmRunStartMarking() {
 
   // ---- 1. Interlock ----
   wmLog(`>>> START_MARKING interlock check (${pallet})`);
-  const doors = await ioCheckDoorsClosed();
-  if (!doors.ok || !doors.closed) {
-    wmLog(`!!! Door interlock not satisfied`, "error");
-    return { ok: false, alarm: true, message: "Middle or side door is not closed." };
+  const doorSafe = await ioCheckSideDoorSafe();
+  if (!doorSafe.ok || !doorSafe.closed) {
+    wmLog(`!!! Side door interlock not satisfied`, "error");
+    return { ok: false, alarm: true, message: "Side door is not closed/safe." };
   }
   const readyRaw = await eqSendRaw(conn, "RX,Ready");
   if (!readyRaw.ok) {
@@ -2283,8 +2299,9 @@ async function wmRunStartMarking() {
     wmLog(`!!! Laser not ready (RX,Ready=${readyStatus || "?"})`, "warn");
     return { ok: false, alarm: false, message: `Laser is not ready yet (status ${readyStatus || "unknown"}).` };
   }
-  wmLog(`<<< Interlock OK — doors closed, laser ready`, "ok");
+  wmLog(`<<< Interlock OK — side door safe, laser ready`, "ok");
 
+  // ---- rest of the function (pallet check, JobNo, conditions, StartMarking) is unchanged ----
   // ---- 2. Confirm pallet physically in the Machine Room ----
   const palletCheck = await ioReadPalletInMachineRoom(pallet);
   if (!palletCheck.ok || palletCheck.pallet !== pallet) {
@@ -2566,51 +2583,129 @@ async function wmRunCode2DGradeResult() {
 
 const WM_FUNCTIONS = {
   OPEN_FRONT_DOOR: {
-    label: "Open Front Door",
-    group: "io",
-    desc: "IAI EC-R6H-250-3-WA. Interlocks TBD: pallet not mid-travel, middle door state OK.",
-    run: () => wmStub("OPEN_FRONT_DOOR"),
+  label: "Open Front Door",
+  group: "io",
+  desc: "IAI EC-R6H-250-3-WA. BACKWARD cylinder = open. Confirmed by DI06 (backward_comp_frontdoor).",
+  run: async () => {
+    wmLog(">>> OPEN_FRONT_DOOR — commanding backward (open)...");
+    try {
+      const res = await apiFetch("/api/io/front-door", {
+        method: "POST",
+        body: JSON.stringify({ action: "open" }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) {
+        wmLog(`!!! Front door open failed: ${data.error || "unknown error"}`, "error");
+        return { ok: false, alarm: true, message: data.error || "Front door open failed." };
+      }
+      wmLog("<<< Door opened.", "ok");
+      return { ok: true, message: "Front door open confirmed." };
+    } catch (err) {
+      wmLog("!!! Could not reach I/O service.", "error");
+      return { ok: false, alarm: true, message: "Could not reach I/O service." };
+    }
+  },
   },
   CLOSE_FRONT_DOOR: {
-    label: "Close Front Door",
-    group: "io",
-    desc: "IAI EC-R6H-250-3-WA. Closes before pallet change or marking.",
-    run: () => wmStub("CLOSE_FRONT_DOOR"),
+  label: "Close Front Door",
+  group: "io",
+  desc: "IAI EC-R6H-250-3-WA. FORWARD cylinder = close. Confirmed by DI07 + DI13 + DI14.",
+  run: async () => {
+    wmLog(">>> CLOSE_FRONT_DOOR — commanding forward (close)...");
+    try {
+      const res = await apiFetch("/api/io/front-door", {
+        method: "POST",
+        body: JSON.stringify({ action: "close" }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) {
+        wmLog(`!!! Front door close failed: ${data.error || "unknown error"}`, "error");
+        return { ok: false, alarm: true, message: data.error || "Front door close failed." };
+      }
+      wmLog("<<< Door closed.", "ok");
+      return { ok: true, message: "Front door close confirmed." };
+    } catch (err) {
+      wmLog("!!! Could not reach I/O service.", "error");
+      return { ok: false, alarm: true, message: "Could not reach I/O service." };
+    }
+  },
   },
   CHANGE_PALLET: {
-    label: "Change Pallet",
-    group: "pallet",
-    desc: "Swaps Pallet1/Pallet2 via the middle door. Interlocks TBD: front door closed, side door closed.",
-    run: async () => {
-      const result = await wmStub("CHANGE_PALLET", 900);
-      WM_PALLET_STATE.operatorRoomPallet =
-        WM_PALLET_STATE.operatorRoomPallet === "Pallet1" ? "Pallet2" : "Pallet1";
+  label: "Change Pallet",
+  group: "pallet",
+  desc: "Swaps Pallet1/Pallet2 via the middle door. Interlocks TBD: front door closed, side door closed.",
+  run: async () => {
+    const target = WM_PALLET_STATE.operatorRoomPallet === "Pallet1" ? 2 : 1;
+    wmLog(`>>> CHANGE_PALLET — swapping to bring Pallet ${target} into the Operator Room...`);
+    try {
+      const res = await apiFetch("/api/io/change-pallet", {
+        method: "POST",
+        body: JSON.stringify({ target_pallet: target }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) {
+        wmLog(`!!! Change pallet failed: ${data.error || "unknown error"}`, "error");
+        return { ok: false, alarm: true, message: data.error || "Change pallet failed." };
+      }
+      WM_PALLET_STATE.operatorRoomPallet = target === 1 ? "Pallet1" : "Pallet2";
       wmUpdatePalletLocationUI();
-      return result;
-    },
+      wmLog("<<< Pallet changed.", "ok");
+      return { ok: true, message: `Pallet${target} now in Operator Room.` };
+    } catch (err) {
+      wmLog("!!! Could not reach I/O service.", "error");
+      return { ok: false, alarm: true, message: "Could not reach I/O service." };
+    }
+  },
   },
   CALL_PALLET1: {
-    label: "Call Pallet 1",
-    group: "pallet",
-    desc: "IAI EC-S7H-500-3-WA #2 — bring Pallet 1 to the operator-side load position.",
-    run: async () => {
-      const result = await wmStub("CALL_PALLET1", 900);
-      WM_PALLET_STATE.operatorRoomPallet = "Pallet1";
+  label: "Call Pallet 1",
+  group: "pallet",
+  desc: "Bring Pallet 1 to the Operator Room (swaps with Pallet 2 if needed).",
+  run: async () => {
+    wmLog(">>> CALL_PALLET1 — bringing Pallet 1 to the Operator Room...");
+    try {
+      const res = await apiFetch("/api/io/call-pallet/1", { method: "POST", body: JSON.stringify({}) });
+      const data = await res.json();
+      if (!res.ok || !data.ok) {
+        wmLog(`!!! Call Pallet 1 failed: ${data.error || "unknown error"}`, "error");
+        return { ok: false, alarm: true, message: data.error || "Call Pallet 1 failed." };
+      }
+      const inOperator = data.state ? !!data.state.p1_operator : true;
+      WM_PALLET_STATE.operatorRoomPallet = inOperator ? "Pallet1" : WM_PALLET_STATE.operatorRoomPallet;
       wmUpdatePalletLocationUI();
-      return result;
-    },
+      wmLog("<<< Pallet changed.", "ok");
+      return { ok: true, message: "Pallet 1 in Operator Room." };
+    } catch (err) {
+      wmLog("!!! Could not reach I/O service.", "error");
+      return { ok: false, alarm: true, message: "Could not reach I/O service." };
+    }
+  },
   },
   CALL_PALLET2: {
-    label: "Call Pallet 2",
-    group: "pallet",
-    desc: "IAI EC-S7H-500-3-WA #3 — bring Pallet 2 to the operator-side load position.",
-    run: async () => {
-      const result = await wmStub("CALL_PALLET2", 900);
-      WM_PALLET_STATE.operatorRoomPallet = "Pallet2";
+  label: "Call Pallet 2",
+  group: "pallet",
+  desc: "Bring Pallet 2 to the Operator Room (swaps with Pallet 1 if needed).",
+  run: async () => {
+    wmLog(">>> CALL_PALLET2 — bringing Pallet 2 to the Operator Room...");
+    try {
+      const res = await apiFetch("/api/io/call-pallet/2", { method: "POST", body: JSON.stringify({}) });
+      const data = await res.json();
+      if (!res.ok || !data.ok) {
+        wmLog(`!!! Call Pallet 2 failed: ${data.error || "unknown error"}`, "error");
+        return { ok: false, alarm: true, message: data.error || "Call Pallet 2 failed." };
+      }
+      const inOperator = data.state ? !!data.state.p2_operator : true;
+      WM_PALLET_STATE.operatorRoomPallet = inOperator ? "Pallet2" : WM_PALLET_STATE.operatorRoomPallet;
       wmUpdatePalletLocationUI();
-      return result;
-    },
+      wmLog("<<< Pallet changed.", "ok");
+      return { ok: true, message: "Pallet 2 in Operator Room." };
+    } catch (err) {
+      wmLog("!!! Could not reach I/O service.", "error");
+      return { ok: false, alarm: true, message: "Could not reach I/O service." };
+    }
   },
+  },
+
   CAMERA_TRIGGER: {
     label: "Camera Trigger",
     group: "vision",
