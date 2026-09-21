@@ -4243,6 +4243,114 @@ function anmSetMode(mode) {
   }
 }
 
+/* ============================================================
+   FOR ADD NEW MODEL PAGE — IO STATUS PANEL (doors & pallets)
+   Read-only view of GET /api/io/status — reflects the physical
+   layout directly: side door (D4SL-N2FFA-D4, spring-return),
+   front door (IAI EC-R6H-250-3-WA), Pallet 1/2 (IAI EC-S7H-500-3-WA
+   #2/#3). Safe to poll against the real IO service OR
+   test/machine_simulator.py — no laser marker required.
+   ============================================================ */
+function ioStatusBadgeHtml(label, ok, trueText, falseText) {
+  const cls = ok ? "good" : "bad";
+  const text = ok ? trueText : falseText;
+  return `
+    <div class="io-status-item">
+      <span class="io-status-label">${label}</span>
+      <span class="io-badge io-badge-${cls}">${text}</span>
+    </div>`;
+}
+
+function ioNeutralBadgeHtml(label, text, tone) {
+  return `
+    <div class="io-status-item">
+      <span class="io-status-label">${label}</span>
+      <span class="io-badge io-badge-${tone}">${text}</span>
+    </div>`;
+}
+
+// Resolves a pallet's room from its two DI bits. Both true = a real
+// wiring/read fault (DI00 & DI03, or DI01 & DI04, must never both be
+// ON per the wiring diagram) — surfaced loudly rather than picking one.
+function ioPalletRoomText(inMachine, inOperator) {
+  if (inMachine && inOperator) return { text: "CONFLICT — both rooms!", tone: "bad" };
+  if (inMachine) return { text: "Machine Room", tone: "neutral" };
+  if (inOperator) return { text: "Operator Room", tone: "good" };
+  return { text: "Unknown / in transit", tone: "warn" };
+}
+
+function ioRenderStatus(data) {
+  const grid = document.getElementById("io-status-grid");
+  const pill = document.getElementById("io-status-pill");
+  if (!grid) return;
+
+  if (!data || data.ok === false) {
+    if (pill) {
+      pill.className = "status-pill error";
+      pill.innerHTML = '<span class="dot"></span> Error';
+    }
+    grid.innerHTML = `<div class="alert alert-error" style="margin:0;">${escapeHtml((data && data.error) || "Could not read I/O status.")}</div>`;
+    return;
+  }
+
+  if (pill) {
+    pill.className = "status-pill ready";
+    pill.innerHTML = '<span class="dot"></span> Connected';
+  }
+
+  const p1 = ioPalletRoomText(data.pallet1_in_machine_room, data.pallet1_in_operator_room);
+  const p2 = ioPalletRoomText(data.pallet2_in_machine_room, data.pallet2_in_operator_room);
+
+  grid.innerHTML = `
+    <div class="io-status-section">
+      <div class="io-status-section-title">Side Door <span class="io-status-hint">(D4SL-N2FFA-D4, spring-return)</span></div>
+      ${ioStatusBadgeHtml("Status", data.side_door_safe, "Closed / Safe", data.side_door_open ? "OPEN" : "Not confirmed safe")}
+      ${ioStatusBadgeHtml("Safety Relay 1", data.safety_relay1_status, "OK", "Fault")}
+      ${ioStatusBadgeHtml("Safety Relay 2", data.safety_relay2_status, "OK", "Fault")}
+    </div>
+
+    <div class="io-status-section">
+      <div class="io-status-section-title">Front Door <span class="io-status-hint">(IAI EC-R6H-250-3-WA)</span></div>
+      ${ioStatusBadgeHtml("Status", data.frontdoor_closed, "Closed", data.frontdoor_open ? "Open" : "Moving / unconfirmed")}
+      ${ioStatusBadgeHtml("Alarm", !data.alarm_frontdoor, "None", "ACTIVE")}
+    </div>
+
+    <div class="io-status-section">
+      <div class="io-status-section-title">Pallet 1 <span class="io-status-hint">(EC-S7H-500-3-WA #2)</span></div>
+      ${ioNeutralBadgeHtml("Position", p1.text, p1.tone)}
+      ${ioStatusBadgeHtml("Alarm", !data.alarm_pallet1, "None", "ACTIVE")}
+    </div>
+
+    <div class="io-status-section">
+      <div class="io-status-section-title">Pallet 2 <span class="io-status-hint">(EC-S7H-500-3-WA #3)</span></div>
+      ${ioNeutralBadgeHtml("Position", data.pallet2_clearing ? "Clearing (mid-swap)" : p2.text, data.pallet2_clearing ? "warn" : p2.tone)}
+      ${ioStatusBadgeHtml("Alarm", !data.alarm_pallet2, "None", "ACTIVE")}
+    </div>
+
+    <div class="io-status-section">
+      <div class="io-status-section-title">Laser Interlock Signals</div>
+      ${ioStatusBadgeHtml("Laser Alarm", !data.alarm_lasermark, "None", "ACTIVE")}
+      ${ioStatusBadgeHtml("Laser Warning", !data.warning_lasermark, "None", "ACTIVE")}
+      ${ioNeutralBadgeHtml("2-Hand Start", data.two_hand ? "Pressed" : "Idle", data.two_hand ? "good" : "neutral")}
+    </div>
+
+    ${data.shutdown_ipc_requested ? `
+    <div class="io-status-section" style="grid-column: 1 / -1;">
+      <div class="alert alert-error" style="margin:0;">⚠ IPC shutdown requested by safety circuit (Station 2 DI04).</div>
+    </div>` : ""}
+  `;
+}
+
+async function ioPollStatus() {
+  try {
+    const res = await apiFetch("/api/io/status");
+    const data = await res.json().catch(() => ({}));
+    ioRenderStatus(res.ok ? data : { ok: false, error: data.error || `HTTP ${res.status}` });
+  } catch (err) {
+    ioRenderStatus({ ok: false, error: "Could not reach the I/O service." });
+  }
+}
+
 PAGE_INIT.add_new_model = function () {
   // ---- Column 1 (model form) setup — unchanged from before ----
   ANM.mode = "add";
@@ -4336,13 +4444,17 @@ PAGE_INIT.add_new_model = function () {
 
   eqPollStatus();
   EQ.pollTimer = setInterval(eqPollStatus, 1500);
+
+  ioPollStatus();                                   // NEW
+  EQ.ioPollTimer = setInterval(ioPollStatus, 1500);  // NEW
 };
 
 PAGE_TEARDOWN.add_new_model = function () {
   if (EQ.pollTimer) clearInterval(EQ.pollTimer);
   EQ.pollTimer = null;
+  if (EQ.ioPollTimer) clearInterval(EQ.ioPollTimer);  // NEW
+  EQ.ioPollTimer = null;                              // NEW
 };
-
 /* ============================================================
    FOR EQUIPMENT PAGE
    ============================================================ */
