@@ -39,6 +39,8 @@ function normalizeBody(body) {
   return out;
 }
 
+const START2D_PARAM_COUNT = 17;
+
 function validateBody(body) {
   if (!body.lot_no || !String(body.lot_no).trim()) {
     return 'Lot No. is required.';
@@ -51,8 +53,15 @@ function validateBody(body) {
     return "pallet_no must be 'Pallet1' or 'Pallet2'.";
   }
 
-  if (!body.lot_no || !String(body.lot_no).trim()) {
-    return 'Lot No. is required.';
+  // Check2DCode5: when enabled, all 17 positional params (A-Q) are required.
+  if (toBool(body.check_start2dcode)) {
+    const p = Array.isArray(body.start2dcode_params) ? body.start2dcode_params : [];
+    if (p.length !== START2D_PARAM_COUNT || p.some((v) => v === undefined || v === null || String(v).trim() === '')) {
+      return 'Start 2D Code is enabled: all 17 Check2DCode5 parameters (A-Q) are required.';
+    }
+    if (p.some((v) => /[,\x00-\x1f\x7f]/.test(String(v)))) {
+      return 'Check2DCode5 parameters cannot contain commas or control characters.';
+    }
   }
 
   const conditions = Array.isArray(body.conditions) ? body.conditions : [];
@@ -62,7 +71,7 @@ function validateBody(body) {
   for (const c of conditions) {
     const name = c && c.condition_name !== undefined ? String(c.condition_name).trim() : '';
     const value = c && c.condition_value !== undefined ? String(c.condition_value).trim() : '';
-    if (!name && !value) continue; // fully blank row, ignored on save
+    if (!name && !value) continue;
     if (name && !value) return `Condition "${name}": a CharacterString value is required.`;
     if (value && !name) return `Condition with value "${value}": a condition name is required.`;
     const block = Number(c.block_no);
@@ -73,18 +82,25 @@ function validateBody(body) {
   return null;
 }
 
-// photoPath: undefined = don't touch the column (no new file uploaded on
-// an edit), null/string = set it explicitly (create, or replaced on edit).
 function buildFieldsFromBody(body, photoPath) {
+  const params = Array.isArray(body.start2dcode_params)
+    ? body.start2dcode_params.map((v) => String(v ?? '').trim())
+    : [];
+  const detailed = String(body.read2dcode_detailed ?? '0').trim();
+
   const fields = {
     model: String(body.model).trim(),
     job_no: Number(body.job_no),
     pallet_no: body.pallet_no,
+    check_start2dcode: toBool(body.check_start2dcode),
+    // keep whatever the user typed (even if the box is unticked), null if the grid is blank
+    start2dcode_params: params.some((v) => v !== '') ? JSON.stringify(params) : null,
     check_read2dcode: toBool(body.check_read2dcode),
+    read2dcode_detailed: detailed === '1' ? '1' : '0',
     check_grade2dcode: toBool(body.check_grade2dcode),
     control_grade: body.control_grade ? String(body.control_grade).trim() : null,
     check_camera: toBool(body.check_camera),
-    check_lot_no: true, // always on — Lot No. is mandatory now
+    check_lot_no: true,
     lot_no: String(body.lot_no).trim(),
   };
   if (photoPath !== undefined) {

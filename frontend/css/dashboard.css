@@ -225,6 +225,26 @@ table.data-table tr:last-child td { border-bottom: none; }
   .mon-page { height: auto; min-height: 0; }
 }
 
+.mon-alarm-banner {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border: 1px solid var(--err);
+  background: var(--err-soft);
+  color: #93230f;
+  border-radius: var(--radius-sm);
+  font-size: 12.5px;
+}
+.mon-alarm-banner i { color: var(--err); }
+.mon-alarm-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .mon-pallet-card { position: relative; display: flex; flex-direction: column; overflow: hidden; }
 .mon-pallet-body { flex: 1 1 auto; display: flex; flex-direction: column; gap: 8px; }
 
@@ -1055,6 +1075,16 @@ table.data-table tr:last-child td { border-bottom: none; }
 .ms-start2d-grid .field { margin-bottom: 0; }
 .ms-start2d-grid label { text-transform: none; font-family: var(--font-mono); }
 .ms-start2d-grid input { font-family: var(--font-mono); }
+
+.ms-start2d-grid .ms-start2d-key input[type="text"] {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+  background: var(--accent-soft);
+}
+.ms-start2d-grid .ms-start2d-key label {
+  color: var(--accent-strong);
+  font-weight: 800;
+}
 
 .ms-modal-sm { max-width: 380px; }
 .ms-lotno-row { border-color: var(--accent-strong); background: var(--accent-soft); }

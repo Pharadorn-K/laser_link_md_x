@@ -139,9 +139,13 @@ function initShell() {
     btn.addEventListener("click", () => loadPage(btn.dataset.page));
   });
   document.getElementById("logout-btn").addEventListener("click", performSignOut);
-  
+
+  alarmUpdateNavBadge();
+  window.addEventListener("storage", (e) => { if (e.key === LIVE_ALARM_KEY) alarmNotifyChanged(); });
+
   startTopbarClock();
   initLightbox(); // NEW
+
 }
 
 function applyUserToChrome(user) {
@@ -807,6 +811,27 @@ async function monRefreshGoal(pallet, job) {
   } catch (err) {
     // keep last known value on failure
   }
+}
+
+function monRenderAlarmBanner() {
+  const el = document.getElementById("mon-alarm-banner");
+  if (!el) return;
+  const active = alarmLoadStore().current;
+  if (!active.length) {
+    el.style.display = "none";
+    el.innerHTML = "";
+    return;
+  }
+  const latest = active[0];
+  el.style.display = "";
+  el.innerHTML = `
+    <i class="fa-solid fa-triangle-exclamation"></i>
+    <div class="mon-alarm-text">
+      <strong>${active.length} active alarm${active.length === 1 ? "" : "s"}</strong>
+      — latest: ${escapeHtml(latest.tag)}${latest.pallet ? ` (${escapeHtml(latest.pallet)})` : ""}: ${escapeHtml(latest.description)}
+    </div>
+    <button type="button" class="btn btn-sm" id="mon-alarm-open-btn">Open Alarm Center</button>`;
+  document.getElementById("mon-alarm-open-btn").addEventListener("click", () => loadPage("alarm_center"));
 }
 
 /* ============================================================
@@ -2025,6 +2050,8 @@ PAGE_INIT.monitor = function () {
   MON.pendingSet = null;
   monRenderAll();
   monApplyModeView();
+  monRenderAlarmBanner();
+  window.addEventListener("nlm:alarms-changed", monRenderAlarmBanner);
 
   const completeBtn = document.getElementById("mon-complete-setting-btn");
   if (completeBtn) {
@@ -2070,6 +2097,7 @@ PAGE_TEARDOWN.monitor = function () {
   MON_AUTO.running = false;
   clearTimeout(MON.timer);
   monCloseNextStepModal(); // NEW
+  window.removeEventListener("nlm:alarms-changed", monRenderAlarmBanner);
 };
 
 /* ============================================================
@@ -2565,6 +2593,31 @@ async function wmRunCode2DGradeResult() {
     return { ok: false, alarm: true, message: `Unrecognized grade ("${captured.grade}") or threshold ("${threshold}").` };
   }
 
+  // Grade F is always a hard fail + alarm notification, whatever the threshold.
+  const gradeLetter = String(captured.grade).trim().toUpperCase().charAt(0);
+  if (gradeLetter === "F") {
+    alarmRaise({
+      tag: "GRADE_F",
+      source: "2D Code",
+      severity: "error",
+      pallet,
+      dedupeKey: `GRADE_F:${pallet}:${job.model}:${job.lot_no || ""}`,
+      description: `2D code grade F on ${job.model} (Job ${padJob(job.job_no)}, Lot ${job.lot_no || "—"}).`,
+      instructions: [
+        "Take the part out of the Operator Room and quarantine it — do not pass it on as good product.",
+        "Inspect the mark: lens cleanliness, focus, surface condition, and the marking conditions for this model.",
+        "If it repeats on the same lot, call an Engineer or Machine Controller to adjust the marking conditions.",
+        "Click \"Acknowledge & Clear\" once the part has been handled.",
+      ],
+      context: {
+        model: job.model, job_no: job.job_no, lot_no: job.lot_no || "",
+        grade: "F", threshold, source: captured.source,
+      },
+    });
+    wmLog(`!!! Grade F on ${pallet} — alarm raised`, "error");
+    return { ok: false, alarm: false, message: "Grade F — part rejected. Alarm raised; see Alarm Center." };
+  }
+
   const pass = actualRank >= thresholdRank;
   wmLog(`${pass ? "<<<" : "!!!"} Grade ${captured.grade} vs threshold ${threshold}: ${pass ? "PASS" : "FAIL"}`, pass ? "ok" : "warn");
 
@@ -2576,7 +2629,6 @@ async function wmRunCode2DGradeResult() {
       : `Grade ${captured.grade} is below threshold ${threshold}.`,
   };
 }
-
 const WM_FUNCTIONS = {
   OPEN_FRONT_DOOR: {
   label: "Open Front Door",
@@ -3175,6 +3227,98 @@ async function wmRunStartSequenceForPallet(pallet) {
   wmLog(`--- Start Marking sequence complete (${pallet}) ---`, "ok");
   wmSetStartButtonsState("idle");
 }
+
+/* ============================================================
+   LIVE ALARM STORE (stand-in until /api/alarms exists)
+   Shape matches the Alarm Center mock alarms, plus:
+     live:true, kind:'ack' (cleared by operator acknowledgement),
+     pallet, context, dedupeKey, occurrences
+   ============================================================ */
+const LIVE_ALARM_KEY = "nlm_live_alarms";
+const LIVE_ALARM_HISTORY_MAX = 100;
+
+function alarmLoadStore() {
+  try {
+    const s = JSON.parse(localStorage.getItem(LIVE_ALARM_KEY) || "null");
+    if (s && Array.isArray(s.current) && Array.isArray(s.history)) return s;
+  } catch (err) {}
+  return { current: [], history: [] };
+}
+
+function alarmSaveStore(store) {
+  store.history = store.history.slice(0, LIVE_ALARM_HISTORY_MAX);
+  localStorage.setItem(LIVE_ALARM_KEY, JSON.stringify(store));
+  alarmNotifyChanged();
+}
+
+function alarmUpdateNavBadge() {
+  const badge = document.getElementById("nav-alarm-badge");
+  if (!badge) return;
+  const n = alarmLoadStore().current.length;
+  badge.textContent = n;
+  badge.style.display = n ? "" : "none";
+}
+
+function alarmNotifyChanged() {
+  alarmUpdateNavBadge();
+  window.dispatchEvent(new CustomEvent("nlm:alarms-changed"));
+}
+
+// Raises (or, if the same dedupeKey is already active, bumps) an alarm.
+function alarmRaise(opts) {
+  const {
+    tag, source, severity = "error", description,
+    instructions = [], pallet = null, context = null,
+    dedupeKey = `${tag}:${pallet || ""}`,
+    toast = true,
+  } = opts;
+
+  const store = alarmLoadStore();
+  const nowIso = new Date().toISOString();
+  let alarm = store.current.find((a) => a.dedupeKey === dedupeKey);
+
+  if (alarm) {
+    alarm.occurrences = (alarm.occurrences || 1) + 1;
+    alarm.last_at = nowIso;
+    alarm.description = description;
+    alarm.context = context;
+  } else {
+    alarm = {
+      id: Date.now(), tag, source, severity, description,
+      occurred_at: nowIso, last_at: nowIso,
+      instructions, attempts: 0,
+      live: true, kind: "ack",
+      pallet, context, dedupeKey, occurrences: 1,
+    };
+    store.current.unshift(alarm);
+  }
+  alarmSaveStore(store);
+
+  logClientEvent("alarm.raised", `${tag}${pallet ? ` (${pallet})` : ""}: ${description}`, {
+    tag, pallet, occurrences: alarm.occurrences, context,
+  });
+  if (toast) showToast(`Alarm ${tag}: ${description}`, "error", 4000);
+  return alarm;
+}
+
+// Moves an active alarm to history. Returns the history entry (or null).
+function alarmClear(id, resolution) {
+  const store = alarmLoadStore();
+  const idx = store.current.findIndex((a) => a.id === id);
+  if (idx === -1) return null;
+  const [alarm] = store.current.splice(idx, 1);
+  const who = CURRENT_USER ? `${CURRENT_USER.name} (${CURRENT_USER.employee_id})` : "unknown";
+  const entry = {
+    ...alarm,
+    resolved_at: new Date().toISOString(),
+    resolution: `${resolution} — by ${who}`,
+  };
+  store.history.unshift(entry);
+  alarmSaveStore(store);
+  logClientEvent("alarm.cleared", `${alarm.tag}${alarm.pallet ? ` (${alarm.pallet})` : ""} cleared`, { tag: alarm.tag, pallet: alarm.pallet });
+  return entry;
+}
+
 /* ============================================================
    FOR ALARM CENTER PAGE
    ============================================================
@@ -3197,6 +3341,7 @@ const AC_SOURCE_ICONS = {
   "IAI Elecylinder": "fa-solid fa-arrows-left-right",
   "MySQL": "fa-solid fa-database",
   "Modbus I/O": "fa-solid fa-microchip",
+  "2D Code": "fa-solid fa-qrcode",
   "Node API": "fa-solid fa-server",
 };
 
@@ -3329,9 +3474,35 @@ function acDuration(startIso, endIso) {
 }
 
 async function acFetchAlarms() {
-  // Placeholder data source — see NOTE at top of this section.
-  AC.current = AC_MOCK_CURRENT.map((a) => ({ ...a }));
-  AC.history = AC_MOCK_HISTORY.map((a) => ({ ...a }));
+  const live = alarmLoadStore();
+  AC.current = [...live.current, ...AC_MOCK_CURRENT].map((a) => ({ ...a }));
+  AC.history = [...live.history, ...AC_MOCK_HISTORY].map((a) => ({ ...a }));
+}
+
+function acContextText(c) {
+  if (!c) return "";
+  const parts = [];
+  if (c.model) parts.push(c.model);
+  if (c.job_no !== undefined && c.job_no !== null) parts.push(`Job ${padJob(c.job_no)}`);
+  if (c.lot_no) parts.push(`Lot ${c.lot_no}`);
+  if (c.grade) parts.push(`Grade ${c.grade}${c.threshold ? ` (min ${c.threshold})` : ""}`);
+  return parts.join(" · ");
+}
+
+function acAcknowledgeAlarm(id) {
+  const alarm = AC.current.find((a) => a.id === id);
+  if (!alarm) return;
+  if (!confirm(`Acknowledge ${alarm.tag}? Confirm the affected part has been removed / handled.`)) return;
+
+  const entry = alarmClear(id, "Acknowledged after part was handled");
+  if (!entry) { showToast("That alarm was already cleared.", "info"); }
+  AC.current = AC.current.filter((a) => a.id !== id);
+  if (entry) AC.history = [entry, ...AC.history];
+  AC.selectedId = null;
+  acRenderCounts();
+  acRenderTable();
+  acRenderDetail();
+  showToast(`${alarm.tag} acknowledged and moved to history.`, "success");
 }
 
 function acRenderCounts() {
@@ -3412,13 +3583,14 @@ function acRenderDetail() {
   bodyEl.style.display = "block";
 
   const isCurrent = AC.tab === "current";
+  const isAck = isCurrent && alarm.kind === "ack";
 
   const instructionsHtml = isCurrent
     ? `
       <div class="ac-instructions">
         <div class="ac-instructions-label">What to do</div>
         <ol class="ac-step-list">
-          ${alarm.instructions.map((step) => `<li>${escapeHtml(step)}</li>`).join("")}
+          ${(alarm.instructions || []).map((step) => `<li>${escapeHtml(step)}</li>`).join("")}
         </ol>
       </div>`
     : `
@@ -3427,8 +3599,15 @@ function acRenderDetail() {
         <p class="ac-resolution-text">${escapeHtml(alarm.resolution || "—")}</p>
       </div>`;
 
-  const footerHtml = isCurrent
-    ? `
+  let footerHtml;
+  if (isAck) {
+    footerHtml = `
+      <div class="ac-detail-footer">
+        <button class="btn btn-primary" id="ac-ack-btn"><i class="fa-solid fa-check"></i> Acknowledge &amp; Clear</button>
+        <span class="ac-attempts-note">${alarm.occurrences > 1 ? `Occurred ${alarm.occurrences} times` : "No hardware condition to re-check — clears on acknowledgement."}</span>
+      </div>`;
+  } else if (isCurrent) {
+    footerHtml = `
       <div class="ac-detail-footer">
         <button class="btn btn-primary" id="ac-reset-btn" ${AC.resetting ? "disabled" : ""}>
           <i class="fa-solid fa-rotate${AC.resetting ? " fa-spin" : ""}"></i>
@@ -3436,11 +3615,13 @@ function acRenderDetail() {
         </button>
         <span class="ac-attempts-note">Attempts so far: ${alarm.attempts}</span>
       </div>
-      <div id="ac-reset-result"></div>`
-    : `
+      <div id="ac-reset-result"></div>`;
+  } else {
+    footerHtml = `
       <div class="ac-detail-footer">
         <span class="ac-attempts-note">Resolved after ${acDuration(alarm.occurred_at, alarm.resolved_at)}</span>
       </div>`;
+  }
 
   bodyEl.innerHTML = `
     <div class="ac-detail-top">
@@ -3451,6 +3632,8 @@ function acRenderDetail() {
     <table class="data-table ac-detail-table">
       <tbody>
         <tr><td>Description</td><td colspan="2">${escapeHtml(alarm.description)}</td></tr>
+        ${alarm.pallet ? `<tr><td>Pallet</td><td colspan="2">${escapeHtml(alarm.pallet)}</td></tr>` : ""}
+        ${alarm.context ? `<tr><td>Part</td><td colspan="2" class="mono">${escapeHtml(acContextText(alarm.context))}</td></tr>` : ""}
         <tr><td>Occurred</td><td colspan="2" class="mono">${acFormatDate(alarm.occurred_at)}</td></tr>
         ${!isCurrent ? `<tr><td>Resolved</td><td colspan="2" class="mono">${acFormatDate(alarm.resolved_at)}</td></tr>` : ""}
       </tbody>
@@ -3459,7 +3642,9 @@ function acRenderDetail() {
     ${footerHtml}
   `;
 
-  if (isCurrent) {
+  if (isAck) {
+    document.getElementById("ac-ack-btn").addEventListener("click", () => acAcknowledgeAlarm(alarm.id));
+  } else if (isCurrent) {
     document.getElementById("ac-reset-btn").addEventListener("click", () => acResetAlarm(alarm.id));
   }
 }
@@ -3578,6 +3763,10 @@ function isAdmin() {
    ============================================================ */
 const MS_MAX_CONDITIONS = 20;
 const START2D_LABELS = ["A","B","C","D","E","F","G","H","I","J","K","L","M","N","O","P","Q"];
+// Default Check2DCode5 params (A-Q) used when a model has none saved yet.
+const START2D_DEFAULTS = ["2","0","0","0","0","000","2","0","1.0","0","1","1","1","1","1","2000","-5"];
+// Key params: A, F, P, Q
+const START2D_KEY_INDEXES = [0, 5, 15, 16];
 
 const MS = {
   data: { Pallet1: [], Pallet2: [] },
@@ -3822,11 +4011,23 @@ function msRebuildConditionRows() {
 
 function msBuildStart2DGrid(values) {
   const grid = document.getElementById("ms-start2d-grid");
-  grid.innerHTML = START2D_LABELS.map((label, i) => `
-    <div class="field">
+  grid.innerHTML = START2D_LABELS.map((label, i) => {
+    const key = START2D_KEY_INDEXES.includes(i);
+    return `
+    <div class="field${key ? " ms-start2d-key" : ""}"${key ? ' title="Key parameter"' : ""}>
       <label>${label}</label>
       <input type="text" class="ms-start2d-input" data-index="${i}" value="${escapeHtml((values && values[i]) || "")}" />
-    </div>`).join("");
+    </div>`;
+  }).join("");
+}
+
+// Fills A-Q with the defaults ONLY if every box is blank. Returns true if it filled.
+function msApplyStart2DDefaultsIfEmpty() {
+  if (!msCaptureStart2DValues().every((v) => v === "")) return false;
+  document.querySelectorAll(".ms-start2d-input").forEach((inp) => {
+    inp.value = START2D_DEFAULTS[Number(inp.dataset.index)] || "";
+  });
+  return true;
 }
 
 function msCaptureStart2DValues() {
@@ -4399,6 +4600,13 @@ PAGE_INIT.add_new_model = function () {
     };
     reader.readAsDataURL(file);
   });
+  document.getElementById("ms-f-start2d").addEventListener("change", (e) => {
+    if (!e.target.checked) return;
+    if (msApplyStart2DDefaultsIfEmpty()) {
+      showToast("No Check2DCode5 saved yet — default values filled. Review A, F, P, Q.", "info", 3500);
+    }
+  });
+
   document.getElementById("ms-add-condition-btn").addEventListener("click", () => {
     if (MS.conditions.length >= MS_MAX_CONDITIONS) return;
     MS.conditions = msCaptureConditionsFromDom();
