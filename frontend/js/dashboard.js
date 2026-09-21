@@ -2284,6 +2284,75 @@ async function ioReadPalletInMachineRoom(expectedPallet) {
   }
 }
 
+// Reads both pallets' positions from the I/O service.
+// ok:false => service unreachable, or sensors contradict each other.
+async function ioReadPalletPositions() {
+  try {
+    const res = await apiFetch("/api/io/status");
+    const data = await res.json();
+    if (!res.ok || !data.ok) return { ok: false };
+
+    const p1m = !!data.pallet1_in_machine_room;
+    const p2m = !!data.pallet2_in_machine_room;
+    const p1o = !!data.pallet1_in_operator_room;
+    const p2o = !!data.pallet2_in_operator_room;
+
+    // Wiring/read fault: same pallet in both rooms, or both pallets in one room.
+    if ((p1m && p1o) || (p2m && p2o) || (p1m && p2m) || (p1o && p2o)) {
+      return { ok: false, conflict: true };
+    }
+    return {
+      ok: true,
+      machine: p1m ? "Pallet1" : p2m ? "Pallet2" : null,
+      operator: p1o ? "Pallet1" : p2o ? "Pallet2" : null,
+    };
+  } catch (err) {
+    return { ok: false };
+  }
+}
+
+// Which pallet is in the MACHINE ROOM (under the laser/camera) right now.
+// Priority: running sequence context -> live I/O sensors -> inferred
+// (the pallet that is NOT in the Operator Room).
+async function wmResolveMachineRoomPallet() {
+  const ctx = MON.activePallet || WM.runningPallet;
+  if (ctx) return { pallet: ctx, source: "running sequence" };
+
+  const pos = await ioReadPalletPositions();
+  if (pos.ok && pos.machine) {
+    const operator = pos.machine === "Pallet1" ? "Pallet2" : "Pallet1";
+    if (WM_PALLET_STATE.operatorRoomPallet !== operator) {
+      WM_PALLET_STATE.operatorRoomPallet = operator; // self-correct stale UI state
+      wmUpdatePalletLocationUI();
+    }
+    return { pallet: pos.machine, source: "I/O sensors" };
+  }
+
+  const inferred = WM_PALLET_STATE.operatorRoomPallet === "Pallet1" ? "Pallet2" : "Pallet1";
+  return { pallet: inferred, source: "last known position (no sensor reading)" };
+}
+
+// Called when Model Setting opens so the in-memory state isn't stuck on the default.
+async function wmSyncPalletStateFromSensors() {
+  const pos = await ioReadPalletPositions();
+  if (!pos.ok) return;
+  const operator =
+    pos.operator || (pos.machine ? (pos.machine === "Pallet1" ? "Pallet2" : "Pallet1") : null);
+  if (operator && operator !== WM_PALLET_STATE.operatorRoomPallet) {
+    WM_PALLET_STATE.operatorRoomPallet = operator;
+    wmUpdatePalletLocationUI();
+  }
+}
+
+function wmLaserErrorHint(response) {
+  if (/S087/.test(response || "")) {
+    return "S087: the marker could not read the 2D code during the test marking. " +
+           "Check the part is under the camera in the Machine Room and that this job's " +
+           "Check2DCode5 values (A-Q) are the ones tuned for this part.";
+  }
+  return "";
+}
+
 /* ---- Real Start Marking sequence ----
    1. Interlock: doors closed + laser RX,Ready
    2. Confirm which pallet is physically in the Machine Room
@@ -2295,7 +2364,7 @@ async function ioReadPalletInMachineRoom(expectedPallet) {
    the pallet currently in the Operator Room if called stand-alone
    from the quick manual-function button grid. ---- */
 async function wmRunStartMarking() {
-  const pallet = MON.activePallet || WM.runningPallet || WM_PALLET_STATE.operatorRoomPallet;
+  const { pallet } = await wmResolveMachineRoomPallet();
   const job = getSelectedJob(pallet);
   if (!job) {
     return { ok: false, alarm: true, message: `No model selected for ${pallet}.` };
@@ -2460,12 +2529,12 @@ async function eqCheckLaserReady(conn, opts = {}) {
    value (positionally analogous to "B" in CodeReadResult's reply —
    see CODE2D_RESULT_READER below). ---- */
 async function wmRunCode2DStartReader() {
-  const pallet = MON.activePallet || WM.runningPallet || WM_PALLET_STATE.operatorRoomPallet;
+  const { pallet, source } = await wmResolveMachineRoomPallet();
   const job = getSelectedJob(pallet);
   if (!job) return { ok: false, alarm: true, message: `No model selected for ${pallet}.` };
   const conn = getEquipmentConnection();
 
-  wmLog(`>>> 2D CODE START READER interlock check (${pallet})`);
+  wmLog(`>>> 2D CODE START READER — target ${pallet} (from ${source}): ${job.model} / Job ${padJob(job.job_no)}`);
   const interlock = await eqCheckLaserReady(conn);
   if (!interlock.ready) {
     wmLog(`!!! ${interlock.message}`, interlock.alarm ? "error" : "warn");
@@ -2483,6 +2552,20 @@ async function wmRunCode2DStartReader() {
     };
   }
 
+  // Make sure the marker is on THIS pallet's job before checking the code.
+  const jobNoCommand = `WX,JobNo=${padJob(job.job_no)}`;
+  wmLog(`>>> ${jobNoCommand}`);
+  const jobRaw = await eqSendRaw(conn, jobNoCommand);
+  if (!jobRaw.ok) {
+    wmLog(`!!! Could not reach laser: ${jobRaw.message}`, "error");
+    return { ok: false, alarm: true, message: jobRaw.message };
+  }
+  if (!jobRaw.response.startsWith("WX,OK")) {
+    wmLog(`!!! Job selection failed: ${jobRaw.response}`, "error");
+    return { ok: false, alarm: true, message: jobRaw.response };
+  }
+  wmLog(`<<< ${jobRaw.response}`, "ok");
+
   const command = `WX,Check2DCode5=${params.join(",")}`;
   wmLog(`>>> ${command}`);
   const raw = await eqSendRaw(conn, command);
@@ -2492,7 +2575,9 @@ async function wmRunCode2DStartReader() {
   }
   if (!raw.response.startsWith("WX,OK")) {
     wmLog(`!!! Check2DCode5 failed: ${raw.response}`, "error");
-    return { ok: false, alarm: true, message: raw.response };
+    const hint = wmLaserErrorHint(raw.response);
+    if (hint) wmLog(`    ${hint}`, "warn");
+    return { ok: false, alarm: true, message: hint ? `${raw.response} — ${hint}` : raw.response };
   }
   wmLog(`<<< ${raw.response}`, "ok");
 
@@ -2510,7 +2595,7 @@ async function wmRunCode2DStartReader() {
      detailed (=1): RX,OK,B,C,V,W,X,Y
    B is the grade-bearing value. ---- */
 async function wmRunCode2DResultReader() {
-  const pallet = MON.activePallet || WM.runningPallet || WM_PALLET_STATE.operatorRoomPallet;
+  const { pallet } = await wmResolveMachineRoomPallet();
   const job = getSelectedJob(pallet);
   if (!job) return { ok: false, alarm: true, message: `No model selected for ${pallet}.` };
   const conn = getEquipmentConnection();
@@ -2562,7 +2647,7 @@ async function wmRunCode2DResultReader() {
    raising an alarm (a failing grade is a process result, not an
    equipment fault). ---- */
 async function wmRunCode2DGradeResult() {
-  const pallet = MON.activePallet || WM.runningPallet || WM_PALLET_STATE.operatorRoomPallet;
+  const { pallet } = await wmResolveMachineRoomPallet();
   const job = getSelectedJob(pallet);
   if (!job) return { ok: false, alarm: true, message: `No model selected for ${pallet}.` };
 
@@ -3096,15 +3181,18 @@ function wmRenderStartButtonsEnabled() {
 }
 
 function wmUpdatePalletLocationUI() {
-  const valueEl = document.getElementById("wm-pallet-location-value");
-  if (valueEl) {
-    valueEl.textContent = WM_PALLET_STATE.operatorRoomPallet === "Pallet1" ? "Pallet 1" : "Pallet 2";
-  }
+  const operator = WM_PALLET_STATE.operatorRoomPallet;
+  const machine = operator === "Pallet1" ? "Pallet2" : "Pallet1";
+  const label = (p) => (p === "Pallet1" ? "Pallet 1" : "Pallet 2");
+
+  const opEl = document.getElementById("wm-pallet-location-value");
+  if (opEl) opEl.textContent = label(operator);
+  const machEl = document.getElementById("wm-machine-location-value");
+  if (machEl) machEl.textContent = label(machine);
+
   wmRenderStartButtonsEnabled();
-  // Keep the sequence preview in sync with whichever pallet is reachable
-  // right now, and with its currently selected model's checks.
   if (!WM.manualRunning) {
-    const job = getSelectedJob(WM_PALLET_STATE.operatorRoomPallet);
+    const job = getSelectedJob(operator);
     wmRenderStartSeqList(wmComputeStepsForJob(job), -1, -1);
   }
 }
@@ -3764,7 +3852,7 @@ function isAdmin() {
 const MS_MAX_CONDITIONS = 20;
 const START2D_LABELS = ["A","B","C","D","E","F","G","H","I","J","K","L","M","N","O","P","Q"];
 // Default Check2DCode5 params (A-Q) used when a model has none saved yet.
-const START2D_DEFAULTS = ["2","0","0","0","0","000","2","0","1.0","0","1","1","1","1","1","2000","-5"];
+const START2D_DEFAULTS = ["3","0","0","0","0","000","2","0.8","1.0","0","4","4","4","4","4","2000","-5"];
 // Key params: A, F, P, Q
 const START2D_KEY_INDEXES = [0, 5, 15, 16];
 
@@ -4279,6 +4367,7 @@ PAGE_INIT.model_setting = function () {
       setSelectedJob(pallet, condition);
       msRenderDetail(pallet, condition);
       wmUpdatePalletLocationUI(); // refresh Start Marking preview if this pallet is currently in the Operator Room
+      wmSyncPalletStateFromSensors();
     });
   });
 
@@ -4334,6 +4423,7 @@ PAGE_INIT.model_setting = function () {
 
   wmRenderFnGroups();
   wmUpdatePalletLocationUI(); // sets pill text, button enable/disable, initial seq preview
+  wmSyncPalletStateFromSensors();
   document.getElementById("wm-start-marking-p1-btn").addEventListener("click", () => wmRunStartSequenceForPallet("Pallet1"));
   document.getElementById("wm-start-marking-p2-btn").addEventListener("click", () => wmRunStartSequenceForPallet("Pallet2"));
 
@@ -4344,6 +4434,7 @@ PAGE_INIT.model_setting = function () {
 
 PAGE_TEARDOWN.model_setting = function () {
   WM.manualRunning = false;
+  MON.activePallet = null;
   wmStopSequence();
 };
 
