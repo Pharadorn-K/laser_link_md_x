@@ -1,17 +1,26 @@
 // backend/node/routes/equipment.routes.js
 // ============================================================
-// /api/equipment/* routes  (admin/engineer only)
+// /api/equipment/* routes
 // Thin proxy: every call is forwarded 1:1 to the Python service.
-// State-changing calls (test connection, raw/command send, queue
-// add/clear) are also recorded to system_log for admin traceability.
+//
+//   admin/engineer only : commands, status, connect, command, queue*
+//   POST /raw           : ALL roles (the Monitor auto-cycle and manual
+//                          Start Marking need it), but non-admin/engineer
+//                          roles are restricted to an allowlist of the
+//                          sequence commands — see
+//                          middleware/equipmentCommandPolicy.js
+//
+// State-changing calls are also recorded to system_log.
 // ============================================================
 const express = require('express');
 const router = express.Router();
 const { requireRole } = require('../middleware/requireRole');
+const { restrictRawCommand } = require('../middleware/equipmentCommandPolicy');
 const laser = require('../services/laserService');
 const systemLog = require('../services/systemLog.service');
 
 const guard = requireRole('admin', 'engineer');
+const sequenceGuard = requireRole('admin', 'engineer', 'machine_controller', 'operator');
 
 function okStatus(status) {
   return status >= 200 && status < 300 ? 'success' : 'failed';
@@ -41,17 +50,23 @@ router.post('/connect', guard, async (req, res) => {
   res.status(r.status).json(r.data);
 });
 
-router.post('/raw', guard, async (req, res) => {
-  const { command } = req.body || {};
+router.post('/raw', sequenceGuard, restrictRawCommand, async (req, res) => {
+  const { command } = req.body;
   const r = await laser.forward('post', '/api/raw', req.body);
-  await systemLog.logAction({
-    req,
-    action: 'equipment.raw_command',
-    targetType: 'equipment',
-    description: `Sent raw command: ${command}`,
-    details: { command, response: r.data },
-    status: okStatus(r.status),
-  });
+
+  // RX,Ready is polled every ~0.5s while waiting for the marker; logging
+  // every successful poll would flood system_log. Failures are still logged.
+  const isReadyPoll = command === 'RX,Ready' && okStatus(r.status) === 'success';
+  if (!isReadyPoll) {
+    await systemLog.logAction({
+      req,
+      action: 'equipment.raw_command',
+      targetType: 'equipment',
+      description: `Sent raw command: ${command}`,
+      details: { command, response: r.data },
+      status: okStatus(r.status),
+    });
+  }
   res.status(r.status).json(r.data);
 });
 

@@ -1,8 +1,16 @@
 // backend/node/routes/io.routes.js
 // ============================================================
 // /api/io/* — proxies to the Python Modbus I/O bridge (io_service.py).
-// Same access pattern as equipment.routes.js: admin/engineer only,
-// state-changing calls logged to system_log.
+//
+// Open to ALL signed-in roles, including operator: the Monitor
+// auto-cycle (Close Front Door -> Change Pallet -> Open Front Door,
+// plus side-door / pallet-position sensor reads) runs as the operator.
+// These endpoints only expose fixed actions; the real safety
+// interlocks (side door, front door closed, pallet alarms, position
+// preconditions) are enforced in io_core.py, not by the role.
+// State-changing calls are logged to system_log.
+//
+// Deliberately NOT exposed here: alarm-reset and swap-pallets.
 // ============================================================
 const express = require('express');
 const router = express.Router();
@@ -10,7 +18,7 @@ const { requireRole } = require('../middleware/requireRole');
 const io = require('../services/ioService');
 const systemLog = require('../services/systemLog.service');
 
-const guard = requireRole('admin', 'engineer', 'machine_controller');
+const guard = requireRole('admin', 'engineer', 'machine_controller', 'operator');
 
 function okStatus(status) {
   return status >= 200 && status < 300 ? 'success' : 'failed';

@@ -1268,86 +1268,82 @@ function monShowLiveList() {
   if (list) list.style.display = "";
 }
 
-async function monAutoRunOneCycle(mode) {
-  const info = wmAutoModeInfo(mode);
-  monShowPreview(); // keep the Pallet 1 / Pallet 2 columns visible the whole run
+// Runs one pallet's step list, updating the live preview + check-status pills.
+// Returns { markingDone, failed }.
+//   markingDone -> Start Marking completed OK (a part was physically marked)
+//   failed      -> a step returned ok:false (sequence stopped there)
+async function monRunCycleSteps(pallet, steps, listId) {
+  monRenderSeqPreviewList(listId, steps);
+  monResetPreviewStepState(listId, steps);
 
-  if (info.kind === "single") {
-    const pallet = info.pallet;
-    MON.activePallet = pallet;
+  let markingDone = false;
+  let failed = false;
 
-    const job = getSelectedJob(pallet);
-    monInitCheckStatusForJob(pallet, job); // reset to pending/skipped for this cycle
-    monRenderPalletBlock(pallet);
-
-    const steps = applySkipFlags(AUTO_SINGLE_LOOP_STEPS, job);
-    monRenderSeqPreviewList("mon-preview-loop-list", steps);
-    monResetPreviewStepState("mon-preview-loop-list", steps);
-    
-    for (let i = 0; i < steps.length; i++) {
-      monSetPreviewStepState("mon-preview-loop-list", steps, i);
-      if (steps[i].skipped) {
-        monApplyStepResult(pallet, steps[i], true);
-        await new Promise((r) => setTimeout(r, 150)); // brief pause so the yellow state is visible
-        continue;
-      }
-      let verdict;
-      try {
-        verdict = await steps[i].fn();
-      } catch (err) {
-        verdict = { ok: false, alarm: true, message: String(err) };
-      }
-      if (!verdict || verdict.ok !== false) {
-        monApplyStepResult(pallet, steps[i], true);
-      } else {
-        monApplyStepResult(pallet, steps[i], false);
-        showToast(verdict.alarm ? `Alarm: ${steps[i].label} — ${verdict.message}` : `${steps[i].label}: ${verdict.message}`);
-        break;
-      }
-    }
-    monSetPreviewStepState("mon-preview-loop-list", steps, steps.length);
-
-    if (job) await monReportCount(pallet, job);
-    return;
-  }
-
-  // AUTO1-2: still alternates which pallet runs next, but now animates
-  // that pallet's own column instead of juggling a "first" vs "loop"
-  // list — the steps and skip logic were identical either way.
-  const pallet = monAutoNextPallet(mode);
-  const activeListId = pallet === "Pallet1" ? "mon-preview-p1-list" : "mon-preview-p2-list";
-  MON.activePallet = pallet;
-
-  const job = getSelectedJob(pallet);
-  monInitCheckStatusForJob(pallet, job); // reset to pending/skipped for this cycle
-  monRenderPalletBlock(pallet);
-
-  const steps = applySkipFlags(AUTO_SEQUENCE_STEPS, job);
-  monRenderSeqPreviewList(activeListId, steps);
-  monResetPreviewStepState(activeListId, steps);
   for (let i = 0; i < steps.length; i++) {
-    monSetPreviewStepState(activeListId, steps, i);
+    monSetPreviewStepState(listId, steps, i);
+
     if (steps[i].skipped) {
       monApplyStepResult(pallet, steps[i], true);
-      await new Promise((r) => setTimeout(r, 150));
+      await new Promise((r) => setTimeout(r, 150)); // brief pause so the yellow state is visible
       continue;
     }
+
     let verdict;
     try {
       verdict = await steps[i].fn();
     } catch (err) {
       verdict = { ok: false, alarm: true, message: String(err) };
     }
+
     if (!verdict || verdict.ok !== false) {
       monApplyStepResult(pallet, steps[i], true);
+      if (steps[i].id === "start_marking") markingDone = true;
     } else {
       monApplyStepResult(pallet, steps[i], false);
-      showToast(verdict.alarm ? `Alarm: ${steps[i].label} — ${verdict.message}` : `${steps[i].label}: ${verdict.message}`);
+      showToast(
+        verdict.alarm
+          ? `Alarm: ${steps[i].label} — ${verdict.message}`
+          : `${steps[i].label}: ${verdict.message}`
+      );
+      failed = true;
       break;
     }
   }
-  monSetPreviewStepState(activeListId, steps, steps.length);
-  if (job) monReportCount(pallet, job);
+
+  // Only mark the whole list "done" when nothing failed; otherwise leave
+  // the list parked on the step that stopped the cycle.
+  if (!failed) monSetPreviewStepState(listId, steps, steps.length);
+
+  return { markingDone, failed };
+}
+
+async function monAutoRunOneCycle(mode) {
+  const info = wmAutoModeInfo(mode);
+  monShowPreview(); // keep the Pallet 1 / Pallet 2 columns visible the whole run
+
+  let pallet, listId, baseSteps;
+  if (info.kind === "single") {
+    pallet = info.pallet;
+    listId = "mon-preview-loop-list";
+    baseSteps = AUTO_SINGLE_LOOP_STEPS;
+  } else {
+    // AUTO1-2: alternate which pallet runs next; animate that pallet's column.
+    pallet = monAutoNextPallet(mode);
+    listId = pallet === "Pallet1" ? "mon-preview-p1-list" : "mon-preview-p2-list";
+    baseSteps = AUTO_SEQUENCE_STEPS;
+  }
+
+  MON.activePallet = pallet;
+  const job = getSelectedJob(pallet);
+  monInitCheckStatusForJob(pallet, job); // reset to pending/skipped for this cycle
+  monRenderPalletBlock(pallet);
+
+  const steps = applySkipFlags(baseSteps, job);
+  const { markingDone } = await monRunCycleSteps(pallet, steps, listId);
+
+  // Log the part only if it was actually marked. A failed door/pallet/laser
+  // step before Start Marking must not create a production_log row.
+  if (job && markingDone) await monReportCount(pallet, job);
 }
 
 async function monProcessAutoQueue(mode) {
@@ -3100,7 +3096,7 @@ async function wmRunStartSequenceForPallet(pallet) {
     return;
   }
 
-  // NEW — operators cannot start mass production without a target set.
+  // Operators cannot start mass production without a target set.
   if (CURRENT_USER && CURRENT_USER.role === "operator") {
     const missingGoal = monPalletsMissingGoal([pallet]);
     if (missingGoal.length > 0) {
@@ -3115,11 +3111,24 @@ async function wmRunStartSequenceForPallet(pallet) {
   wmSetStartButtonsState("running", pallet);
   wmRenderStartSeqList(steps, -1, -1);
 
-  if (job) await monReportCount(pallet, job); // log the completed part to production_log
+  // Reset check results + captured 2D-code data for THIS run, so the
+  // code2d_result derived when the part is logged can't be based on a
+  // previous run's leftovers (same reset the auto cycle does).
+  monInitCheckStatusForJob(pallet, job);
+
   wmLog(`>>> Start Marking (${pallet}) — ${job.model} / Job ${padJob(job.job_no)}`);
 
+  // Set once WX,StartMarking has completed OK, i.e. a part was physically
+  // marked. The production_log row is written only in that case.
+  let markingDone = false;
+
   for (let i = 0; i < steps.length; i++) {
-    if (!WM.manualRunning) return; // stopped externally (e.g. page navigation)
+    if (!WM.manualRunning) {
+      // Stopped externally (e.g. navigated away mid-sequence). If the part
+      // was already marked, don't lose its count.
+      if (markingDone) await monReportCount(pallet, job);
+      return;
+    }
     wmRenderStartSeqList(steps, i, i - 1);
 
     if (steps[i].skipped) {
@@ -3135,18 +3144,30 @@ async function wmRunStartSequenceForPallet(pallet) {
     } catch (err) {
       verdict = { ok: false, alarm: true, message: String(err) };
     }
+
     if (!verdict.ok) {
       monApplyStepResult(pallet, steps[i], false);
-      WM.manualRunning = false;
-      WM.runningPallet = null;
       wmRenderStartSeqList(steps, i, i - 1, verdict.alarm ? "alarm" : "blocked");
       wmLog(`!!! ${steps[i].label} failed: ${verdict.message}`, "error");
-      wmSetStartButtonsState("idle");
       if (verdict.alarm) showToast(`Alarm: ${steps[i].label} — ${verdict.message}`);
+
+      // Failed AFTER marking (e.g. 2D grade fail): still log the part, with
+      // its code2d_result. Failed BEFORE marking: nothing is logged.
+      // Buttons stay locked until the log call returns so a second start
+      // can't overlap it.
+      if (markingDone) await monReportCount(pallet, job);
+
+      WM.manualRunning = false;
+      WM.runningPallet = null;
+      wmSetStartButtonsState("idle");
       return;
     }
+
     monApplyStepResult(pallet, steps[i], true);
+    if (steps[i].id === "start_marking") markingDone = true;
   }
+
+  if (markingDone) await monReportCount(pallet, job); // log the completed part to production_log
 
   WM.manualRunning = false;
   WM.runningPallet = null;
