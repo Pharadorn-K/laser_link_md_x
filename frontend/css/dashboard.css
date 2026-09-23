@@ -186,6 +186,16 @@ table.data-table tr:last-child td { border-bottom: none; }
   min-height: 220px;
   max-height: 320px;
 }
+
+.anm-joblist-toolbar {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+.anm-joblist-table-wrap { overflow-x: auto; }
+.anm-joblist-table th,
+.anm-joblist-table td { white-space: nowrap; }
 /* ---------------------------------------------------------
    FOR MONITOR PAGE — one-screen, two pallet blocks + sequence
    --------------------------------------------------------- */

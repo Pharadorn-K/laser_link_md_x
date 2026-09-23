@@ -23,6 +23,7 @@
         <button type="button" class="anm-mode-btn active" data-mode="add">+ Add Model</button>
         <button type="button" class="anm-mode-btn" data-mode="editP1">Edit Model P1</button>
         <button type="button" class="anm-mode-btn" data-mode="editP2">Edit Model P2</button>
+        <button type="button" class="anm-mode-btn" data-mode="joblist">Job No List</button>
       </div>
 
       <div class="field anm-edit-select-wrap" id="anm-edit-select-wrap" style="display:none;">
@@ -119,6 +120,48 @@
             <button type="button" class="btn btn-danger" id="ms-modal-delete-btn" style="margin-left:auto; display:none;">Delete</button>
           </div>
         </form>
+      </div>
+
+      <!-- ================= JOB NO LIST (read-only) ================= -->
+      <div id="anm-joblist-wrap" style="display:none;">
+        <div class="anm-joblist-toolbar">
+          <div class="field" style="margin-bottom:0; min-width:140px;">
+            <label for="anm-jl-pallet-filter">Pallet</label>
+            <select id="anm-jl-pallet-filter">
+              <option value="">All</option>
+              <option value="Pallet1">Pallet1</option>
+              <option value="Pallet2">Pallet2</option>
+            </select>
+          </div>
+          <div class="field" style="margin-bottom:0; flex:1; min-width:220px;">
+            <label for="anm-jl-search-input">Search</label>
+            <input type="text" id="anm-jl-search-input" placeholder="Model, Job No, Lot No…" />
+          </div>
+          <button class="btn btn-sm" id="anm-jl-refresh-btn" style="align-self:flex-end;">
+            <i class="fa-solid fa-rotate"></i> Refresh
+          </button>
+        </div>
+
+        <div class="anm-joblist-table-wrap">
+          <table class="data-table anm-joblist-table">
+            <thead>
+              <tr>
+                <th>Last Update</th>
+                <th>Model</th>
+                <th>Job No</th>
+                <th>Pallet No</th>
+                <th>Code Reader</th>
+                <th>Code Result</th>
+                <th>Result Grade</th>
+                <th>Grade</th>
+                <th>Marking Condition</th>
+              </tr>
+            </thead>
+            <tbody id="anm-jl-table-body">
+              <tr><td colspan="9" class="eq-queue-empty">Loading…</td></tr>
+            </tbody>
+          </table>
+        </div>
       </div>
 
     </div>

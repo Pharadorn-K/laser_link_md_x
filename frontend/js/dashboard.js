@@ -4543,10 +4543,57 @@ async function anmReloadEditList(clearSelection) {
   msLoadConditionNames();
 }
 
+// Locks the shared Pallet select to the mode's fixed pallet in edit
+// modes (Edit Model P1 -> Pallet1 only, Edit Model P2 -> Pallet2 only),
+// and restores the normal two-option picker in Add mode. In locked
+// mode it also strips the native <select> appearance (dropdown arrow,
+// pointer cursor) so it reads as a plain, non-interactive block.
+function anmUpdatePalletFieldMode() {
+  const select = document.getElementById("ms-f-pallet");
+  if (!select) return;
+
+  if (ANM.mode === "add") {
+    select.innerHTML = `
+      <option value="Pallet1">Pallet1</option>
+      <option value="Pallet2">Pallet2</option>`;
+    select.disabled = false;
+    select.style.appearance = "";
+    select.style.webkitAppearance = "";
+    select.style.mozAppearance = "";
+    select.style.backgroundImage = "";
+    select.style.cursor = "";
+  } else {
+    const fixed = ANM.mode === "editP2" ? "Pallet2" : "Pallet1";
+    select.innerHTML = `<option value="${fixed}">${fixed}</option>`;
+    select.value = fixed;
+    select.disabled = true;
+    select.style.appearance = "none";
+    select.style.webkitAppearance = "none";
+    select.style.mozAppearance = "none";
+    select.style.backgroundImage = "none";
+    select.style.cursor = "default";
+  }
+}
+
 function anmSetMode(mode) {
   ANM.mode = mode;
   document.querySelectorAll(".anm-mode-btn").forEach((b) => b.classList.toggle("active", b.dataset.mode === mode));
-  document.getElementById("anm-edit-select-wrap").style.display = mode === "add" ? "none" : "";
+  document.getElementById("anm-edit-select-wrap").style.display =
+    (mode === "editP1" || mode === "editP2") ? "" : "none";
+
+  anmUpdatePalletFieldMode(); // lock/unlock Pallet field for this mode
+
+  const joblistWrap = document.getElementById("anm-joblist-wrap");
+
+  // NEW — Job No List: hide the form entirely, show the read-only table.
+  if (mode === "joblist") {
+    document.getElementById("anm-form-wrap").style.display = "none";
+    document.getElementById("anm-edit-empty").style.display = "none";
+    if (joblistWrap) joblistWrap.style.display = "";
+    anmLoadJobList();
+    return;
+  }
+  if (joblistWrap) joblistWrap.style.display = "none";
 
   if (mode === "add") {
     anmFillForm(null);
@@ -4554,6 +4601,87 @@ function anmSetMode(mode) {
   } else {
     anmLoadEditListFor(mode === "editP2" ? "Pallet2" : "Pallet1");
   }
+}
+
+// ---- Job No List: read-only table over every model_condition row ----
+const ANM_CHECK_ICON_YES = '<i class="fa-solid fa-check" style="color:var(--ok);"></i>';
+const ANM_CHECK_ICON_NO = '<i class="fa-solid fa-xmark" style="color:var(--err);"></i>';
+
+function anmJoblistCheckIcon(value) {
+  return value ? ANM_CHECK_ICON_YES : ANM_CHECK_ICON_NO;
+}
+
+// "000/VR721578P, 001/H, 002/G" — BLK (3-digit) / CharacterString value,
+// in the same sort_order the marking sequence uses.
+function anmJoblistConditionSummary(conditions) {
+  const items = conditions || [];
+  if (!items.length) return "—";
+  return items
+    .slice()
+    .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0))
+    .map((it) => `${padBlk(it.block_no)}/${it.condition_value}`)
+    .join(", ");
+}
+
+function anmJoblistFormatDate(iso) {
+  if (!iso) return "—";
+  return new Date(iso).toLocaleString([], {
+    year: "numeric", month: "short", day: "2-digit",
+    hour: "2-digit", minute: "2-digit",
+  });
+}
+
+async function anmLoadJobList() {
+  const tbody = document.getElementById("anm-jl-table-body");
+  if (tbody) tbody.innerHTML = `<tr><td colspan="9" class="eq-queue-empty">Loading…</td></tr>`;
+  try {
+    const res = await apiFetch("/api/models"); // no ?pallet= -> every model_condition row, both pallets
+    if (!res.ok) throw new Error("failed");
+    ANM.jobListRows = await res.json();
+  } catch (err) {
+    ANM.jobListRows = [];
+    if (tbody) tbody.innerHTML = `<tr><td colspan="9" class="eq-queue-empty">Could not load job list.</td></tr>`;
+    return;
+  }
+  anmRenderJobList();
+}
+
+function anmRenderJobList() {
+  const tbody = document.getElementById("anm-jl-table-body");
+  if (!tbody) return;
+
+  const palletFilter = document.getElementById("anm-jl-pallet-filter")?.value || "";
+  const q = (document.getElementById("anm-jl-search-input")?.value || "").trim().toLowerCase();
+
+  let rows = ANM.jobListRows || [];
+  if (palletFilter) rows = rows.filter((r) => r.pallet_no === palletFilter);
+  if (q) {
+    rows = rows.filter((r) =>
+      String(r.model || "").toLowerCase().includes(q) ||
+      String(r.job_no ?? "").includes(q) ||
+      String(r.lot_no || "").toLowerCase().includes(q)
+    );
+  }
+
+  if (rows.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="9" class="eq-queue-empty">No models found.</td></tr>`;
+    return;
+  }
+
+  tbody.innerHTML = rows
+    .map((r) => `
+      <tr>
+        <td class="mono">${anmJoblistFormatDate(r.updated_at)}</td>
+        <td>${escapeHtml(r.model)}</td>
+        <td class="mono">${padJob(r.job_no)}</td>
+        <td>${escapeHtml(r.pallet_no)}</td>
+        <td style="text-align:center;">${anmJoblistCheckIcon(r.check_start2dcode)}</td>
+        <td style="text-align:center;">${anmJoblistCheckIcon(r.check_read2dcode)}</td>
+        <td style="text-align:center;">${anmJoblistCheckIcon(r.check_grade2dcode)}</td>
+        <td class="mono">${escapeHtml(r.control_grade) || "—"}</td>
+        <td class="mono">${escapeHtml(anmJoblistConditionSummary(r.conditions))}</td>
+      </tr>`)
+    .join("");
 }
 
 /* ============================================================
@@ -4668,6 +4796,7 @@ PAGE_INIT.add_new_model = function () {
   // ---- Column 1 (model form) setup — unchanged from before ----
   ANM.mode = "add";
   ANM.list = [];
+  ANM.jobListRows = [];
   msLoadConditionNames();
 
   document.querySelectorAll(".anm-mode-btn").forEach((btn) => {
@@ -4680,6 +4809,15 @@ PAGE_INIT.add_new_model = function () {
     anmFillForm(condition || null);
     anmShowForm(true);
   });
+
+  // NEW — Job No List: filter/search/refresh
+  const jlPalletFilter = document.getElementById("anm-jl-pallet-filter");
+  if (jlPalletFilter) jlPalletFilter.addEventListener("change", anmRenderJobList);
+  const jlSearchInput = document.getElementById("anm-jl-search-input");
+  if (jlSearchInput) jlSearchInput.addEventListener("input", anmRenderJobList);
+  const jlRefreshBtn = document.getElementById("anm-jl-refresh-btn");
+  if (jlRefreshBtn) jlRefreshBtn.addEventListener("click", anmLoadJobList);  
+  
   document.getElementById("ms-f-photo").addEventListener("change", () => {
     const file = document.getElementById("ms-f-photo").files[0];
     if (!file) return;
