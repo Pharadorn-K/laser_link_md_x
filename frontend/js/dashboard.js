@@ -2122,6 +2122,24 @@ function monApplyModeView() {
   }
 }
 
+// Detects a selected job whose model_condition row no longer exists
+// (deleted, or the model was recreated with a new id) and clears the
+// stale localStorage selection instead of repeatedly 404'ing against it.
+async function monValidateSelectedJob(pallet) {
+  const job = getSelectedJob(pallet);
+  if (!job) return;
+  try {
+    const res = await apiFetch(`/api/models/${job.id}`);
+    if (res.status === 404) {
+      setSelectedJob(pallet, null);
+      monRenderPalletBlock(pallet);
+      showToast(`The model previously selected for ${pallet} no longer exists — please re-select it on Model Setting.`, "info", 4000);
+    }
+  } catch (err) {
+    // transient network issue — leave the selection alone, don't clear on a guess
+  }
+}
+
 PAGE_INIT.monitor = function () {
   MON.running = false;
   MON.activePallet = null;
@@ -2170,12 +2188,16 @@ PAGE_INIT.monitor = function () {
   });
 };
 
-PAGE_TEARDOWN.monitor = function () {
+PAGE_INIT.monitor = function () {
   MON.running = false;
-  MON_AUTO.running = false;
-  clearTimeout(MON.timer);
-  monCloseNextStepModal(); // NEW
-  window.removeEventListener("nlm:alarms-changed", monRenderAlarmBanner);
+  MON.activePallet = null;
+  MON.pendingSet = null;
+  monValidateSelectedJob("Pallet1");   // NEW
+  monValidateSelectedJob("Pallet2");   // NEW
+  monRenderAll();
+  monApplyModeView();
+  monRenderAlarmBanner();
+  window.addEventListener("nlm:alarms-changed", monRenderAlarmBanner);
 };
 
 /* ============================================================
@@ -4622,7 +4644,7 @@ function anmFillForm(condition) {
   msRebuildConditionRows();
 
   anmUpdateSaveBtnLabel();
-  anmQueueRender(condition ? condition.id : null); // NEW — per-piece CSV card
+  anmQueueRender(condition || null);
 }
 
 async function anmLoadEditListFor(pallet) {
@@ -4808,9 +4830,12 @@ function anmRenderJobList() {
    ============================================================ */
 const ANM_QUEUE = {
   modelId: null,
+  model: null,
+  lotNo: null,
   seq: 0,       // guards against stale async responses when the user switches models
   parsed: null, // { columns, rows } from the chosen file
   dry: null,    // last dry-run response
+  info: null,
 };
  
 // Small RFC-4180-style CSV parser: quoted fields, "" escapes, CRLF/LF,
@@ -4872,11 +4897,10 @@ function anmQueueStatusHtml(info) {
         .map((n) => `<span class="mono">#${n.seq_no} ${escapeHtml(anmQueueValuesText(n.values, info.variable_names))}</span>`)
         .join("<br>")}</div>`
     : "";
-  const lotWarn = info.queue_lot_no !== info.model_lot_no
-    ? `<div class="alert alert-error" style="margin:8px 0 0;">
-         This queue was loaded for Lot "${escapeHtml(info.queue_lot_no || "")}", but the model is now on
-         Lot "${escapeHtml(info.model_lot_no || "")}". Import a new CSV for the current lot.
-       </div>`
+  const sharedNote = info.shared_by && info.shared_by.length > 1
+    ? `<div class="field-hint" style="margin-top:6px;">Shared by: ${info.shared_by
+        .map((s) => `${escapeHtml(s.pallet_no)} (Job ${padJob(s.job_no)})`)
+        .join(", ")}</div>`
     : "";
   return `
     <div class="anm-q-status">
@@ -4887,9 +4911,9 @@ function anmQueueStatusHtml(info) {
         ${c.reserved ? chip("In progress", c.reserved, "reserved") : ""}
         ${c.failed ? chip("Failed", c.failed, "failed") : ""}
       </div>
-      <div class="anm-q-lot">Loaded for Lot <span class="mono">${escapeHtml(info.queue_lot_no || "—")}</span></div>
+      <div class="anm-q-lot">Loaded for Lot <span class="mono">${escapeHtml(info.lot_no || "—")}</span></div>
       ${next}
-      ${lotWarn}
+      ${sharedNote}
     </div>`;
 }
  
@@ -4948,15 +4972,17 @@ async function anmQueueHandleFile(file) {
   const previewBox = document.getElementById("anm-q-preview");
   const importBtn = document.getElementById("anm-q-import-btn");
   if (!alertBox || !previewBox || !importBtn) return;
- 
+
   ANM_QUEUE.parsed = null;
   ANM_QUEUE.dry = null;
   importBtn.disabled = true;
   alertBox.innerHTML = "";
   previewBox.innerHTML = "";
   if (!file) return;
- 
-  const modelId = ANM_QUEUE.modelId;
+
+  const { model, lotNo } = ANM_QUEUE;
+  if (!model || !lotNo) return;
+
   let table;
   try {
     table = anmParseCsv(await file.text());
@@ -4968,17 +4994,17 @@ async function anmQueueHandleFile(file) {
     alertBox.innerHTML = `<div class="alert alert-error">The CSV needs a header row and at least one data row.</div>`;
     return;
   }
- 
+
   const columns = table[0].map((c) => c.trim());
   const rows = table.slice(1);
- 
+
   try {
-    const res = await apiFetch(`/api/models/${modelId}/queue/import`, {
+    const res = await apiFetch(`/api/piece-queue/import`, {
       method: "POST",
-      body: JSON.stringify({ columns, rows, dry_run: true }),
+      body: JSON.stringify({ model, lot_no: lotNo, columns, rows, dry_run: true }),
     });
     const data = await res.json().catch(() => ({}));
-    if (modelId !== ANM_QUEUE.modelId) return; // user switched model meanwhile
+    if (model !== ANM_QUEUE.model || lotNo !== ANM_QUEUE.lotNo) return; // user switched model meanwhile
     if (!res.ok) {
       alertBox.innerHTML = anmQueueErrorHtml(data);
       return;
@@ -4993,21 +5019,21 @@ async function anmQueueHandleFile(file) {
 }
  
 async function anmQueueImport() {
-  const { modelId, parsed, dry } = ANM_QUEUE;
-  if (!modelId || !parsed || !dry) return;
- 
+  const { model, lotNo, modelId, parsed, dry } = ANM_QUEUE;
+  if (!model || !lotNo || !parsed || !dry) return;
+
   const rep = dry.will_replace || { total: 0, pending: 0, marked: 0 };
   const msg = rep.total
     ? `Replace the current queue (${rep.pending} unmarked, ${rep.marked} marked) with ${dry.total} new row(s) for Lot "${dry.lot_no}"?`
     : `Load ${dry.total} row(s) for Lot "${dry.lot_no}"?`;
   if (!confirm(msg)) return;
- 
+
   const importBtn = document.getElementById("anm-q-import-btn");
   if (importBtn) importBtn.disabled = true;
   try {
-    const res = await apiFetch(`/api/models/${modelId}/queue/import`, {
+    const res = await apiFetch(`/api/piece-queue/import`, {
       method: "POST",
-      body: JSON.stringify({ columns: parsed.columns, rows: parsed.rows }),
+      body: JSON.stringify({ model, lot_no: lotNo, columns: parsed.columns, rows: parsed.rows }),
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
@@ -5017,54 +5043,65 @@ async function anmQueueImport() {
       return;
     }
     showToast(`Imported ${data.imported} row(s).`, "success");
-    await anmQueueRender(modelId);
+    await anmQueueRender({ id: modelId, model, lot_no: lotNo });
   } catch (err) {
     showToast("Could not reach the server.");
     if (importBtn) importBtn.disabled = false;
   }
 }
- 
+
 async function anmQueueClear() {
-  const { modelId } = ANM_QUEUE;
-  if (!modelId) return;
+  const { model, lotNo, modelId } = ANM_QUEUE;
+  if (!model || !lotNo) return;
   const info = ANM_QUEUE.info;
   const unmarked = info && info.counts ? info.counts.pending : 0;
   if (!confirm(`Clear the per-piece queue?${unmarked ? ` ${unmarked} unmarked row(s) will be lost.` : ""} Production history is not affected.`)) return;
   try {
-    const res = await apiFetch(`/api/models/${modelId}/queue`, { method: "DELETE" });
+    const res = await apiFetch(
+      `/api/piece-queue?model=${encodeURIComponent(model)}&lot_no=${encodeURIComponent(lotNo)}`,
+      { method: "DELETE" }
+    );
     const data = await res.json().catch(() => ({}));
     if (!res.ok) { showToast(data.error || "Could not clear the queue."); return; }
     showToast("Queue cleared.", "success");
-    await anmQueueRender(modelId);
+    await anmQueueRender({ id: modelId, model, lot_no: lotNo });
   } catch (err) {
     showToast("Could not reach the server.");
   }
 }
- 
-// (Re)builds the whole card for the given saved model id (null = unsaved / Add mode).
-async function anmQueueRender(modelId) {
+
+// (Re)builds the whole card for the given saved model_condition row
+// (null = unsaved / Add mode). Needs model+lot_no because the queue
+// is keyed by (model, lot_no), shared across every pallet/job on that lot.
+async function anmQueueRender(condition) {
   const card = document.getElementById("anm-queue-card");
   if (!card) return;
- 
-  ANM_QUEUE.modelId = modelId || null;
+
+  const modelId = condition ? condition.id : null;
+  const model = condition ? condition.model : null;
+  const lotNo = condition ? condition.lot_no : null;
+
+  ANM_QUEUE.modelId = modelId;
+  ANM_QUEUE.model = model;
+  ANM_QUEUE.lotNo = lotNo;
   ANM_QUEUE.parsed = null;
   ANM_QUEUE.dry = null;
   ANM_QUEUE.info = null;
   const mySeq = ++ANM_QUEUE.seq;
   const title = `<div class="card-title">Per-piece values (CSV)</div>`;
- 
-  if (!modelId) {
+
+  if (!modelId || !model || !lotNo) {
     card.innerHTML = `${title}
       <p class="field-hint">Tick <strong>Per-piece</strong> on the conditions that change on every part and save the model.
       Then open it in Edit mode to import a CSV.</p>`;
     return;
   }
- 
+
   card.innerHTML = `${title}<div class="eq-queue-empty">Loading…</div>`;
- 
+
   let info;
   try {
-    const res = await apiFetch(`/api/models/${modelId}/queue`);
+    const res = await apiFetch(`/api/piece-queue?model=${encodeURIComponent(model)}&lot_no=${encodeURIComponent(lotNo)}`);
     info = await res.json();
     if (!res.ok) throw new Error(info.error || "failed");
   } catch (err) {
@@ -5074,14 +5111,14 @@ async function anmQueueRender(modelId) {
   }
   if (mySeq !== ANM_QUEUE.seq) return;
   ANM_QUEUE.info = info;
- 
+
   if (!info.variable_names.length) {
     card.innerHTML = `${title}
       <p class="field-hint">No per-piece conditions on this model. Tick <strong>Per-piece</strong> on a condition above
       and click Save Changes to enable CSV import.</p>`;
     return;
   }
- 
+
   card.innerHTML = `${title}
     <p class="field-hint">
       Per-piece conditions: ${info.variable_names.map((n) => `<strong>${escapeHtml(n)}</strong>`).join(", ")}.
@@ -5099,7 +5136,7 @@ async function anmQueueRender(modelId) {
     <div style="margin-top:10px;">
       <button type="button" class="btn btn-primary" id="anm-q-import-btn" disabled>Import &amp; replace queue</button>
     </div>`;
- 
+
   document.getElementById("anm-q-template-btn").addEventListener("click", () => anmQueueDownloadTemplate(info.variable_names));
   document.getElementById("anm-q-file").addEventListener("change", (e) => anmQueueHandleFile(e.target.files[0]));
   document.getElementById("anm-q-import-btn").addEventListener("click", anmQueueImport);
