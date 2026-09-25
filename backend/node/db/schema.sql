@@ -332,3 +332,10 @@ CREATE TABLE model_piece_queue (
     UNIQUE KEY uq_mpq_model_lot_seq (model, lot_no, seq_no),
     KEY idx_mpq_model_lot_status (model, lot_no, status, seq_no)
 ) ENGINE=InnoDB;
+
+
+ALTER TABLE production_log
+  MODIFY COLUMN type ENUM('mass', 'setting', 'rework') NOT NULL DEFAULT 'setting';
+
+ALTER TABLE production_goal
+  ADD COLUMN rework_mode BOOLEAN NOT NULL DEFAULT FALSE AFTER goal_count;

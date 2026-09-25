@@ -767,9 +767,10 @@ function monGoalInnerHtml(pallet, job) {
   }
 
   const pct = monGoalProgressPct(d.current_count, d.goal_count);
+  const reworkBadge = d.rework_mode ? `<span class="tag rejected" style="margin-left:6px;">Rework</span>` : "";
   return `
     <div class="mon-goal-bar-track"><div class="mon-goal-bar-fill${d.reached ? " reached" : ""}" style="width:${pct}%;"></div></div>
-    <div class="mon-goal-bar-label">${d.current_count} / ${d.goal_count} pcs (${pct}%)${d.reached ? " · Reached" : ""}</div>
+    <div class="mon-goal-bar-label">${d.current_count} / ${d.goal_count} pcs (${pct}%)${d.reached ? " · Reached" : ""}${reworkBadge}</div>
     ${canEdit ? `
       <div class="mon-goal-edit-row">
         <input type="number" min="1" class="mon-goal-input" id="mon-goal-input-${pallet}" value="${d.goal_count}" />
@@ -935,15 +936,15 @@ function monRenderNextStepChoices() {
       ${data.current_count} / ${data.goal_count} pcs.
     </div>
     <div class="ns-choice-grid">
-      <button type="button" class="ns-choice-btn" id="ns-choice-continuous">
+      <button type="button" class="ns-choice-btn" id="ns-choice-nextlot">
         <i class="fa-solid fa-arrows-rotate"></i>
-        Continuous
-        <span class="ns-choice-desc">Keep running this model — update conditions and extend the target.</span>
+        Next Lot
+        <span class="ns-choice-desc">Same model, new lot — update conditions/Lot No. on both pallets and set a fresh target.</span>
       </button>
-      <button type="button" class="ns-choice-btn" id="ns-choice-updategoal">
-        <i class="fa-solid fa-bullseye"></i>
-        Update Goal
-        <span class="ns-choice-desc">The target was set wrong — correct it and keep going.</span>
+      <button type="button" class="ns-choice-btn" id="ns-choice-rework">
+        <i class="fa-solid fa-arrow-rotate-left"></i>
+        Rework
+        <span class="ns-choice-desc">Same lot — some parts were NG (grade F, a failed mark, etc.) and need to be scrubbed and remarked. No new target needed.</span>
       </button>
       <button type="button" class="ns-choice-btn" id="ns-choice-changemodel">
         <i class="fa-solid fa-right-from-bracket"></i>
@@ -952,8 +953,8 @@ function monRenderNextStepChoices() {
       </button>
     </div>
   `;
-  document.getElementById("ns-choice-continuous").addEventListener("click", monRenderNextStepContinuous);
-  document.getElementById("ns-choice-updategoal").addEventListener("click", monRenderNextStepUpdateGoal);
+  document.getElementById("ns-choice-nextlot").addEventListener("click", monRenderNextStepContinuous);
+  document.getElementById("ns-choice-rework").addEventListener("click", monRenderNextStepRework);
   document.getElementById("ns-choice-changemodel").addEventListener("click", monRenderNextStepChangeModel);
 }
 
@@ -1152,45 +1153,44 @@ async function monSubmitNextStepContinuous() {
   monRefreshGoals();
 }
 
-/* ---- 2. Update Goal: correct a wrong target ---- */
-function monRenderNextStepUpdateGoal() {
+/* ---- 2. Rework: confirm, no new target needed ---- */
+function monRenderNextStepRework() {
   const { job, data } = NEXTSTEP;
   document.getElementById("mon-nextstep-body").innerHTML = `
     <div class="ns-back-row"><button type="button" class="btn btn-sm btn-ghost" id="ns-back-btn">&larr; Back</button></div>
     <div id="ns-alert-box"></div>
-    <p style="font-size:13px;color:var(--ink-soft);">Current count: <strong>${data.current_count}</strong> pcs for "${escapeHtml(job.model)}" (Lot ${escapeHtml(job.lot_no)}).</p>
-    <div class="field">
-      <label for="ns-newgoal">New target (pcs)</label>
-      <input type="number" min="1" id="ns-newgoal" value="${data.goal_count || data.current_count}" />
-    </div>
+    <p style="font-size:13.5px;color:var(--ink);">
+      "${escapeHtml(job.model)}" (Lot ${escapeHtml(job.lot_no)}) reached its target of
+      ${data.goal_count} pcs (currently ${data.current_count}), but some parts came out NG
+      and need to be scrubbed and remarked.
+    </p>
+    <p style="font-size:13px;color:var(--ink-soft);">
+      No new target is needed. From now on, parts marked on this lot are recorded separately
+      as <strong>Rework</strong> in the production log instead of Mass Production.
+    </p>
     <div style="display:flex; gap:8px; margin-top:10px;">
-      <button type="button" class="btn btn-primary" id="ns-updategoal-ok">OK</button>
+      <button type="button" class="btn btn-primary" id="ns-rework-ok">OK</button>
     </div>
   `;
   document.getElementById("ns-back-btn").addEventListener("click", monRenderNextStepChoices);
-  document.getElementById("ns-updategoal-ok").addEventListener("click", monSubmitNextStepUpdateGoal);
+  document.getElementById("ns-rework-ok").addEventListener("click", monSubmitNextStepRework);
 }
 
-async function monSubmitNextStepUpdateGoal() {
+async function monSubmitNextStepRework() {
   const alertBox = document.getElementById("ns-alert-box");
   alertBox.innerHTML = "";
-  const input = document.getElementById("ns-newgoal");
-  const value = input ? parseInt(input.value, 10) : NaN;
-  if (Number.isNaN(value) || value <= 0) {
-    alertBox.innerHTML = `<div class="alert alert-error">Enter a target greater than 0.</div>`;
-    return;
-  }
   const { job } = NEXTSTEP;
-  const okBtn = document.getElementById("ns-updategoal-ok");
+  const okBtn = document.getElementById("ns-rework-ok");
   if (okBtn) okBtn.disabled = true;
+
   try {
-    const res = await apiFetch("/api/production/goal", {
+    const res = await apiFetch("/api/production/rework", {
       method: "POST",
-      body: JSON.stringify({ model: job.model, lot_no: job.lot_no, goal_count: value }),
+      body: JSON.stringify({ model: job.model, lot_no: job.lot_no }),
     });
     const data = await res.json();
     if (!res.ok) {
-      alertBox.innerHTML = `<div class="alert alert-error">${escapeHtml(data.error || "Could not update target.")}</div>`;
+      alertBox.innerHTML = `<div class="alert alert-error">${escapeHtml(data.error || "Could not enable rework mode.")}</div>`;
       if (okBtn) okBtn.disabled = false;
       return;
     }
@@ -1199,8 +1199,9 @@ async function monSubmitNextStepUpdateGoal() {
     if (okBtn) okBtn.disabled = false;
     return;
   }
+
   monCloseNextStepModal();
-  showToast("Target updated.", "success");
+  showToast("Rework mode on — parts from here are logged as Rework.", "success");
   monRefreshGoals();
 }
 
@@ -2139,11 +2140,12 @@ async function monValidateSelectedJob(pallet) {
     // transient network issue — leave the selection alone, don't clear on a guess
   }
 }
-
 PAGE_INIT.monitor = function () {
   MON.running = false;
   MON.activePallet = null;
   MON.pendingSet = null;
+  monValidateSelectedJob("Pallet1");
+  monValidateSelectedJob("Pallet2");
   monRenderAll();
   monApplyModeView();
   monRenderAlarmBanner();
@@ -2158,13 +2160,13 @@ PAGE_INIT.monitor = function () {
   document.getElementById("mon-complete-setting-finish-btn").addEventListener("click", monConfirmCompleteSetting);
   document.getElementById("mon-complete-setting-cancel-btn").addEventListener("click", () => {
     document.getElementById("mon-complete-setting-backdrop").classList.remove("open");
-    monResumeCompleteSettingAttentionIfEligible(); // NEW — they backed out, keep reminding
+    monResumeCompleteSettingAttentionIfEligible();
   });
 
   document.getElementById("mon-complete-setting-backdrop").addEventListener("click", (e) => {
     if (e.target.id === "mon-complete-setting-backdrop") {
       document.getElementById("mon-complete-setting-backdrop").classList.remove("open");
-      monResumeCompleteSettingAttentionIfEligible(); // NEW
+      monResumeCompleteSettingAttentionIfEligible();
     }
   });
 
@@ -2179,25 +2181,16 @@ PAGE_INIT.monitor = function () {
     MON.pendingSet = null;
   });
   document.getElementById("mon-confirm-backdrop").addEventListener("click", (e) => {
-    if (e.target.id === "mon-confirm-backdrop") {document.getElementById("mon-confirm-backdrop").classList.remove("open");MON.pendingSet = null;}
+    if (e.target.id === "mon-confirm-backdrop") {
+      document.getElementById("mon-confirm-backdrop").classList.remove("open");
+      MON.pendingSet = null;
+    }
   });
   document.getElementById("mon-edit-modal-save-btn").addEventListener("click", monSubmitEditModal);
   document.getElementById("mon-edit-modal-cancel-btn").addEventListener("click", monCloseEditModal);
   document.getElementById("mon-edit-modal-backdrop").addEventListener("click", (e) => {
     if (e.target.id === "mon-edit-modal-backdrop") monCloseEditModal();
   });
-};
-
-PAGE_INIT.monitor = function () {
-  MON.running = false;
-  MON.activePallet = null;
-  MON.pendingSet = null;
-  monValidateSelectedJob("Pallet1");   // NEW
-  monValidateSelectedJob("Pallet2");   // NEW
-  monRenderAll();
-  monApplyModeView();
-  monRenderAlarmBanner();
-  window.addEventListener("nlm:alarms-changed", monRenderAlarmBanner);
 };
 
 /* ============================================================
@@ -5831,6 +5824,7 @@ function mpRenderStats(stats) {
       <div class="mp-stat-label">${label}</div>
       <div class="mp-stat-mass">${stats.mass[key]}<span>mass</span></div>
       <div class="mp-stat-setting">${stats.setting[key]} setting</div>
+      ${stats.rework && stats.rework[key] ? `<div class="mp-stat-setting" style="color:var(--err);">${stats.rework[key]} rework</div>` : ""}
     </div>`
     )
     .join("");
@@ -5903,7 +5897,7 @@ function mpRenderRecentRows(rows) {
       <td class="mono">${padJob(r.job_no)}</td>
       <td class="mono">${escapeHtml(r.lot_no || "—")}</td>
       <td>${escapeHtml(r.pallet_no || "—")}</td>
-      <td><span class="tag ${r.type === "mass" ? "approved" : "pending"}">${r.type === "mass" ? "Mass" : "Setting"}</span></td>
+      <td>${plTypeTagHtml(r.type)}</td>
     </tr>`
     )
     .join("");
@@ -6242,12 +6236,81 @@ function plCode2dBadgeHtml(code) {
   return `<span class="pl-code2d-badge pl-code2d-${cls}">${escapeHtml(label)}</span>`;
 }
 
-const PL_SUMMARY_COLSPAN = 11;
+const PL_SUMMARY_COLSPAN = 13;
 const PL_RAW_COLSPAN = 9;
 
-function plColspan() {
-  return PL.view === "summary" ? PL_SUMMARY_COLSPAN : PL_RAW_COLSPAN;
-}
+// function plColspan() {
+//   return PL.view === "summary" ? PL_SUMMARY_COLSPAN : PL_RAW_COLSPAN;
+// }
+
+// function plRenderHead() {
+//   const head = document.getElementById("pl-table-head");
+//   if (!head) return;
+//   head.innerHTML = PL.view === "summary"
+//     ? `<tr>
+//          <th>Part Name</th>
+//          <th>Job No.</th>
+//          <th>Lot No.</th>
+//          <th>Condition</th>
+//          <th>Setting By</th>
+//          <th>Mass Production By</th>
+//          <th>Count Setting</th>
+//          <th>Count Mass</th>
+//          <th>Total Count</th>
+//          <th>Start</th>
+//          <th>End</th>
+//        </tr>`
+//     : `<tr>
+//          <th>When</th>
+//          <th>Part Name</th>
+//          <th>Job No.</th>
+//          <th>Lot No.</th>
+//          <th>Pallet</th>
+//          <th>Type</th>
+//          <th>By</th>
+//          <th>2D Code Result</th>
+//          <th>Condition</th>
+//        </tr>`;
+// }
+
+// function plRenderRows() {
+//   const tbody = document.getElementById("pl-table-body");
+//   if (!tbody) return;
+
+//   if (PL.rows.length === 0) {
+//     tbody.innerHTML = `<tr><td colspan="${plColspan()}" class="eq-queue-empty">No production ${PL.view === "summary" ? "history" : "entries"} for this month.</td></tr>`;
+//     return;
+//   }
+
+//   tbody.innerHTML = PL.view === "summary"
+//     ? PL.rows.map((r) => `
+//         <tr>
+//           <td>${escapeHtml(r.model)}</td>
+//           <td class="mono">${padJob(r.job_no)}</td>
+//           <td class="mono">${escapeHtml(r.lot_no || "—")}</td>
+//           <td>${escapeHtml(r.condition_summary)}</td>
+//           <td>${escapeHtml(r.setting_users)}</td>
+//           <td>${escapeHtml(r.mass_users)}</td>
+//           <td class="mono">${r.count_setting}</td>
+//           <td class="mono">${r.count_mass}</td>
+//           <td class="mono"><strong>${r.total_count}</strong></td>
+//           <td class="mono">${plFormatDate(r.start_at)}</td>
+//           <td class="mono">${plFormatDate(r.end_at)}</td>
+//         </tr>`).join("")
+//     : PL.rows.map((r) => `
+//         <tr>
+//           <td class="mono">${plFormatDate(r.marked_at)}</td>
+//           <td>${escapeHtml(r.model)}</td>
+//           <td class="mono">${padJob(r.job_no)}</td>
+//           <td class="mono">${escapeHtml(r.lot_no || "—")}</td>
+//           <td>${escapeHtml(r.pallet_no || "—")}</td>
+//           <td><span class="tag ${r.type === "mass" ? "approved" : "pending"}">${r.type === "mass" ? "Mass" : "Setting"}</span></td>
+//           <td>${escapeHtml(r.user_name)}${r.employee_id ? ` <span class="mono" style="color:var(--ink-faint)">(${escapeHtml(r.employee_id)})</span>` : ""}</td>
+//           <td>${plCode2dBadgeHtml(r.code2d_result)}</td>
+//           <td>${escapeHtml(r.condition_summary)}</td>
+//         </tr>`).join("");
+// }
+
 
 function plRenderHead() {
   const head = document.getElementById("pl-table-head");
@@ -6260,8 +6323,10 @@ function plRenderHead() {
          <th>Condition</th>
          <th>Setting By</th>
          <th>Mass Production By</th>
+         <th>Rework By</th>
          <th>Count Setting</th>
          <th>Count Mass</th>
+         <th>Count Rework</th>
          <th>Total Count</th>
          <th>Start</th>
          <th>End</th>
@@ -6277,6 +6342,12 @@ function plRenderHead() {
          <th>2D Code Result</th>
          <th>Condition</th>
        </tr>`;
+}
+
+function plTypeTagHtml(type) {
+  const cls = type === "mass" ? "approved" : type === "rework" ? "rejected" : "pending";
+  const label = type === "mass" ? "Mass" : type === "rework" ? "Rework" : "Setting";
+  return `<span class="tag ${cls}">${label}</span>`;
 }
 
 function plRenderRows() {
@@ -6297,8 +6368,10 @@ function plRenderRows() {
           <td>${escapeHtml(r.condition_summary)}</td>
           <td>${escapeHtml(r.setting_users)}</td>
           <td>${escapeHtml(r.mass_users)}</td>
+          <td>${escapeHtml(r.rework_users)}</td>
           <td class="mono">${r.count_setting}</td>
           <td class="mono">${r.count_mass}</td>
+          <td class="mono">${r.count_rework}</td>
           <td class="mono"><strong>${r.total_count}</strong></td>
           <td class="mono">${plFormatDate(r.start_at)}</td>
           <td class="mono">${plFormatDate(r.end_at)}</td>
@@ -6310,12 +6383,13 @@ function plRenderRows() {
           <td class="mono">${padJob(r.job_no)}</td>
           <td class="mono">${escapeHtml(r.lot_no || "—")}</td>
           <td>${escapeHtml(r.pallet_no || "—")}</td>
-          <td><span class="tag ${r.type === "mass" ? "approved" : "pending"}">${r.type === "mass" ? "Mass" : "Setting"}</span></td>
+          <td>${plTypeTagHtml(r.type)}</td>
           <td>${escapeHtml(r.user_name)}${r.employee_id ? ` <span class="mono" style="color:var(--ink-faint)">(${escapeHtml(r.employee_id)})</span>` : ""}</td>
           <td>${plCode2dBadgeHtml(r.code2d_result)}</td>
           <td>${escapeHtml(r.condition_summary)}</td>
         </tr>`).join("");
 }
+
 
 function plRenderPager() {
   const info = document.getElementById("pl-page-info");
@@ -6393,11 +6467,60 @@ function plCsvCell(value) {
   return str;
 }
 
+// function plBuildSummaryCsv(rows) {
+//   const headers = [
+//     "Part Name", "Job No.", "Lot No.", "Condition",
+//     "Setting By", "Mass Production By",
+//     "Count Setting", "Count Mass", "Total Count",
+//     "Start", "End",
+//   ];
+//   const lines = [headers.map(plCsvCell).join(",")];
+//   rows.forEach((r) => {
+//     lines.push([
+//       plCsvCell(r.model),
+//       plCsvCell(padJob(r.job_no)),
+//       plCsvCell(r.lot_no || ""),
+//       plCsvCell(r.condition_summary),
+//       plCsvCell(r.setting_users),
+//       plCsvCell(r.mass_users),
+//       plCsvCell(r.count_setting),
+//       plCsvCell(r.count_mass),
+//       plCsvCell(r.total_count),
+//       plCsvCell(plFormatDate(r.start_at)),
+//       plCsvCell(plFormatDate(r.end_at)),
+//     ].join(","));
+//   });
+//   return lines.join("\r\n");
+// }
+
+// function plBuildRawCsv(rows) {
+//   const headers = [
+//     "When", "Part Name", "Job No.", "Lot No.", "Pallet",
+//     "Type", "By", "Employee ID", "2D Code Result", "Condition",
+//   ];
+//   const lines = [headers.map(plCsvCell).join(",")];
+//   rows.forEach((r) => {
+//     lines.push([
+//       plCsvCell(plFormatDate(r.marked_at)),
+//       plCsvCell(r.model),
+//       plCsvCell(padJob(r.job_no)),
+//       plCsvCell(r.lot_no || ""),
+//       plCsvCell(r.pallet_no || ""),
+//       plCsvCell(r.type === "mass" ? "Mass" : "Setting"),
+//       plCsvCell(r.user_name),
+//       plCsvCell(r.employee_id || ""),
+//       plCsvCell(PL_CODE2D_LABELS[r.code2d_result] || (r.code2d_result || "")),
+//       plCsvCell(r.condition_summary),
+//     ].join(","));
+//   });
+//   return lines.join("\r\n");
+// }
+
 function plBuildSummaryCsv(rows) {
   const headers = [
     "Part Name", "Job No.", "Lot No.", "Condition",
-    "Setting By", "Mass Production By",
-    "Count Setting", "Count Mass", "Total Count",
+    "Setting By", "Mass Production By", "Rework By",
+    "Count Setting", "Count Mass", "Count Rework", "Total Count",
     "Start", "End",
   ];
   const lines = [headers.map(plCsvCell).join(",")];
@@ -6409,8 +6532,10 @@ function plBuildSummaryCsv(rows) {
       plCsvCell(r.condition_summary),
       plCsvCell(r.setting_users),
       plCsvCell(r.mass_users),
+      plCsvCell(r.rework_users),
       plCsvCell(r.count_setting),
       plCsvCell(r.count_mass),
+      plCsvCell(r.count_rework),
       plCsvCell(r.total_count),
       plCsvCell(plFormatDate(r.start_at)),
       plCsvCell(plFormatDate(r.end_at)),
@@ -6432,7 +6557,7 @@ function plBuildRawCsv(rows) {
       plCsvCell(padJob(r.job_no)),
       plCsvCell(r.lot_no || ""),
       plCsvCell(r.pallet_no || ""),
-      plCsvCell(r.type === "mass" ? "Mass" : "Setting"),
+      plCsvCell(r.type === "mass" ? "Mass" : r.type === "rework" ? "Rework" : "Setting"),
       plCsvCell(r.user_name),
       plCsvCell(r.employee_id || ""),
       plCsvCell(PL_CODE2D_LABELS[r.code2d_result] || (r.code2d_result || "")),

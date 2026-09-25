@@ -136,88 +136,6 @@ async function getCount(req, res) {
   }
 }
 
-// ---------------- POST /api/production/log ----------------
-async function logProduction(req, res) {
-  const { model_condition_id, pallet_no, code2d_result } = req.body || {};
-  if (!model_condition_id || !pallet_no) {
-    return res.status(400).json({ error: 'model_condition_id and pallet_no are required.' });
-  }
-  if (code2d_result !== undefined && code2d_result !== null && !['R', 'S', 'T'].includes(code2d_result)) {
-    return res.status(400).json({ error: "code2d_result must be one of 'R', 'S', 'T'." });
-  }
-
-  try {
-    const model = await resolveModel(model_condition_id);
-    if (!model) return res.status(404).json({ error: 'Model condition not found.' });
-    if (model.pallet_no !== pallet_no) {
-      return res.status(400).json({ error: `That model is assigned to ${model.pallet_no}, not ${pallet_no}.` });
-    }
-
-    const actor = req.user || {};
-    const type = actor.role === 'operator' ? 'mass' : 'setting';
-
-    // Gate: mass production may not start until Complete Setting has
-    // run at least once for this model/lot combo.
-    if (type === 'mass') {
-      const complete = await isSettingComplete(model_condition_id, model.lot_no);
-      if (!complete) {
-        return res.status(409).json({
-          error: 'Setting has not been completed for this model/lot yet. Ask an Admin, Engineer, or Machine Controller to run "Complete Setting" on the Monitor page first.',
-        });
-      }
-
-      // NEW — Gate: mass production may not start until a production
-      // target (goal) has been set for this model/lot.
-      const goalSet = await hasGoalSet(model.model, model.lot_no);
-      if (!goalSet) {
-        return res.status(409).json({
-          error: 'No production target has been set for this model/lot yet. Set a target on the Monitor page before starting mass production.',
-        });
-      }
-    }
-
-    const [items] = await pool.query(
-      'SELECT condition_name, condition_value, block_no FROM model_condition_item WHERE model_condition_id = ? ORDER BY sort_order',
-      [model_condition_id]
-    );
-
-    const [result] = await pool.query(
-      `INSERT INTO production_log
-        (model, job_no, pallet_no, lot_no, count, model_condition_id,
-         user_id, employee_id, user_name, user_role, type, conditions, code2d_result)
-       VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        model.model,
-        model.job_no,
-        pallet_no,
-        model.lot_no,
-        model_condition_id,
-        actor.id ?? null,
-        actor.employee_id ?? null,
-        actor.name ?? null,
-        actor.role ?? null,
-        type,
-        JSON.stringify(items),
-        code2d_result ?? null,
-      ]
-    );
-
-    const count = await computeCount(model_condition_id, model.lot_no);
-    await pool.query('UPDATE production_log SET count = ? WHERE id = ?', [count, result.insertId]);
-
-    return res.status(201).json({
-      id: result.insertId,
-      count,
-      type,
-      lot_no: model.lot_no,
-      marked_at: new Date().toISOString(),
-    });
-  } catch (e) {
-    console.error(e);
-    return res.status(500).json({ error: 'Server error logging production count.' });
-  }
-}
-
 // ---------------- POST /api/production/reset ----------------
 async function resetCount(req, res) {
   const { model_condition_id } = req.body || {};
@@ -366,11 +284,14 @@ async function continueLot(req, res) {
 }
 
 // ---------------- POST /api/production/log ----------------
-// NEW: accepts optional piece_queue_id (from POST /api/piece-queue/reserve)
+// Accepts optional piece_queue_id (from POST /api/piece-queue/reserve)
 // and read_qrcode (the value captured off the 2D read-back). When present,
 // the production_log insert and the queue row's transition to 'marked'
 // happen in ONE transaction — so a part is never logged without its
-// reserved serial being consumed, and vice versa.
+// reserved serial being consumed, and vice versa. The conditions JSON
+// snapshot written to production_log has every per-piece (is_variable)
+// condition's value replaced with the value actually reserved/marked
+// for this part — NOT the placeholder value saved on the model.
 async function logProduction(req, res) {
   const { model_condition_id, pallet_no, code2d_result, piece_queue_id, read_qrcode } = req.body || {};
   if (!model_condition_id || !pallet_no) {
@@ -388,9 +309,15 @@ async function logProduction(req, res) {
     }
 
     const actor = req.user || {};
-    const type = actor.role === 'operator' ? 'mass' : 'setting';
+    let type;
+    if (actor.role === 'operator') {
+      const rework = await isReworkMode(model.model, model.lot_no);
+      type = rework ? 'rework' : 'mass';
+    } else {
+      type = 'setting';
+    }
 
-    if (type === 'mass') {
+    if (type === 'mass' || type === 'rework') {
       const complete = await isSettingComplete(model_condition_id, model.lot_no);
       if (!complete) {
         return res.status(409).json({
@@ -405,15 +332,10 @@ async function logProduction(req, res) {
       }
     }
 
-    const [items] = await pool.query(
-      'SELECT condition_name, condition_value, block_no FROM model_condition_item WHERE model_condition_id = ? ORDER BY sort_order',
-      [model_condition_id]
-    );
-
-    // ---- NEW: if this cycle reserved a per-piece row, validate it and
-    // work out the read/expected QR match BEFORE writing anything. ----
     let queueRow = null;
     let readMatch = null;
+    let loggedItems;
+
     if (piece_queue_id) {
       const [qRows] = await pool.query(
         `SELECT id, piece_values, status FROM model_piece_queue WHERE id = ?`,
@@ -427,13 +349,30 @@ async function logProduction(req, res) {
         return res.status(409).json({ error: `Per-piece row #${piece_queue_id} is not reserved (status: ${queueRow.status}) — cannot log against it.` });
       }
       const values = typeof queueRow.piece_values === 'string' ? JSON.parse(queueRow.piece_values) : queueRow.piece_values;
+
+      // Substitute every per-piece condition's value with the one actually
+      // reserved for this cycle, so the history snapshot reflects what was
+      // really marked on this part rather than the model's placeholder.
+      loggedItems = items.map((it) => {
+        const value = (it.is_variable && values && Object.prototype.hasOwnProperty.call(values, it.condition_name))
+          ? values[it.condition_name]
+          : it.condition_value;
+        return { condition_name: it.condition_name, condition_value: value, block_no: it.block_no };
+      });
+
       // Compare against whichever per-piece condition is named "QR Code"
-      // (case-insensitive) — matches the example lot layout. Lots that
-      // use a different per-piece name simply get no comparison.
+      // (case-insensitive). Lots that use a different per-piece name
+      // simply get no comparison.
       const expectedKey = Object.keys(values || {}).find((k) => k.trim().toLowerCase() === 'qr code');
       if (expectedKey && read_qrcode !== undefined && read_qrcode !== null && String(read_qrcode).trim() !== '') {
         readMatch = String(values[expectedKey]).trim() === String(read_qrcode).trim();
       }
+    } else {
+      loggedItems = items.map((it) => ({
+        condition_name: it.condition_name,
+        condition_value: it.condition_value,
+        block_no: it.block_no,
+      }));
     }
 
     const conn = await pool.getConnection();
@@ -457,7 +396,7 @@ async function logProduction(req, res) {
           actor.name ?? null,
           actor.role ?? null,
           type,
-          JSON.stringify(items),
+          JSON.stringify(loggedItems),
           code2d_result ?? null,
         ]
       );
@@ -472,9 +411,6 @@ async function logProduction(req, res) {
           [insertId, read_qrcode ? String(read_qrcode).trim() : null, readMatch, queueRow.id]
         );
         if (markResult.affectedRows === 0) {
-          // Reserved row was consumed/expired between our read and now
-          // (e.g. stale-reservation sweep) — abort rather than log a
-          // part with no corresponding serial consumed.
           await conn.rollback();
           return res.status(409).json({ error: 'Per-piece row was no longer reserved when logging — try again.' });
         }
@@ -518,6 +454,50 @@ async function logProduction(req, res) {
   }
 }
 
+// True when rework mode is on for (model, lot_no) — set via "Rework" on
+// the Next Step modal when a goal is reached but the lot isn't changing
+// (some parts came out NG and need to be scrubbed/remarked). While on,
+// operator log entries for this model/lot are recorded as type='rework'
+// instead of 'mass', with no need to raise the target.
+async function isReworkMode(model, lotNo) {
+  const [rows] = await pool.query(
+    'SELECT rework_mode FROM production_goal WHERE model = ? AND lot_no = ?',
+    [model, lotNo]
+  );
+  return rows.length > 0 && !!rows[0].rework_mode;
+}
+
+// ---------------- POST /api/production/rework ----------------
+async function setRework(req, res) {
+  const { model, lot_no } = req.body || {};
+  if (!model || !lot_no) {
+    return res.status(400).json({ error: 'model and lot_no are required.' });
+  }
+  try {
+    const [result] = await pool.query(
+      'UPDATE production_goal SET rework_mode = TRUE WHERE model = ? AND lot_no = ?',
+      [model, lot_no]
+    );
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ error: 'No production target found for that model/lot yet.' });
+    }
+
+    await systemLog.logAction({
+      req,
+      action: 'production.rework_enabled',
+      targetType: 'production_goal',
+      targetId: `${model}::${lot_no}`,
+      description: `Enabled rework mode for "${model}" (Lot ${lot_no}) — further mass-production parts are logged as Rework`,
+      details: { model, lot_no },
+    });
+
+    return res.json({ model, lot_no, rework_mode: true });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: 'Server error enabling rework mode.' });
+  }
+}
+
 // ---------------- GET /api/production/goal?model=&lot_no= ----------------
 // Combined progress toward a shared target across every model_condition
 // row currently sharing this (model, lot_no) — e.g. Pallet1 Job 0001 +
@@ -529,10 +509,11 @@ async function getGoal(req, res) {
   }
   try {
     const [goalRows] = await pool.query(
-      'SELECT goal_count FROM production_goal WHERE model = ? AND lot_no = ?',
+      'SELECT goal_count, rework_mode FROM production_goal WHERE model = ? AND lot_no = ?',
       [model, lot_no]
     );
     const goal_count = goalRows.length ? goalRows[0].goal_count : null;
+    const rework_mode = goalRows.length ? !!goalRows[0].rework_mode : false;
 
     const [conditionRows] = await pool.query(
       'SELECT id FROM model_condition WHERE model = ? AND lot_no = ?',
@@ -550,6 +531,7 @@ async function getGoal(req, res) {
       goal_count,
       current_count,
       reached: goal_count !== null && current_count >= goal_count,
+      rework_mode,
       model_condition_ids: conditionRows.map((r) => r.id),
     });
   } catch (e) {
@@ -570,9 +552,9 @@ async function setGoal(req, res) {
   }
   try {
     await pool.query(
-      `INSERT INTO production_goal (model, lot_no, goal_count, set_by_user_id)
-       VALUES (?, ?, ?, ?)
-       ON DUPLICATE KEY UPDATE goal_count = VALUES(goal_count), set_by_user_id = VALUES(set_by_user_id)`,
+      `INSERT INTO production_goal (model, lot_no, goal_count, rework_mode, set_by_user_id)
+       VALUES (?, ?, ?, FALSE, ?)
+       ON DUPLICATE KEY UPDATE goal_count = VALUES(goal_count), rework_mode = FALSE, set_by_user_id = VALUES(set_by_user_id)`,
       [model, lot_no, goalNum, req.user ? req.user.id : null]
     );
 
@@ -585,7 +567,7 @@ async function setGoal(req, res) {
       details: { model, lot_no, goal_count: goalNum },
     });
 
-    return res.json({ model, lot_no, goal_count: goalNum });
+    return res.json({ model, lot_no, goal_count: goalNum, rework_mode: false });
   } catch (e) {
     console.error(e);
     return res.status(500).json({ error: 'Server error setting goal.' });
@@ -643,9 +625,10 @@ async function getMySummary(req, res) {
     const stats = {
       mass:    { today: 0, week: 0, month: 0, all_time: 0 },
       setting: { today: 0, week: 0, month: 0, all_time: 0 },
+      rework:  { today: 0, week: 0, month: 0, all_time: 0 },
     };
     statRows.forEach((row) => {
-      const bucket = row.type === 'mass' ? 'mass' : 'setting';
+      const bucket = row.type === 'mass' ? 'mass' : row.type === 'rework' ? 'rework' : 'setting';
       stats[bucket] = {
         today: Number(row.today) || 0,
         week: Number(row.week) || 0,
@@ -758,6 +741,9 @@ async function getMyRecent(req, res) {
   }
 }
 
+
+
+
 module.exports = {
   getCount,
   getTimings,
@@ -768,7 +754,8 @@ module.exports = {
   continueLot,
   getGoal,
   setGoal,
+  setRework,      // NEW
   deleteGoal,
   getMySummary,
-  getMyRecent, // NEW
+  getMyRecent,
 };
