@@ -252,3 +252,90 @@ CREATE TABLE IF NOT EXISTS system_log (
 CREATE INDEX idx_system_log_created_at ON system_log (created_at);
 CREATE INDEX idx_system_log_action     ON system_log (action);
 CREATE INDEX idx_system_log_user       ON system_log (user_id);
+
+
+-- backend/node/db/migration_per_piece.sql
+-- ============================================================
+-- Per-piece conditions (special-case marking)
+--
+-- EXISTING database  -> run this whole file once.
+-- FRESH install      -> fold the same two changes into schema.sql:
+--     1. add   is_variable BOOLEAN NOT NULL DEFAULT FALSE   as the last
+--        column of the model_condition_item CREATE TABLE
+--     2. append the model_piece_queue CREATE TABLE below
+-- ============================================================
+USE laser_link_md_x;
+
+-- 1) Which conditions change on every piece.
+--    condition_value on a per-piece item is just the default / test value
+--    (used during Setting); the real per-piece values come from the queue.
+ALTER TABLE model_condition_item
+  ADD COLUMN is_variable BOOLEAN NOT NULL DEFAULT FALSE AFTER sort_order;
+
+-- 2) Working queue of per-piece values for the CURRENT lot.
+--    This is NOT history. production_log (append-only) stays the permanent
+--    record. Rows here are replaced wholesale when the next lot's CSV is
+--    imported.
+--
+--    piece_values : {"QRCode":"123548sd","Heat Lot No2":"K"} keyed by
+--                   condition_name (NOT item id: updateModel deletes and
+--                   re-inserts model_condition_item rows, so ids change).
+--    status       : pending  -> not marked yet
+--                   reserved -> values pushed to the laser, marking in flight
+--                   marked   -> StartMarking OK, production_log_id set
+--                   failed   -> marking result unknown/failed, needs a decision
+--    lot_no       : lot the CSV was imported for; marking is refused if the
+--                   model's lot no longer matches (prevents reusing old serials
+--                   under a new lot).
+CREATE TABLE IF NOT EXISTS model_piece_queue (
+    id                  INT AUTO_INCREMENT PRIMARY KEY,
+    model_condition_id  INT NOT NULL,
+    lot_no              VARCHAR(255) NOT NULL,
+    seq_no              INT NOT NULL,
+    piece_values        JSON NOT NULL,
+    status              ENUM('pending', 'reserved', 'marked', 'failed') NOT NULL DEFAULT 'pending',
+    reserved_by_user_id INT NULL DEFAULT NULL,
+    reserved_at         TIMESTAMP NULL DEFAULT NULL,
+    marked_at           TIMESTAMP NULL DEFAULT NULL,
+    production_log_id   INT NULL DEFAULT NULL,
+    created_at          TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_mpq_model_condition FOREIGN KEY (model_condition_id)
+        REFERENCES model_condition(id) ON DELETE CASCADE,
+    UNIQUE KEY uq_mpq_model_seq (model_condition_id, seq_no),
+    KEY idx_mpq_model_status (model_condition_id, status, seq_no)
+) ENGINE=InnoDB;
+
+-- backend/node/db/migration_piece_queue_shared.sql
+USE laser_link_md_x;
+
+DROP TABLE IF EXISTS model_piece_queue;
+
+-- Now keyed by (model, lot_no) — shared across every model_condition
+-- row (pallet/job) that has that model+lot combination, instead of
+-- one queue per model_condition_id.
+CREATE TABLE model_piece_queue (
+    id                            INT AUTO_INCREMENT PRIMARY KEY,
+    model                         VARCHAR(255) NOT NULL,
+    lot_no                        VARCHAR(255) NOT NULL,
+    seq_no                        INT NOT NULL,
+    piece_values                  JSON NOT NULL,
+    status                        ENUM('pending','reserved','marked','failed') NOT NULL DEFAULT 'pending',
+    reserved_by_user_id           INT NULL DEFAULT NULL,
+    reserved_model_condition_id   INT NULL DEFAULT NULL,
+    reserved_pallet_no            ENUM('Pallet1','Pallet2') NULL DEFAULT NULL,
+    reserved_at                   TIMESTAMP NULL DEFAULT NULL,
+    marked_at                     TIMESTAMP NULL DEFAULT NULL,
+    production_log_id             INT NULL DEFAULT NULL,
+    read_qrcode                   VARCHAR(255) NULL DEFAULT NULL,
+    read_match                    BOOLEAN NULL DEFAULT NULL,
+    created_at                    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY uq_mpq_model_lot_seq (model, lot_no, seq_no),
+    KEY idx_mpq_model_lot_status (model, lot_no, status, seq_no)
+) ENGINE=InnoDB;
+
+
+ALTER TABLE production_log
+  MODIFY COLUMN type ENUM('mass', 'setting', 'rework') NOT NULL DEFAULT 'setting';
+
+ALTER TABLE production_goal
+  ADD COLUMN rework_mode BOOLEAN NOT NULL DEFAULT FALSE AFTER goal_count;

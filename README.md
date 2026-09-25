@@ -18,8 +18,8 @@ IPC/
 **Physical layout / interlocks:**
 
 - **Side door** — mechanical, spring-return. The user opens it manually
-  during Setting; a spring closes it again over time. Not powered or
-  monitored by the app.
+  during Setting; a spring closes it again over time. and also have
+  D4SL-N2FFA-D4 for safety side doors. it NC contact so ON = OPEN, OFF = CLOSED.
 - **Middle door** — mechanical. Separates the **Machine Room** (where
   the laser fires) from the **Operator Room** (where parts are loaded
   and unloaded). Opens/closes as a side effect of the pallet-swap
@@ -64,6 +64,10 @@ Three phases per (model, job_no, pallet):
    pallets running the same model on different job numbers) share one
    combined target automatically; each pallet's card still shows/edits
    its own progress independently.
+4. A `production_log` row is written only **after Start Marking succeeds** in
+   a cycle (auto or manual). A failure before marking (door, pallet, interlock,
+   laser not ready) logs nothing; a 2D-code / grade failure after marking still
+   logs the part, with `code2d_result = 'T'`.
 
 ## Project structure
 
@@ -88,24 +92,29 @@ laser_link_md_x/
 │   │   ├── db/
 │   │   │   └── schema.sql
 │   │   ├── middleware/
+│   │   │   ├── equipmentCommandPolicy.js  # allowlist for POST /api/equipment/raw (non-admin/engineer roles)
 │   │   │   ├── requireRole.js
 │   │   │   ├── upload.js              # user signup/profile photos
 │   │   │   └── uploadModelPhoto.js    # model part photos
 │   │   ├── routes/
 │   │   │   ├── auth.routes.js
 │   │   │   ├── equipment.routes.js
+│   │   │   ├── io.routes.js           # proxy to the Python Modbus I/O bridge
 │   │   │   ├── model.routes.js
 │   │   │   ├── production.routes.js
 │   │   │   ├── productionLog.routes.js
 │   │   │   ├── systemLog.routes.js
 │   │   │   └── users.routes.js
 │   │   ├── services/
+│   │   │   ├── ioService.js           # HTTP bridge to io_service.py
 │   │   │   ├── laserService.js        # HTTP bridge to the Python service
 │   │   │   └── systemLog.service.js   # write-path for system_log
 │   │   └── uploads/
 │   │       ├── photos/                # user photos
 │   │       └── models/                # model part photos
 │   └── python/
+│       ├── io_core.py                 # Modbus IOClient: doors, pallet swap, interlocks
+│       ├── io_service.py              # Flask wrapper for io_core (:5001)
 │       ├── laser_core.py              # LaserClient + full COMMAND_GROUPS reference
 │       ├── laser_marker_service.py    # Flask wrapper (job queue + raw command API)
 │       └── requirements.txt
@@ -194,19 +203,44 @@ User** page before you can sign in.
 
 ## Roles & page access
 
-| Page              | admin | engineer | machine_controller | operator |
-|-------------------|:-----:|:--------:|:-------------------:|:--------:|
-| Monitor           |  ✓    |    ✓     |         ✓           |    ✓     |
-| Production Log    |  ✓    |    ✓     |         —           |    —     |
-| Model Setting     |  ✓    |    ✓     |         ✓           |    —     |
-| Add New Model     |  ✓    |    ✓     |         —           |    —     |
-| Alarm Center      |  ✓    |    ✓     |         ✓           |    ✓     |
-| Profile           |  ✓    |    ✓     |         ✓           |    ✓     |
-| All User          |  ✓    |    —     |         —           |    —     |
-| System Log        |  ✓    |    —     |         —           |    —     |
+| Page           | admin | engineer | machine_controller | operator |
+| -------------- | :---: | :------: | :----------------: | :------: |
+| Monitor        |   ✓   |    ✓     |         ✓          |    ✓     |
+| Production Log |   ✓   |    ✓     |         —          |    —     |
+| Model Setting  |   ✓   |    ✓     |         ✓          |    —     |
+| Add New Model  |   ✓   |    ✓     |         —          |    —     |
+| Alarm Center   |   ✓   |    ✓     |         ✓          |    ✓     |
+| Profile        |   ✓   |    ✓     |         ✓          |    ✓     |
+| All User       |   ✓   |    —     |         —          |    —     |
+| System Log     |   ✓   |    —     |         —          |    —     |
 
 Enforced both in the UI (`PAGE_ROLES` in `dashboard.js`) and on every
 Node API route via `requireRole(...)`.
+
+### Equipment / I-O API access
+
+The Start Marking sequences (Monitor auto cycle, Model Setting manual mode)
+run as whoever is signed in — including operators — so the routes they call
+are not admin/engineer-only:
+
+| Route                                                                | admin | engineer | machine_controller | operator  |
+| -------------------------------------------------------------------- | :---: | :------: | :----------------: | :-------: |
+| `/api/io/*` (status, front-door, call-pallet, change-pallet)         |   ✓   |    ✓     |         ✓          |     ✓     |
+| `POST /api/equipment/raw`                                            |  any  |   any    |     allowlist      | allowlist |
+| other `/api/equipment/*` (commands, status, connect, command, queue) |   ✓   |    ✓     |         —          |     —     |
+
+- **`/api/io/*`** only exposes fixed actions; the real safety interlocks (side
+  door, front door closed, pallet alarms, pallet-position preconditions) are
+  enforced in `io_core.py`, not by role.
+- **`POST /api/equipment/raw`**: admin/engineer may send any command.
+  machine_controller / operator may send only the commands the sequences use
+  (`RX,Ready`, `WX,JobNo=`, `WX,JOB=…,BLK=…,CharacterString=`,
+  `WX,StartMarking=1`, `WX,Check2DCode5=` with 17 params, `RX,CodeReadResult=0|1`),
+  and their `ip`/`port` are ignored (the Python service uses its own
+  configured laser address). Anything else returns 403 and is logged as
+  `equipment.raw_command_denied`. Control characters (`\r`, `\n`) are rejected
+  for everyone. See `middleware/equipmentCommandPolicy.js` — if a sequence
+  starts sending a new command, add its pattern there.
 
 Within Model Setting / Monitor, `type='setting'` production log entries
 are written for admin/engineer/machine_controller, and
@@ -220,9 +254,12 @@ role at insert time, not by anything the client sends.
   over `/api/equipment/commands` — it covers the full MD-X2000/2500
   series command reference, not just the handful of commands the
   automated sequences use.
-- Equipment API routes (`/api/equipment/*`) are guarded to
-  admin/engineer, and every state-changing call (connect, raw/command,
-  queue add/clear) is written to `system_log` for traceability.
+- Equipment API routes (`/api/equipment/*`) are guarded to admin/engineer,
+  except `POST /raw`, which every role can call within the allowlist above.
+  Every state-changing call (connect, raw/command, queue add/clear, I/O
+  door/pallet actions) is written to `system_log` for traceability.
+  Successful `RX,Ready` polls are not logged (they fire every ~0.5 s while
+  waiting for the marker); failed ones are.
 - `alarm_center.html` currently runs on mock data — the equipment
   backend for real alarms isn't wired up yet. See the comment block at
   the top of the "FOR ALARM CENTER PAGE" section in `dashboard.js` for
