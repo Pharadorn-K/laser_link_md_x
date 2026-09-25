@@ -122,9 +122,10 @@ async function insertConditionItems(conn, modelConditionId, conditions) {
     if (!name && !value) continue;
     const block = Number(c.block_no);
     await conn.query(
-      `INSERT INTO model_condition_item (model_condition_id, condition_name, condition_value, block_no, sort_order)
-       VALUES (?, ?, ?, ?, ?)`,
-      [modelConditionId, name, value, block, order]
+      `INSERT INTO model_condition_item
+         (model_condition_id, condition_name, condition_value, block_no, sort_order, is_variable)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [modelConditionId, name, value, block, order, toBool(c.is_variable)]
     );
     order += 1;
   }

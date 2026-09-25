@@ -987,7 +987,7 @@ table.data-table tr:last-child td { border-bottom: none; }
 
 .ms-condition-row {
   display: grid;
-  grid-template-columns: 2fr 2fr 1fr auto;
+  grid-template-columns: 2fr 2fr 1fr 74px auto;
   align-items: end;
   gap: 10px 14px;
   padding: 10px;
@@ -1241,6 +1241,53 @@ table.data-table tr:last-child td { border-bottom: none; }
 @media (max-width: 900px) {
   .io-status-grid { grid-template-columns: 1fr; }
 }
+
+.ms-cond-var-field input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  margin: 10px 0;
+  cursor: pointer;
+  accent-color: var(--accent);
+}
+ 
+.anm-queue-card {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px dashed var(--line);
+}
+.anm-q-status {
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  margin: 8px 0;
+  font-size: 12.5px;
+}
+.anm-q-none { color: var(--ink-faint); }
+.anm-q-counts { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 6px; }
+.anm-q-chip {
+  font-size: 11.5px;
+  padding: 2px 9px;
+  border-radius: 999px;
+  background: var(--line-soft);
+  color: var(--ink-soft);
+}
+.anm-q-chip.pending  { background: var(--warn-soft); color: #8a6a13; }
+.anm-q-chip.marked   { background: var(--ok-soft);   color: #14663a; }
+.anm-q-chip.reserved { background: var(--info-soft); color: #1c4c99; }
+.anm-q-chip.failed   { background: var(--err-soft);  color: #93230f; }
+.anm-q-lot  { color: var(--ink-soft); margin-bottom: 4px; }
+.anm-q-next { color: var(--ink-soft); line-height: 1.6; }
+.anm-q-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 10px 0;
+}
+.anm-q-actions input[type="file"] { font-size: 12px; max-width: 280px; }
+.anm-q-errors { margin: 6px 0 0 18px; padding: 0; }
+.anm-q-preview-table th,
+.anm-q-preview-table td { white-space: nowrap; }
 
 /* ---------------------------------------------------------
    FOR WORK MODE PAGE — one-screen layout
