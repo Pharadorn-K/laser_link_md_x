@@ -364,6 +364,68 @@ function setEquipmentConnection(ip, port) {
   );
 }
 
+/* ============================================================
+   PER-PIECE QUEUE (shared by model+lot_no) — reserve / release / fail
+   ============================================================ */
+async function pieceReserveNext(job, pallet) {
+  if (!job || !job.lot_no) return { ok: false, error: 'No model/lot selected.' };
+  try {
+    const res = await apiFetch('/api/piece-queue/reserve', {
+      method: 'POST',
+      body: JSON.stringify({
+        model: job.model,
+        lot_no: job.lot_no,
+        model_condition_id: job.id,
+        pallet_no: pallet,
+      }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) return { ok: false, error: data.error || 'Could not reserve a per-piece row.' };
+    return { ok: true, queue_id: data.queue_id, seq_no: data.seq_no, values: data.values || {} };
+  } catch (err) {
+    return { ok: false, error: 'Could not reach the server to reserve a per-piece row.' };
+  }
+}
+
+async function pieceRelease(queueId) {
+  if (!queueId) return;
+  try {
+    await apiFetch(`/api/piece-queue/${queueId}/release`, { method: 'POST', body: JSON.stringify({}) });
+  } catch (err) {
+    // best-effort — a stale reservation still gets swept server-side after STALE_RESERVATION_MS
+  }
+}
+
+async function pieceFail(queueId, reason) {
+  if (!queueId) return;
+  try {
+    await apiFetch(`/api/piece-queue/${queueId}/fail`, { method: 'POST', body: JSON.stringify({ reason }) });
+  } catch (err) {
+    // best-effort
+  }
+}
+
+// True if this job has at least one per-piece (is_variable) condition.
+function jobHasPerPieceConditions(job) {
+  return !!job && Array.isArray(job.conditions) && job.conditions.some((c) => c && (c.is_variable === 1 || c.is_variable === true || c.is_variable === '1'));
+}
+
+// Returns a shallow-cloned job whose per-piece condition_value(s) are
+// swapped for the values reserved from the queue (matched by
+// condition_name), so buildBaseCommand()/the per-condition send loop
+// in wmRunStartMarking picks up the real serial instead of the
+// Setting-time placeholder value.
+function jobWithPieceValues(job, pieceValues) {
+  if (!job || !pieceValues) return job;
+  const cloned = { ...job, conditions: (job.conditions || []).map((c) => ({ ...c })) };
+  cloned.conditions.forEach((c) => {
+    if (c.is_variable && Object.prototype.hasOwnProperty.call(pieceValues, c.condition_name)) {
+      c.condition_value = pieceValues[c.condition_name];
+    }
+  });
+  return cloned;
+}
+
 /* ---- Check-result status (Camera / 2D Read / 2D Grade) per pallet ----
    Simulated for now — no equipment signal wired up yet. Persisted so
    Monitor reflects the latest result even if the sequence that produced
@@ -1793,6 +1855,16 @@ function monRenderSeqList(steps, activeIndex, palletTag) {
 
 async function monReportCount(pallet, job) {
   const code2d_result = monDeriveCode2DResult(pallet, job);
+
+  // The queue id reserved by wmRunStartMarking() for this pallet's cycle.
+  const pieceQueueId = (MON.activePieceQueueId && MON.activePieceQueueId[pallet]) || null;
+
+  // Read-back value to compare against the expected "QR Code" per-piece
+  // value — pulled from whichever 2D-code step most recently captured
+  // data this cycle (Start Reader's v3, or Read Result's y).
+  const captured = MON.code2d[pallet];
+  const read_qrcode = captured && captured.values ? (captured.values.v3 || captured.values.y || null) : null;
+
   try {
     const res = await apiFetch("/api/production/log", {
       method: "POST",
@@ -1800,6 +1872,8 @@ async function monReportCount(pallet, job) {
         model_condition_id: job.id,
         pallet_no: pallet,
         code2d_result,
+        piece_queue_id: pieceQueueId,
+        read_qrcode,
       }),
     });
     const data = await res.json();
@@ -1809,12 +1883,16 @@ async function monReportCount(pallet, job) {
     }
     MON.counts[pallet] = data.count;
     MON.lastMarked[pallet] = data.marked_at || new Date().toISOString();
+    if (data.read_match === false) {
+      showToast(`2D read-back did not match the expected QR Code for this part.`, "error", 4000);
+    }
   } catch (err) {
     showToast("Could not reach the server to log production count.");
   } finally {
+    if (MON.activePieceQueueId) MON.activePieceQueueId[pallet] = null;
     if (document.getElementById(`mon-body-${pallet}`)) monRenderPalletBlock(pallet);
-    monRefreshGoal("Pallet1", getSelectedJob("Pallet1")); // NEW
-    monRefreshGoal("Pallet2", getSelectedJob("Pallet2")); // NEW
+    monRefreshGoal("Pallet1", getSelectedJob("Pallet1"));
+    monRefreshGoal("Pallet2", getSelectedJob("Pallet2"));
   }
 }
 
@@ -2365,61 +2443,84 @@ function wmLaserErrorHint(response) {
    from the quick manual-function button grid. ---- */
 async function wmRunStartMarking() {
   const { pallet } = await wmResolveMachineRoomPallet();
-  const job = getSelectedJob(pallet);
+  let job = getSelectedJob(pallet);
   if (!job) {
     return { ok: false, alarm: true, message: `No model selected for ${pallet}.` };
   }
   const conn = getEquipmentConnection();
+
+  // ---- 0. Per-piece reservation, if this model has any per-piece condition ----
+  let pieceQueueId = null;
+  if (jobHasPerPieceConditions(job)) {
+    const reserved = await pieceReserveNext(job, pallet);
+    if (!reserved.ok) {
+      wmLog(`!!! Per-piece reservation failed: ${reserved.error}`, "error");
+      return { ok: false, alarm: true, message: reserved.error };
+    }
+    pieceQueueId = reserved.queue_id;
+    job = jobWithPieceValues(job, reserved.values);
+    wmLog(`<<< Reserved per-piece row #${reserved.queue_id} (seq ${reserved.seq_no})`, "ok");
+  }
+  MON.activePieceQueueId = MON.activePieceQueueId || {};
+  MON.activePieceQueueId[pallet] = pieceQueueId;
+
+  const fail = async (result) => {
+    if (pieceQueueId) await pieceRelease(pieceQueueId); // failed before marking -> back to pending
+    MON.activePieceQueueId[pallet] = null;
+    return result;
+  };
+  const ambiguous = async (result) => {
+    if (pieceQueueId) await pieceFail(pieceQueueId, result.message); // outcome unknown -> failed, never reused
+    MON.activePieceQueueId[pallet] = null;
+    return result;
+  };
 
   // ---- 1. Interlock ----
   wmLog(`>>> START_MARKING interlock check (${pallet})`);
   const doorSafe = await ioCheckSideDoorSafe();
   if (!doorSafe.ok || !doorSafe.closed) {
     wmLog(`!!! Side door interlock not satisfied`, "error");
-    return { ok: false, alarm: true, message: "Side door is not closed/safe." };
+    return fail({ ok: false, alarm: true, message: "Side door is not closed/safe." });
   }
   const readyRaw = await eqSendRaw(conn, "RX,Ready");
   if (!readyRaw.ok) {
     wmLog(`!!! Could not reach laser: ${readyRaw.message}`, "error");
-    return { ok: false, alarm: true, message: readyRaw.message };
+    return fail({ ok: false, alarm: true, message: readyRaw.message });
   }
   const readyStatus = (readyRaw.response.split(",")[2] || "").trim();
   if (readyStatus === "1") {
     wmLog(`!!! Laser has an active error (RX,Ready=1)`, "error");
-    return { ok: false, alarm: true, message: "Laser reports an active error. Clear it on the unit first." };
+    return fail({ ok: false, alarm: true, message: "Laser reports an active error. Clear it on the unit first." });
   }
   if (readyStatus !== "0") {
     wmLog(`!!! Laser not ready (RX,Ready=${readyStatus || "?"})`, "warn");
-    return { ok: false, alarm: false, message: `Laser is not ready yet (status ${readyStatus || "unknown"}).` };
+    return fail({ ok: false, alarm: false, message: `Laser is not ready yet (status ${readyStatus || "unknown"}).` });
   }
   wmLog(`<<< Interlock OK — side door safe, laser ready`, "ok");
 
-  // ---- rest of the function (pallet check, JobNo, conditions, StartMarking) is unchanged ----
   // ---- 2. Confirm pallet physically in the Machine Room ----
   const palletCheck = await ioReadPalletInMachineRoom(pallet);
   if (!palletCheck.ok || palletCheck.pallet !== pallet) {
     wmLog(`!!! Pallet mismatch: expected ${pallet}, sensors report ${palletCheck.pallet || "unknown"}`, "error");
-    return { ok: false, alarm: true, message: "Pallet position sensors do not match the expected pallet." };
+    return fail({ ok: false, alarm: true, message: "Pallet position sensors do not match the expected pallet." });
   }
 
-  // ---- 3. Select the job (its own command) ----
+  // ---- 3. Select the job ----
   const jobNoCommand = `WX,JobNo=${padJob(job.job_no)}`;
   wmLog(`>>> ${jobNoCommand}`);
   const jobNoRaw = await eqSendRaw(conn, jobNoCommand);
   if (!jobNoRaw.ok) {
     wmLog(`!!! Could not reach laser: ${jobNoRaw.message}`, "error");
-    return { ok: false, alarm: true, message: jobNoRaw.message };
+    return fail({ ok: false, alarm: true, message: jobNoRaw.message });
   }
   if (!jobNoRaw.response.startsWith("WX,OK")) {
     wmLog(`!!! Job selection failed: ${jobNoRaw.response}`, "error");
-    return { ok: false, alarm: true, message: jobNoRaw.response };
+    return fail({ ok: false, alarm: true, message: jobNoRaw.response });
   }
   wmLog(`<<< ${jobNoRaw.response}`, "ok");
 
-  // ---- 4. Push every condition value individually. The marker treats
-  // "WX,JOB=..,BLK=..,CharacterString=.." as ONE command per block — a
-  // single line can't carry two BLKs, so each condition must be its
-  // own command with its own WX,OK reply before the next one goes out.
+  // ---- 4. Push every condition value (per-piece values already
+  // substituted into job.conditions above) ----
   const conditions = job.conditions || [];
   for (const item of conditions) {
     const condCommand = `WX,JOB=${padJob(job.job_no)},BLK=${padBlk(item.block_no)},CharacterString=${item.condition_value}`;
@@ -2427,29 +2528,33 @@ async function wmRunStartMarking() {
     const condRaw = await eqSendRaw(conn, condCommand);
     if (!condRaw.ok) {
       wmLog(`!!! Could not reach laser: ${condRaw.message}`, "error");
-      return { ok: false, alarm: true, message: condRaw.message };
+      return fail({ ok: false, alarm: true, message: condRaw.message });
     }
     if (!condRaw.response.startsWith("WX,OK")) {
       wmLog(`!!! Setting "${item.condition_name}" (BLK ${padBlk(item.block_no)}) failed: ${condRaw.response}`, "error");
-      return { ok: false, alarm: true, message: condRaw.response };
+      return fail({ ok: false, alarm: true, message: condRaw.response });
     }
     wmLog(`<<< ${condRaw.response}`, "ok");
   }
 
-  // ---- 5. Trigger marking, wait for WX,OK ----
+  // ---- 5. Trigger marking — from here on, a failed/ambiguous response
+  // means the physical part MAY already be marked with this serial, so
+  // any failure past this point is AMBIGUOUS (fail), never a plain release. ----
   wmLog(`>>> WX,StartMarking=1`);
   const markRaw = await eqSendRaw(conn, "WX,StartMarking=1");
   if (!markRaw.ok) {
     wmLog(`!!! Could not reach laser: ${markRaw.message}`, "error");
-    return { ok: false, alarm: true, message: markRaw.message };
+    return ambiguous({ ok: false, alarm: true, message: markRaw.message });
   }
   if (!markRaw.response.startsWith("WX,OK")) {
     wmLog(`!!! Marking failed: ${markRaw.response}`, "error");
-    return { ok: false, alarm: true, message: markRaw.response };
+    return ambiguous({ ok: false, alarm: true, message: markRaw.response });
   }
   wmLog(`<<< ${markRaw.response}`, "ok");
 
-  return { ok: true, message: "Marking complete." };
+  // Marking succeeded — reservation is consumed ("marked") together
+  // with the production_log write in monReportCount(), not here.
+  return { ok: true, message: "Marking complete.", piece_queue_id: pieceQueueId };
 }
 
 /* ---- 2D Code grade ranking ----

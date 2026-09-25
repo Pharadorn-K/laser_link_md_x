@@ -322,13 +322,7 @@ async function completeSetting(req, res) {
 }
 
 // ---------------- POST /api/production/continue-lot ----------------
-// Used by the Monitor "Next Step > Continuous" flow when the operator
-// changes the Lot No. instead of just extending the goal on the same
-// lot. Carries the 'setting_complete' status from old_lot_no forward
-// onto new_lot_no — but ONLY if old_lot_no genuinely had it. This is
-// intentionally NOT a way to skip Complete Setting for a real new
-// setup: if the old lot never had it, this is a no-op and the normal
-// gate in logProduction() still applies.
+// Carry setting-complete status to a new lot only when the old lot had it.
 async function continueLot(req, res) {
   const { model_condition_id, old_lot_no, new_lot_no } = req.body || {};
   if (!model_condition_id || !old_lot_no || !new_lot_no) {
@@ -344,8 +338,6 @@ async function continueLot(req, res) {
 
     const wasComplete = await isSettingComplete(model_condition_id, old_lot_no);
     if (!wasComplete) {
-      // Nothing to carry forward — the new lot starts fresh and still
-      // requires a real Complete Setting run, same as any new lot.
       return res.json({ carried: false, reason: 'Setting was not completed on the previous lot.' });
     }
 
@@ -370,6 +362,159 @@ async function continueLot(req, res) {
   } catch (e) {
     console.error(e);
     return res.status(500).json({ error: 'Server error continuing lot setting status.' });
+  }
+}
+
+// ---------------- POST /api/production/log ----------------
+// NEW: accepts optional piece_queue_id (from POST /api/piece-queue/reserve)
+// and read_qrcode (the value captured off the 2D read-back). When present,
+// the production_log insert and the queue row's transition to 'marked'
+// happen in ONE transaction — so a part is never logged without its
+// reserved serial being consumed, and vice versa.
+async function logProduction(req, res) {
+  const { model_condition_id, pallet_no, code2d_result, piece_queue_id, read_qrcode } = req.body || {};
+  if (!model_condition_id || !pallet_no) {
+    return res.status(400).json({ error: 'model_condition_id and pallet_no are required.' });
+  }
+  if (code2d_result !== undefined && code2d_result !== null && !['R', 'S', 'T'].includes(code2d_result)) {
+    return res.status(400).json({ error: "code2d_result must be one of 'R', 'S', 'T'." });
+  }
+
+  try {
+    const model = await resolveModel(model_condition_id);
+    if (!model) return res.status(404).json({ error: 'Model condition not found.' });
+    if (model.pallet_no !== pallet_no) {
+      return res.status(400).json({ error: `That model is assigned to ${model.pallet_no}, not ${pallet_no}.` });
+    }
+
+    const actor = req.user || {};
+    const type = actor.role === 'operator' ? 'mass' : 'setting';
+
+    if (type === 'mass') {
+      const complete = await isSettingComplete(model_condition_id, model.lot_no);
+      if (!complete) {
+        return res.status(409).json({
+          error: 'Setting has not been completed for this model/lot yet. Ask an Admin, Engineer, or Machine Controller to run "Complete Setting" on the Monitor page first.',
+        });
+      }
+      const goalSet = await hasGoalSet(model.model, model.lot_no);
+      if (!goalSet) {
+        return res.status(409).json({
+          error: 'No production target has been set for this model/lot yet. Set a target on the Monitor page before starting mass production.',
+        });
+      }
+    }
+
+    const [items] = await pool.query(
+      'SELECT condition_name, condition_value, block_no FROM model_condition_item WHERE model_condition_id = ? ORDER BY sort_order',
+      [model_condition_id]
+    );
+
+    // ---- NEW: if this cycle reserved a per-piece row, validate it and
+    // work out the read/expected QR match BEFORE writing anything. ----
+    let queueRow = null;
+    let readMatch = null;
+    if (piece_queue_id) {
+      const [qRows] = await pool.query(
+        `SELECT id, piece_values, status FROM model_piece_queue WHERE id = ?`,
+        [piece_queue_id]
+      );
+      if (!qRows.length) {
+        return res.status(404).json({ error: 'Per-piece queue row not found.' });
+      }
+      queueRow = qRows[0];
+      if (queueRow.status !== 'reserved') {
+        return res.status(409).json({ error: `Per-piece row #${piece_queue_id} is not reserved (status: ${queueRow.status}) — cannot log against it.` });
+      }
+      const values = typeof queueRow.piece_values === 'string' ? JSON.parse(queueRow.piece_values) : queueRow.piece_values;
+      // Compare against whichever per-piece condition is named "QR Code"
+      // (case-insensitive) — matches the example lot layout. Lots that
+      // use a different per-piece name simply get no comparison.
+      const expectedKey = Object.keys(values || {}).find((k) => k.trim().toLowerCase() === 'qr code');
+      if (expectedKey && read_qrcode !== undefined && read_qrcode !== null && String(read_qrcode).trim() !== '') {
+        readMatch = String(values[expectedKey]).trim() === String(read_qrcode).trim();
+      }
+    }
+
+    const conn = await pool.getConnection();
+    let insertId;
+    try {
+      await conn.beginTransaction();
+
+      const [result] = await conn.query(
+        `INSERT INTO production_log
+          (model, job_no, pallet_no, lot_no, count, model_condition_id,
+           user_id, employee_id, user_name, user_role, type, conditions, code2d_result)
+         VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          model.model,
+          model.job_no,
+          pallet_no,
+          model.lot_no,
+          model_condition_id,
+          actor.id ?? null,
+          actor.employee_id ?? null,
+          actor.name ?? null,
+          actor.role ?? null,
+          type,
+          JSON.stringify(items),
+          code2d_result ?? null,
+        ]
+      );
+      insertId = result.insertId;
+
+      if (queueRow) {
+        const [markResult] = await conn.query(
+          `UPDATE model_piece_queue
+              SET status = 'marked', marked_at = NOW(), production_log_id = ?,
+                  read_qrcode = ?, read_match = ?
+            WHERE id = ? AND status = 'reserved'`,
+          [insertId, read_qrcode ? String(read_qrcode).trim() : null, readMatch, queueRow.id]
+        );
+        if (markResult.affectedRows === 0) {
+          // Reserved row was consumed/expired between our read and now
+          // (e.g. stale-reservation sweep) — abort rather than log a
+          // part with no corresponding serial consumed.
+          await conn.rollback();
+          return res.status(409).json({ error: 'Per-piece row was no longer reserved when logging — try again.' });
+        }
+      }
+
+      await conn.commit();
+    } catch (e) {
+      await conn.rollback();
+      throw e;
+    } finally {
+      conn.release();
+    }
+
+    const count = await computeCount(model_condition_id, model.lot_no);
+    await pool.query('UPDATE production_log SET count = ? WHERE id = ?', [count, insertId]);
+
+    if (queueRow && readMatch === false) {
+      await systemLog.logAction({
+        req,
+        action: 'production.qrcode_mismatch',
+        targetType: 'production_log',
+        targetId: insertId,
+        description: `2D read-back did not match the expected per-piece QR Code for "${model.model}" (Job ${model.job_no}, ${pallet_no}, Lot ${model.lot_no})`,
+        details: { model_condition_id, piece_queue_id: queueRow.id, read_qrcode },
+        status: 'failed',
+      });
+    }
+
+    return res.status(201).json({
+      id: insertId,
+      count,
+      type,
+      lot_no: model.lot_no,
+      marked_at: new Date().toISOString(),
+      piece_queue_id: queueRow ? queueRow.id : null,
+      read_match: readMatch,
+    });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: 'Server error logging production count.' });
   }
 }
 

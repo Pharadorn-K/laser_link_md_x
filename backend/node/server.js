@@ -12,6 +12,7 @@ const systemLogRoutes = require('./routes/systemLog.routes');
 const productionRoutes = require('./routes/production.routes');
 const productionLogRoutes = require('./routes/productionLog.routes'); // NEW
 const ioRoutes = require('./routes/io.routes');
+const pieceQueueRoutes = require('./routes/pieceQueue.routes'); // NEW
 
 const app = express();
 
@@ -29,6 +30,7 @@ app.use('/api/production', productionRoutes);
 app.use('/api/production-log', productionLogRoutes); // NEW
 app.use('/api/io', ioRoutes);
 app.get('/api/health', (req, res) => res.json({ ok: true }));
+app.use('/api/piece-queue', pieceQueueRoutes); // NEW
 
 const frontendDir = path.join(__dirname, '..', '..', 'frontend');
 app.use(express.static(frontendDir));

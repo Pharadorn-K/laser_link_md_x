@@ -304,3 +304,31 @@ CREATE TABLE IF NOT EXISTS model_piece_queue (
     UNIQUE KEY uq_mpq_model_seq (model_condition_id, seq_no),
     KEY idx_mpq_model_status (model_condition_id, status, seq_no)
 ) ENGINE=InnoDB;
+
+-- backend/node/db/migration_piece_queue_shared.sql
+USE laser_link_md_x;
+
+DROP TABLE IF EXISTS model_piece_queue;
+
+-- Now keyed by (model, lot_no) — shared across every model_condition
+-- row (pallet/job) that has that model+lot combination, instead of
+-- one queue per model_condition_id.
+CREATE TABLE model_piece_queue (
+    id                            INT AUTO_INCREMENT PRIMARY KEY,
+    model                         VARCHAR(255) NOT NULL,
+    lot_no                        VARCHAR(255) NOT NULL,
+    seq_no                        INT NOT NULL,
+    piece_values                  JSON NOT NULL,
+    status                        ENUM('pending','reserved','marked','failed') NOT NULL DEFAULT 'pending',
+    reserved_by_user_id           INT NULL DEFAULT NULL,
+    reserved_model_condition_id   INT NULL DEFAULT NULL,
+    reserved_pallet_no            ENUM('Pallet1','Pallet2') NULL DEFAULT NULL,
+    reserved_at                   TIMESTAMP NULL DEFAULT NULL,
+    marked_at                     TIMESTAMP NULL DEFAULT NULL,
+    production_log_id             INT NULL DEFAULT NULL,
+    read_qrcode                   VARCHAR(255) NULL DEFAULT NULL,
+    read_match                    BOOLEAN NULL DEFAULT NULL,
+    created_at                    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY uq_mpq_model_lot_seq (model, lot_no, seq_no),
+    KEY idx_mpq_model_lot_status (model, lot_no, status, seq_no)
+) ENGINE=InnoDB;

@@ -1,24 +1,37 @@
 // backend/node/controllers/modelQueue.controller.js
 // ============================================================
-// Per-piece condition queue ("special case marking").
+// Per-piece condition queue, SHARED by (model, lot_no) — not by
+// model_condition_id. This lets every pallet/job sharing the same
+// model+lot (e.g. 1956834-1 on Job 0006/Pallet1 AND Job 0007/Pallet2)
+// pull serials from one pool: whichever pallet marks next takes the
+// next unused row.
 //
-//   Some conditions (e.g. QRCode, Heat Lot No 2) change on EVERY
-//   marked part. They are flagged is_variable on model_condition_item,
-//   and their real values are loaded from a CSV (one row per part)
-//   into model_piece_queue. A new lot = a new CSV that REPLACES the
-//   old queue. production_log stays the permanent per-part record.
+// Row lifecycle:
+//   pending  -> reserved   when its values are pushed to the laser
+//   reserved -> marked     in the SAME transaction that writes the
+//                          production_log row, after StartMarking OK
+//                          (see production.controller.js logProduction)
+//   reserved -> pending    if the cycle fails BEFORE marking (release)
+//   reserved -> failed     if the outcome is ambiguous (fail) — never
+//                          silently reused or skipped
+//   A reserved row left untouched past STALE_RESERVATION_MS is swept
+//   to 'failed' automatically (crash/disconnect safety net).
 //
-//   getQueue      GET    /api/models/:id/queue          summary + next values
-//   importQueue   POST   /api/models/:id/queue/import   {columns, rows, dry_run}
-//   clearQueue    DELETE /api/models/:id/queue
+//   getQueue     GET    /api/piece-queue?model=&lot_no=
+//   importQueue  POST   /api/piece-queue/import   {model, lot_no, columns, rows, dry_run}
+//   clearQueue   DELETE /api/piece-queue?model=&lot_no=
+//   reserveNext  POST   /api/piece-queue/reserve  {model, lot_no, model_condition_id, pallet_no}
+//   releaseReserved POST /api/piece-queue/:queueId/release
+//   failReserved    POST /api/piece-queue/:queueId/fail
+//
 //   guardVariableConditions  middleware for POST/PUT /api/models
-//
-//   CSV rules (enforced here, authoritative — the browser only previews):
-//     - header = the model's per-piece condition names (case-insensitive,
-//       any order); no unknown columns, none missing
-//     - every value: non-empty, <= 255 chars, printable ASCII only,
-//       NO commas (the laser command is comma-delimited and laser_core.py
-//       encodes as ASCII, so anything else would corrupt or crash the send)
+//     - per-piece condition names must be unique within one model_condition
+//     - per-piece condition NAMES must match every OTHER model_condition
+//       row sharing the same (model, lot_no) — e.g. Job 0006/Pallet1 and
+//       Job 0007/Pallet2 on the same lot must both tick "QR Code"
+//     - while the shared queue still has pending/reserved rows for
+//       (model, lot_no), the set of per-piece names for THIS row may not
+//       change (would orphan/misalign the queue) — clear the queue first
 // ============================================================
 const fs = require('fs');
 const pool = require('../config/db');
@@ -30,6 +43,7 @@ const INSERT_CHUNK = 500;
 const MAX_REPORTED_ERRORS = 20;
 const PREVIEW_ROWS = 5;
 const SAFE_VALUE = /^[\x20-\x7e]+$/; // printable ASCII
+const STALE_RESERVATION_MS = 5 * 60 * 1000; // 5 min — crash/disconnect safety net
 
 const norm = (s) => String(s === undefined || s === null ? '' : s).trim().toLowerCase();
 const trimmed = (s) => String(s === undefined || s === null ? '' : s).trim();
@@ -48,25 +62,66 @@ function parseValues(v) {
   }
 }
 
-async function getModelRow(id) {
-  const [rows] = await pool.query('SELECT id, model, lot_no FROM model_condition WHERE id = ?', [id]);
-  return rows.length ? rows[0] : null;
+// ---------------- shared helpers ----------------
+
+// Sweeps any reserved row for (model, lot_no) that's been sitting
+// reserved past STALE_RESERVATION_MS into 'failed' — an ambiguous
+// outcome (app crash, lost connection mid-sequence) must never leave
+// a row silently stuck as "reserved" forever, and must never be
+// quietly re-served to the next cycle either.
+async function sweepStaleReservations(model, lotNo) {
+  const cutoff = new Date(Date.now() - STALE_RESERVATION_MS);
+  await pool.query(
+    `UPDATE model_piece_queue
+        SET status = 'failed'
+      WHERE model = ? AND lot_no = ? AND status = 'reserved' AND reserved_at < ?`,
+    [model, lotNo, cutoff]
+  );
 }
 
-async function getVariableNames(modelId) {
+async function getVariableNames(modelConditionId) {
   const [rows] = await pool.query(
     `SELECT condition_name FROM model_condition_item
       WHERE model_condition_id = ? AND is_variable = 1
-      ORDER BY sort_order`,
-    [modelId]
+      ORDER BY condition_name`,
+    [modelConditionId]
   );
   return rows.map((r) => r.condition_name);
 }
 
-async function getCounts(modelId) {
+// Every OTHER model_condition row sharing (model, lot_no), with its
+// own sorted per-piece condition-name list — used both to validate a
+// save (guardVariableConditions) and to resolve a queue's canonical
+// variable_names for display.
+async function getSiblingVariableSets(model, lotNo, excludeId) {
+  const params = excludeId ? [model, lotNo, excludeId] : [model, lotNo];
   const [rows] = await pool.query(
-    'SELECT status, COUNT(*) AS n FROM model_piece_queue WHERE model_condition_id = ? GROUP BY status',
-    [modelId]
+    `SELECT id, job_no, pallet_no FROM model_condition
+      WHERE model = ? AND lot_no = ?${excludeId ? ' AND id != ?' : ''}`,
+    params
+  );
+  if (!rows.length) return [];
+  const ids = rows.map((r) => r.id);
+  const [items] = await pool.query(
+    `SELECT model_condition_id, condition_name FROM model_condition_item
+      WHERE model_condition_id IN (?) AND is_variable = 1
+      ORDER BY condition_name`,
+    [ids]
+  );
+  const byId = {};
+  items.forEach((it) => { (byId[it.model_condition_id] ||= []).push(it.condition_name); });
+  return rows.map((r) => ({
+    id: r.id,
+    job_no: r.job_no,
+    pallet_no: r.pallet_no,
+    names: (byId[r.id] || []).slice().sort(),
+  }));
+}
+
+async function getCounts(model, lotNo) {
+  const [rows] = await pool.query(
+    `SELECT status, COUNT(*) AS n FROM model_piece_queue WHERE model = ? AND lot_no = ? GROUP BY status`,
+    [model, lotNo]
   );
   const counts = { pending: 0, reserved: 0, marked: 0, failed: 0, total: 0 };
   rows.forEach((r) => {
@@ -77,32 +132,47 @@ async function getCounts(modelId) {
   return counts;
 }
 
-// ---------------- GET /api/models/:id/queue ----------------
+// The queue's canonical variable names = whichever sibling model_condition
+// currently has per-piece conditions ticked (they're enforced to all
+// match by guardVariableConditions, so the first one found is authoritative).
+async function getVariableNamesForLot(model, lotNo) {
+  const [rows] = await pool.query('SELECT id FROM model_condition WHERE model = ? AND lot_no = ?', [model, lotNo]);
+  for (const r of rows) {
+    const names = await getVariableNames(r.id);
+    if (names.length) return names;
+  }
+  return [];
+}
+
+// ---------------- GET /api/piece-queue?model=&lot_no= ----------------
 async function getQueue(req, res) {
+  const model = trimmed(req.query.model);
+  const lotNo = trimmed(req.query.lot_no);
+  if (!model || !lotNo) return res.status(400).json({ error: 'model and lot_no are required.' });
+
   try {
-    const model = await getModelRow(req.params.id);
-    if (!model) return res.status(404).json({ error: 'Model condition not found.' });
+    await sweepStaleReservations(model, lotNo);
 
-    const variable_names = await getVariableNames(model.id);
-    const counts = await getCounts(model.id);
-
-    const [lotRows] = await pool.query(
-      'SELECT lot_no FROM model_piece_queue WHERE model_condition_id = ? LIMIT 1',
-      [model.id]
-    );
+    const variable_names = await getVariableNamesForLot(model, lotNo);
+    const counts = await getCounts(model, lotNo);
     const [nextRows] = await pool.query(
       `SELECT seq_no, piece_values FROM model_piece_queue
-        WHERE model_condition_id = ? AND status = 'pending'
+        WHERE model = ? AND lot_no = ? AND status = 'pending'
         ORDER BY seq_no ASC LIMIT 3`,
-      [model.id]
+      [model, lotNo]
+    );
+
+    // Which model_condition rows (pallet/job) currently share this queue.
+    const [sharedBy] = await pool.query(
+      `SELECT id, job_no, pallet_no FROM model_condition WHERE model = ? AND lot_no = ? ORDER BY pallet_no`,
+      [model, lotNo]
     );
 
     return res.json({
-      model_condition_id: model.id,
-      model: model.model,
+      model,
+      lot_no: lotNo,
       variable_names,
-      model_lot_no: model.lot_no,
-      queue_lot_no: lotRows.length ? lotRows[0].lot_no : null,
+      shared_by: sharedBy,
       counts,
       next: nextRows.map((r) => ({ seq_no: r.seq_no, values: parseValues(r.piece_values) })),
     });
@@ -112,29 +182,27 @@ async function getQueue(req, res) {
   }
 }
 
-// ---------------- POST /api/models/:id/queue/import ----------------
-// Body: { columns: string[], rows: string[][], dry_run?: boolean }
-// dry_run validates and reports what WOULD happen without writing.
+// ---------------- POST /api/piece-queue/import ----------------
+// Body: { model, lot_no, columns: string[], rows: string[][], dry_run? }
 async function importQueue(req, res) {
-  const { columns, rows, dry_run } = req.body || {};
+  const { model: rawModel, lot_no: rawLot, columns, rows, dry_run } = req.body || {};
+  const model = trimmed(rawModel);
+  const lotNo = trimmed(rawLot);
 
   try {
-    const model = await getModelRow(req.params.id);
-    if (!model) return res.status(404).json({ error: 'Model condition not found.' });
+    if (!model || !lotNo) return res.status(400).json({ error: 'model and lot_no are required.' });
 
-    const variableNames = await getVariableNames(model.id);
+    const variableNames = await getVariableNamesForLot(model, lotNo);
     if (variableNames.length === 0) {
       return res.status(400).json({
-        error: 'This model has no per-piece conditions. Tick "Per-piece" on a condition and save the model first.',
+        error: `No model on "${model}" Lot "${lotNo}" has a Per-piece condition ticked. Tick "Per-piece" on a condition and save the model(s) first.`,
       });
     }
 
     if (!Array.isArray(columns) || !Array.isArray(rows)) {
       return res.status(400).json({ error: 'columns and rows are required.' });
     }
-    if (rows.length === 0) {
-      return res.status(400).json({ error: 'The CSV has no data rows.' });
-    }
+    if (rows.length === 0) return res.status(400).json({ error: 'The CSV has no data rows.' });
     if (rows.length > MAX_ROWS) {
       return res.status(400).json({ error: `The CSV has ${rows.length} rows; the limit is ${MAX_ROWS}.` });
     }
@@ -157,9 +225,7 @@ async function importQueue(req, res) {
       seen.add(canonical);
       colMap.push(canonical);
     });
-    if (unknown.length) {
-      headerErrors.push(`Unknown column(s): ${unknown.join(', ')}. Expected: ${variableNames.join(', ')}.`);
-    }
+    if (unknown.length) headerErrors.push(`Unknown column(s): ${unknown.join(', ')}. Expected: ${variableNames.join(', ')}.`);
     const missing = variableNames.filter((n) => !seen.has(n));
     if (missing.length) headerErrors.push(`Missing column(s): ${missing.join(', ')}.`);
     if (headerErrors.length) {
@@ -170,13 +236,10 @@ async function importQueue(req, res) {
     const parsed = [];
     const errors = [];
     let errorCount = 0;
-    const addError = (msg) => {
-      errorCount += 1;
-      if (errors.length < MAX_REPORTED_ERRORS) errors.push(msg);
-    };
+    const addError = (msg) => { errorCount += 1; if (errors.length < MAX_REPORTED_ERRORS) errors.push(msg); };
 
     rows.forEach((r, idx) => {
-      const line = idx + 2; // header is line 1
+      const line = idx + 2;
       if (!Array.isArray(r) || r.length !== columns.length) {
         addError(`Row ${line}: expected ${columns.length} column(s), found ${Array.isArray(r) ? r.length : 0}.`);
         return;
@@ -202,7 +265,6 @@ async function importQueue(req, res) {
       });
     }
 
-    // ---- warnings (do not block) ----
     const warnings = [];
     const seenKeys = new Set();
     let dupes = 0;
@@ -213,20 +275,24 @@ async function importQueue(req, res) {
     });
     if (dupes > 0) warnings.push(`${dupes} row(s) repeat an earlier row exactly — the same content would be marked more than once.`);
 
-    // ---- what would be replaced ----
-    const existing = await getCounts(model.id);
+    const existing = await getCounts(model, lotNo);
     if (existing.reserved > 0) {
       return res.status(409).json({
-        error: `${existing.reserved} piece(s) are currently reserved (marking in progress). Wait for them to finish before replacing the queue.`,
+        error: `${existing.reserved} piece(s) are currently reserved (marking in progress on one of the pallets sharing this lot). Wait for them to finish before replacing the queue.`,
       });
     }
 
+    const [sharedBy] = await pool.query(
+      `SELECT id, job_no, pallet_no FROM model_condition WHERE model = ? AND lot_no = ? ORDER BY pallet_no`,
+      [model, lotNo]
+    );
+
     const summary = {
       ok: true,
-      model_condition_id: model.id,
-      model: model.model,
-      lot_no: model.lot_no,
+      model,
+      lot_no: lotNo,
       variable_names: variableNames,
+      shared_by: sharedBy,
       total: parsed.length,
       preview: parsed.slice(0, PREVIEW_ROWS),
       warnings,
@@ -235,30 +301,27 @@ async function importQueue(req, res) {
 
     if (dry_run) return res.json({ ...summary, dry_run: true });
 
-    // ---- replace the queue atomically ----
     const conn = await pool.getConnection();
     try {
       await conn.beginTransaction();
 
-      // Re-check inside the transaction and lock, in case a marking reserved a row since the check above.
       const [reservedRows] = await conn.query(
-        `SELECT COUNT(*) AS n FROM model_piece_queue
-          WHERE model_condition_id = ? AND status = 'reserved' FOR UPDATE`,
-        [model.id]
+        `SELECT COUNT(*) AS n FROM model_piece_queue WHERE model = ? AND lot_no = ? AND status = 'reserved' FOR UPDATE`,
+        [model, lotNo]
       );
       if (reservedRows[0].n > 0) {
         await conn.rollback();
         return res.status(409).json({ error: 'A piece was reserved while importing. Try again in a moment.' });
       }
 
-      await conn.query('DELETE FROM model_piece_queue WHERE model_condition_id = ?', [model.id]);
+      await conn.query('DELETE FROM model_piece_queue WHERE model = ? AND lot_no = ?', [model, lotNo]);
 
       for (let i = 0; i < parsed.length; i += INSERT_CHUNK) {
         const chunk = parsed
           .slice(i, i + INSERT_CHUNK)
-          .map((o, j) => [model.id, model.lot_no, i + j + 1, JSON.stringify(o)]);
+          .map((o, j) => [model, lotNo, i + j + 1, JSON.stringify(o)]);
         await conn.query(
-          'INSERT INTO model_piece_queue (model_condition_id, lot_no, seq_no, piece_values) VALUES ?',
+          'INSERT INTO model_piece_queue (model, lot_no, seq_no, piece_values) VALUES ?',
           [chunk]
         );
       }
@@ -273,16 +336,10 @@ async function importQueue(req, res) {
     await systemLog.logAction({
       req,
       action: 'model.queue_import',
-      targetType: 'model_condition',
-      targetId: model.id,
-      description: `Imported ${parsed.length} per-piece row(s) for "${model.model}" (Lot ${model.lot_no}), replacing ${existing.total} old row(s)`,
-      details: {
-        total: parsed.length,
-        columns: variableNames,
-        lot_no: model.lot_no,
-        replaced: existing,
-        warnings,
-      },
+      targetType: 'piece_queue',
+      targetId: `${model}::${lotNo}`,
+      description: `Imported ${parsed.length} per-piece row(s) for "${model}" (Lot ${lotNo}), shared by ${sharedBy.map((s) => `${s.pallet_no}/Job ${s.job_no}`).join(', ')}, replacing ${existing.total} old row(s)`,
+      details: { total: parsed.length, columns: variableNames, model, lot_no: lotNo, shared_by: sharedBy, replaced: existing, warnings },
     });
 
     return res.status(201).json({ ...summary, dry_run: false, imported: parsed.length });
@@ -292,26 +349,26 @@ async function importQueue(req, res) {
   }
 }
 
-// ---------------- DELETE /api/models/:id/queue ----------------
+// ---------------- DELETE /api/piece-queue?model=&lot_no= ----------------
 async function clearQueue(req, res) {
-  try {
-    const model = await getModelRow(req.params.id);
-    if (!model) return res.status(404).json({ error: 'Model condition not found.' });
+  const model = trimmed(req.query.model);
+  const lotNo = trimmed(req.query.lot_no);
+  if (!model || !lotNo) return res.status(400).json({ error: 'model and lot_no are required.' });
 
-    const existing = await getCounts(model.id);
+  try {
+    const existing = await getCounts(model, lotNo);
     if (existing.reserved > 0) {
       return res.status(409).json({ error: 'A piece is reserved (marking in progress). Wait for it to finish first.' });
     }
-
-    await pool.query('DELETE FROM model_piece_queue WHERE model_condition_id = ?', [model.id]);
+    await pool.query('DELETE FROM model_piece_queue WHERE model = ? AND lot_no = ?', [model, lotNo]);
 
     await systemLog.logAction({
       req,
       action: 'model.queue_clear',
-      targetType: 'model_condition',
-      targetId: model.id,
-      description: `Cleared per-piece queue for "${model.model}" (${existing.total} row(s), ${existing.pending} unmarked)`,
-      details: { cleared: existing },
+      targetType: 'piece_queue',
+      targetId: `${model}::${lotNo}`,
+      description: `Cleared per-piece queue for "${model}" (Lot ${lotNo}) (${existing.total} row(s), ${existing.pending} unmarked)`,
+      details: { model, lot_no: lotNo, cleared: existing },
     });
 
     return res.json({ cleared: existing.total });
@@ -321,20 +378,126 @@ async function clearQueue(req, res) {
   }
 }
 
+// ---------------- POST /api/piece-queue/reserve ----------------
+// Body: { model, lot_no, model_condition_id, pallet_no }
+// Locks the next pending row for THIS pallet's cycle. Returns the row
+// (id + values) so the caller can substitute it into the per-piece
+// condition's CharacterString before sending WX,JOB=...
+async function reserveNext(req, res) {
+  const { model: rawModel, lot_no: rawLot, model_condition_id, pallet_no } = req.body || {};
+  const model = trimmed(rawModel);
+  const lotNo = trimmed(rawLot);
+  if (!model || !lotNo) return res.status(400).json({ error: 'model and lot_no are required.' });
+  if (!['Pallet1', 'Pallet2'].includes(pallet_no)) return res.status(400).json({ error: "pallet_no must be 'Pallet1' or 'Pallet2'." });
+
+  try {
+    await sweepStaleReservations(model, lotNo);
+
+    const conn = await pool.getConnection();
+    try {
+      await conn.beginTransaction();
+
+      const [rows] = await conn.query(
+        `SELECT id, seq_no, piece_values FROM model_piece_queue
+          WHERE model = ? AND lot_no = ? AND status = 'pending'
+          ORDER BY seq_no ASC LIMIT 1 FOR UPDATE SKIP LOCKED`,
+        [model, lotNo]
+      );
+
+      if (!rows.length) {
+        await conn.rollback();
+        return res.status(409).json({
+          error: `No per-piece values left in the queue for "${model}" (Lot ${lotNo}). Load a new CSV before continuing.`,
+        });
+      }
+
+      const row = rows[0];
+      await conn.query(
+        `UPDATE model_piece_queue
+            SET status = 'reserved', reserved_by_user_id = ?, reserved_model_condition_id = ?,
+                reserved_pallet_no = ?, reserved_at = NOW()
+          WHERE id = ?`,
+        [req.user ? req.user.id : null, model_condition_id || null, pallet_no, row.id]
+      );
+      await conn.commit();
+
+      return res.json({
+        queue_id: row.id,
+        seq_no: row.seq_no,
+        values: parseValues(row.piece_values),
+      });
+    } catch (e) {
+      await conn.rollback();
+      throw e;
+    } finally {
+      conn.release();
+    }
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: 'Server error reserving a per-piece row.' });
+  }
+}
+
+// ---------------- POST /api/piece-queue/:queueId/release ----------------
+// Cycle failed BEFORE marking (door/pallet/laser interlock, job select
+// failed, etc.) — the row goes back to pending so it's tried again next
+// cycle, nothing was lost.
+async function releaseReserved(req, res) {
+  const { queueId } = req.params;
+  try {
+    const [result] = await pool.query(
+      `UPDATE model_piece_queue
+          SET status = 'pending', reserved_by_user_id = NULL, reserved_model_condition_id = NULL,
+              reserved_pallet_no = NULL, reserved_at = NULL
+        WHERE id = ? AND status = 'reserved'`,
+      [queueId]
+    );
+    if (result.affectedRows === 0) {
+      return res.status(409).json({ error: 'That row is not currently reserved (already released, marked, or failed).' });
+    }
+    return res.json({ released: Number(queueId) });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: 'Server error releasing per-piece row.' });
+  }
+}
+
+// ---------------- POST /api/piece-queue/:queueId/fail ----------------
+// Outcome is ambiguous (e.g. StartMarking sent but connection lost
+// before a reply came back — the part MAY have been marked with this
+// serial, so it must never be silently re-served to another part).
+async function failReserved(req, res) {
+  const { queueId } = req.params;
+  const { reason } = req.body || {};
+  try {
+    const [result] = await pool.query(
+      `UPDATE model_piece_queue SET status = 'failed' WHERE id = ? AND status = 'reserved'`,
+      [queueId]
+    );
+    if (result.affectedRows === 0) {
+      return res.status(409).json({ error: 'That row is not currently reserved (already released, marked, or failed).' });
+    }
+    await systemLog.logAction({
+      req,
+      action: 'model.queue_row_failed',
+      targetType: 'piece_queue',
+      targetId: String(queueId),
+      description: `Per-piece queue row #${queueId} marked failed (ambiguous outcome)${reason ? `: ${reason}` : ''}`,
+      details: { queue_id: Number(queueId), reason: reason || null },
+      status: 'failed',
+    });
+    return res.json({ failed: Number(queueId) });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: 'Server error failing per-piece row.' });
+  }
+}
+
 // ---------------- middleware: POST / PUT /api/models ----------------
-// Runs AFTER multer (so req.body is populated, and req.file may exist).
-//   1. per-piece condition names must be unique within the model
-//   2. on PUT: while the queue still has pending/reserved rows, the SET of
-//      per-piece condition names may not change (rows are keyed by name, so a
-//      rename/removal would orphan them). Clear the queue first.
 function readIncomingConditions(body) {
   let c = body && body.conditions;
   if (typeof c === 'string') {
-    try {
-      c = JSON.parse(c);
-    } catch (e) {
-      c = [];
-    }
+    try { c = JSON.parse(c); } catch (e) { c = []; }
   }
   return Array.isArray(c) ? c : [];
 }
@@ -354,25 +517,46 @@ async function guardVariableConditions(req, res, next) {
       return reject(400, 'Per-piece condition names must be unique within a model.');
     }
 
-    if (!req.params.id) return next(); // POST: nothing queued yet
+    const model = trimmed(req.body.model);
+    const lotNo = trimmed(req.body.lot_no);
+    const sortedIncoming = names.slice().sort();
 
-    const [cnt] = await pool.query(
-      `SELECT COUNT(*) AS n FROM model_piece_queue
-        WHERE model_condition_id = ? AND status IN ('pending', 'reserved')`,
-      [req.params.id]
-    );
-    const active = Number(cnt[0].n) || 0;
-    if (!active) return next();
-
-    const current = (await getVariableNames(req.params.id)).map(trimmed).sort();
-    const wanted = names.slice().sort();
-    if (JSON.stringify(current) !== JSON.stringify(wanted)) {
-      return reject(
-        409,
-        `This model still has ${active} unmarked per-piece row(s) in its queue. ` +
-          'Clear the queue (or finish the lot) before changing which conditions are per-piece.'
-      );
+    // ---- 1. Sibling consistency: every OTHER model_condition row
+    // sharing (model, lot_no) must tick the SAME per-piece names. ----
+    if (model && lotNo) {
+      const siblings = await getSiblingVariableSets(model, lotNo, req.params.id || null);
+      const mismatched = siblings.filter((s) => JSON.stringify(s.names) !== JSON.stringify(sortedIncoming));
+      if (mismatched.length) {
+        const list = mismatched
+          .map((s) => `Job ${String(s.job_no).padStart(4, '0')}/${s.pallet_no} (per-piece: ${s.names.length ? s.names.join(', ') : 'none'})`)
+          .join('; ');
+        return reject(
+          409,
+          `Per-piece condition names must match every job sharing "${model}" Lot "${lotNo}" — this job wants [${sortedIncoming.join(', ') || 'none'}], but mismatched with: ${list}.`
+        );
+      }
     }
+
+    if (!req.params.id) return next(); // POST: nothing queued yet for this row
+
+    // ---- 2. In-flight queue protection: if THIS row's own per-piece
+    // names are changing, and the shared (model, lot_no) queue still
+    // has pending/reserved rows, block until the queue is cleared. ----
+    const currentNames = (await getVariableNames(req.params.id)).slice().sort();
+    if (JSON.stringify(currentNames) !== JSON.stringify(sortedIncoming) && model && lotNo) {
+      const [cnt] = await pool.query(
+        `SELECT COUNT(*) AS n FROM model_piece_queue WHERE model = ? AND lot_no = ? AND status IN ('pending','reserved')`,
+        [model, lotNo]
+      );
+      const active = Number(cnt[0].n) || 0;
+      if (active > 0) {
+        return reject(
+          409,
+          `"${model}" Lot "${lotNo}" still has ${active} unmarked per-piece row(s) in its shared queue. Clear the queue (or finish the lot) before changing which conditions are per-piece.`
+        );
+      }
+    }
+
     return next();
   } catch (e) {
     console.error(e);
@@ -380,4 +564,12 @@ async function guardVariableConditions(req, res, next) {
   }
 }
 
-module.exports = { getQueue, importQueue, clearQueue, guardVariableConditions };
+module.exports = {
+  getQueue,
+  importQueue,
+  clearQueue,
+  reserveNext,
+  releaseReserved,
+  failReserved,
+  guardVariableConditions,
+};
