@@ -308,6 +308,17 @@ async function logProduction(req, res) {
       return res.status(400).json({ error: `That model is assigned to ${model.pallet_no}, not ${pallet_no}.` });
     }
 
+    // resolveModel() only reads the model_condition row itself — it does
+    // NOT join model_condition_item — so the condition items have to be
+    // fetched separately here before they're used below.
+    const [items] = await pool.query(
+      `SELECT condition_name, condition_value, block_no, is_variable
+         FROM model_condition_item
+        WHERE model_condition_id = ?
+        ORDER BY sort_order`,
+      [model_condition_id]
+    );
+
     const actor = req.user || {};
     let type;
     if (actor.role === 'operator') {
