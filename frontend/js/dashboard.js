@@ -6344,6 +6344,10 @@ function plRenderHead() {
        </tr>`;
 }
 
+function plColspan() {
+  return PL.view === "summary" ? PL_SUMMARY_COLSPAN : PL_RAW_COLSPAN;
+}
+
 function plTypeTagHtml(type) {
   const cls = type === "mass" ? "approved" : type === "rework" ? "rejected" : "pending";
   const label = type === "mass" ? "Mass" : type === "rework" ? "Rework" : "Setting";
