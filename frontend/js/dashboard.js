@@ -581,16 +581,6 @@ function monApplyStepResult(pallet, step, ok) {
   }
 }
 
-// ASSUMPTION (no equipment connected yet — adjust once real replies are
-// confirmed): reads MON.code2d[pallet], set by wmRunCode2DStartReader()
-// (values v1/v2/v3 from WX,Check2DCode5's WX,OK,<v1>,<v2>,<v3> reply) or
-// wmRunCode2DResultReader() (grade B + values w/x/y or c/v/w/x/y from
-// RX,CodeReadResult). Currently:
-//   Total Grade  -> captured.grade   (v1, or B)
-//   Matching Lv. -> v2 (start_reader) / w (read_result)
-//   Read data    -> v3 (start_reader) / y (read_result)
-// If the real protocol puts these values in different positions, only
-// this function needs to change — everything else keys off its output.
 function monApplyCode2DDerivedFields(pallet, ok, skipped) {
   if (skipped) {
     // Don't let a skipped step erase a real capture the OTHER 2D-code
@@ -602,6 +592,7 @@ function monApplyCode2DDerivedFields(pallet, ok, skipped) {
     }
     return;
   }
+
   if (!ok) {
     monSetCheckStatus(pallet, "totalGrade", "Error");
     monSetCheckStatus(pallet, "matchingLv", "Error");
@@ -2343,65 +2334,156 @@ async function eqSendRaw(conn, command) {
   }
 }
 
-// TODO: read the middle-door state via the Modbus I/O service once a
-// sensor exists for it (README "Recommended next step" #2). Until then
-// the middle door's "closed and protecting the operator" state is
-// inferred from the pallet-position check (ioReadPalletInMachineRoom)
-// that runs right after this one — not from a direct signal.
-async function ioCheckSideDoorSafe() {
-  try {
-    const res = await apiFetch("/api/io/status");
-    const data = await res.json();
-    if (!res.ok || !data.ok) return { ok: false, closed: false };
-    // Only the side door (D4SL-N2FFA-D4) belongs in this check. The
-    // front door is INTENTIONALLY open at this point in the sequence —
-    // it reopens right before Start Marking so the operator can load/
-    // unload the next part while marking proceeds behind the middle
-    // door — so front-door state must never gate Start Marking.
-    return { ok: true, closed: !!data.side_door_safe };
-  } catch (err) {
-    return { ok: false, closed: false };
-  }
-}
-async function ioReadPalletInMachineRoom(expectedPallet) {
-  try {
-    const res = await apiFetch("/api/io/status");
-    const data = await res.json();
-    if (!res.ok || !data.ok) return { ok: false, pallet: null };
-    const p1 = data.pallet1_in_machine_room;
-    const p2 = data.pallet2_in_machine_room;
-    const pallet = p1 ? "Pallet1" : p2 ? "Pallet2" : null;
-    return { ok: true, pallet };
-  } catch (err) {
-    return { ok: false, pallet: null };
-  }
+/* ---- I/O fault detection ----
+   ASSUMPTIONS (validate against real hardware):
+   1. GET /api/io/status only fails when the Modbus bridge can't read the
+      stations, so ANY failure there = IO_DISCONNECT.
+   2. For action endpoints (front-door, change-pallet, call-pallet) the
+      Python service returns 502 for BOTH comms faults and normal
+      interlock failures, so those are classified by message text. The
+      pattern below matches the strings currently produced by io_core.py
+      and ioService.js; if those messages change, update it here only. */
+const IO_COMM_FAULT_PATTERN =
+  /Cannot reach I\/O service|Could not connect to Station|connection lost|reconnect retry/i;
+
+// Poll-mode conflict debounce: a swap can briefly show contradictory
+// sensors, so the background poller needs N consecutive bad reads.
+// (~4.5 s at the 1.5 s poll interval.) Sequence-time reads are NOT
+// debounced — pallets should be stationary when a cycle starts.
+const IO_CONFLICT_DEBOUNCE_READS = 3;
+const IOFAULT = { conflictStreak: 0 };
+
+function ioIsCommFaultMessage(msg) {
+  return IO_COMM_FAULT_PATTERN.test(String(msg || ""));
 }
 
-// Reads both pallets' positions from the I/O service.
-// ok:false => service unreachable, or sensors contradict each other.
-async function ioReadPalletPositions() {
-  try {
-    const res = await apiFetch("/api/io/status");
-    const data = await res.json();
-    if (!res.ok || !data.ok) return { ok: false };
+// poll=true  -> called by a background poller: toast once, then stay quiet.
+// poll=false -> called inside a sequence: the sequence runner already
+//               toasts the failed step, so don't double-toast.
+function ioRaiseDisconnect(detail, poll = false) {
+  return alarmRaiseFault("IO_DISCONNECT", {
+    description: `Modbus I/O bridge is not responding — ${detail}`,
+    context: { detail },
+    toast: poll,
+    quietRepeat: poll,
+  });
+}
 
-    const p1m = !!data.pallet1_in_machine_room;
-    const p2m = !!data.pallet2_in_machine_room;
-    const p1o = !!data.pallet1_in_operator_room;
-    const p2o = !!data.pallet2_in_operator_room;
+// Mirrors the wiring rules in io_core.py: DI00 & DI03 must never both be
+// ON (machine-room crash), DI01 & DI04 must never both be ON
+// (operator-room crash), and one pallet can't be in both rooms.
+// Returns a human-readable reason, or null when sensors are consistent.
+function ioPalletConflictReason(data) {
+  const p1m = !!data.pallet1_in_machine_room;
+  const p2m = !!data.pallet2_in_machine_room;
+  const p1o = !!data.pallet1_in_operator_room;
+  const p2o = !!data.pallet2_in_operator_room;
+  const reasons = [];
+  if (p1m && p1o) reasons.push("Pallet 1 reads in BOTH rooms (DI00 & DI01)");
+  if (p2m && p2o) reasons.push("Pallet 2 reads in BOTH rooms (DI03 & DI04)");
+  if (p1m && p2m) reasons.push("both pallets read in the Machine Room (DI00 & DI03)");
+  if (p1o && p2o) reasons.push("both pallets read in the Operator Room (DI01 & DI04)");
+  return reasons.length ? reasons.join("; ") : null;
+}
 
-    // Wiring/read fault: same pallet in both rooms, or both pallets in one room.
-    if ((p1m && p1o) || (p2m && p2o) || (p1m && p2m) || (p1o && p2o)) {
-      return { ok: false, conflict: true };
+function ioEvaluatePalletConflict(data, { poll = false } = {}) {
+  const reason = ioPalletConflictReason(data);
+  if (!reason) {
+    IOFAULT.conflictStreak = 0;
+    alarmResolveByTag("PALLET_CONFLICT", "pallet position sensors agree again");
+    return null;
+  }
+  if (poll) {
+    if (data.pallet2_clearing) { // mid-swap: contradictory reads are expected
+      IOFAULT.conflictStreak = 0;
+      return reason;
     }
-    return {
-      ok: true,
-      machine: p1m ? "Pallet1" : p2m ? "Pallet2" : null,
-      operator: p1o ? "Pallet1" : p2o ? "Pallet2" : null,
-    };
-  } catch (err) {
-    return { ok: false };
+    IOFAULT.conflictStreak += 1;
+    if (IOFAULT.conflictStreak < IO_CONFLICT_DEBOUNCE_READS) return reason;
   }
+  alarmRaiseFault("PALLET_CONFLICT", {
+    description: `Pallet position sensors contradict each other: ${reason}.`,
+    context: { reason },
+    toast: poll,
+    quietRepeat: poll,
+  });
+  return reason;
+}
+
+// Single entry point for GET /api/io/status. Every read raises or clears
+// IO_DISCONNECT / PALLET_CONFLICT as a side effect.
+// Returns { ok:true, data } or { ok:false, commFault, error }.
+async function ioFetchStatus({ poll = false } = {}) {
+  let res, data;
+  try {
+    res = await apiFetch("/api/io/status");
+    data = await res.json().catch(() => ({}));
+  } catch (err) {
+    if (err && err.message === "Not authenticated") {
+      return { ok: false, commFault: false, error: "Not authenticated." };
+    }
+    ioRaiseDisconnect("the Node gateway could not be reached", poll);
+    return { ok: false, commFault: true, error: "Could not reach the I/O service." };
+  }
+  if (!res.ok || !data.ok) {
+    const error = data.error || `HTTP ${res.status}`;
+    ioRaiseDisconnect(error, poll);
+    return { ok: false, commFault: true, error };
+  }
+  alarmResolveByTag("IO_DISCONNECT", "I/O status read succeeded again");
+  ioEvaluatePalletConflict(data, { poll });
+  return { ok: true, data };
+}
+
+// POST helper for door/pallet actions. Raises IO_DISCONNECT only when the
+// failure looks like a comms fault (not a normal interlock refusal).
+async function ioPost(path, body, label) {
+  try {
+    const res = await apiFetch(path, { method: "POST", body: JSON.stringify(body || {}) });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.ok) {
+      const error = data.error || `${label} failed.`;
+      if (ioIsCommFaultMessage(error)) ioRaiseDisconnect(error);
+      return { ok: false, data, error };
+    }
+    alarmResolveByTag("IO_DISCONNECT", "an I/O command succeeded");
+    return { ok: true, data };
+  } catch (err) {
+    if (err && err.message === "Not authenticated") return { ok: false, data: {}, error: "Not authenticated." };
+    ioRaiseDisconnect("the Node gateway could not be reached");
+    return { ok: false, data: {}, error: "Could not reach I/O service." };
+  }
+}
+
+/* ---- replacements for your existing reads ---- */
+async function ioCheckSideDoorSafe() {
+  const st = await ioFetchStatus();
+  if (!st.ok) return { ok: false, closed: false };
+  // Only the side door belongs in this check — the front door is
+  // intentionally open at this point in the sequence.
+  return { ok: true, closed: !!st.data.side_door_safe };
+}
+
+async function ioReadPalletInMachineRoom(expectedPallet) {
+  const st = await ioFetchStatus();
+  if (!st.ok) return { ok: false, pallet: null, commFault: !!st.commFault };
+  if (ioPalletConflictReason(st.data)) return { ok: false, pallet: null, conflict: true };
+  const p1 = st.data.pallet1_in_machine_room;
+  const p2 = st.data.pallet2_in_machine_room;
+  return { ok: true, pallet: p1 ? "Pallet1" : p2 ? "Pallet2" : null };
+}
+
+async function ioReadPalletPositions() {
+  const st = await ioFetchStatus();
+  if (!st.ok) return { ok: false, commFault: !!st.commFault };
+  const reason = ioPalletConflictReason(st.data);
+  if (reason) return { ok: false, conflict: true, reason };
+  const d = st.data;
+  return {
+    ok: true,
+    machine: d.pallet1_in_machine_room ? "Pallet1" : d.pallet2_in_machine_room ? "Pallet2" : null,
+    operator: d.pallet1_in_operator_room ? "Pallet1" : d.pallet2_in_operator_room ? "Pallet2" : null,
+  };
 }
 
 // Which pallet is in the MACHINE ROOM (under the laser/camera) right now.
@@ -2492,11 +2574,16 @@ async function wmRunStartMarking() {
 
   // ---- 1. Interlock ----
   wmLog(`>>> START_MARKING interlock check (${pallet})`);
-  const doorSafe = await ioCheckSideDoorSafe();
-  if (!doorSafe.ok || !doorSafe.closed) {
+  const doorSafe = await ioCheckSideDoorSafe(); // raises IO_DISCONNECT / PALLET_CONFLICT itself
+  if (!doorSafe.ok) {
+    wmLog(`!!! Could not read the I/O status (see Alarm Center)`, "error");
+    return fail({ ok: false, alarm: true, message: "Could not read door/pallet status — I/O service unreachable." });
+  }
+  if (!doorSafe.closed) {
     wmLog(`!!! Side door interlock not satisfied`, "error");
     return fail({ ok: false, alarm: true, message: "Side door is not closed/safe." });
   }
+
   const readyRaw = await eqSendRaw(conn, "RX,Ready");
   if (!readyRaw.ok) {
     wmLog(`!!! Could not reach laser: ${readyRaw.message}`, "error");
@@ -2504,8 +2591,16 @@ async function wmRunStartMarking() {
   }
   const readyStatus = (readyRaw.response.split(",")[2] || "").trim();
   if (readyStatus === "1") {
+    alarmRaiseFault("ERR_READY_1", {
+      description: "Laser marker reports RX,Ready=1 (active error on the unit) — Start Marking was blocked.",
+      context: { pallet, model: job.model, job_no: job.job_no, lot_no: job.lot_no || "" },
+      toast: false,
+    });
     wmLog(`!!! Laser has an active error (RX,Ready=1)`, "error");
-    return fail({ ok: false, alarm: true, message: "Laser reports an active error. Clear it on the unit first." });
+    return fail({ ok: false, alarm: true, message: "Laser reports an active error. Clear it on the unit first — see Alarm Center." });
+  }
+  if (readyStatus === "0" || readyStatus === "2") {
+    alarmResolveByTag("ERR_READY_1", "RX,Ready no longer reports an error");
   }
   if (readyStatus !== "0") {
     wmLog(`!!! Laser not ready (RX,Ready=${readyStatus || "?"})`, "warn");
@@ -2515,7 +2610,15 @@ async function wmRunStartMarking() {
 
   // ---- 2. Confirm pallet physically in the Machine Room ----
   const palletCheck = await ioReadPalletInMachineRoom(pallet);
-  if (!palletCheck.ok || palletCheck.pallet !== pallet) {
+  if (palletCheck.conflict) {
+    wmLog(`!!! Pallet position sensors contradict each other`, "error");
+    return fail({ ok: false, alarm: true, message: "Pallet position sensors contradict each other — see Alarm Center." });
+  }
+  if (!palletCheck.ok) {
+    wmLog(`!!! Could not read pallet position sensors`, "error");
+    return fail({ ok: false, alarm: true, message: "Could not read pallet position sensors — I/O service unreachable." });
+  }
+  if (palletCheck.pallet !== pallet) {
     wmLog(`!!! Pallet mismatch: expected ${pallet}, sensors report ${palletCheck.pallet || "unknown"}`, "error");
     return fail({ ok: false, alarm: true, message: "Pallet position sensors do not match the expected pallet." });
   }
@@ -2534,8 +2637,7 @@ async function wmRunStartMarking() {
   }
   wmLog(`<<< ${jobNoRaw.response}`, "ok");
 
-  // ---- 4. Push every condition value (per-piece values already
-  // substituted into job.conditions above) ----
+  // ---- 4. Push every condition value ----
   const conditions = job.conditions || [];
   for (const item of conditions) {
     const condCommand = `WX,JOB=${padJob(job.job_no)},BLK=${padBlk(item.block_no)},CharacterString=${item.condition_value}`;
@@ -2552,9 +2654,7 @@ async function wmRunStartMarking() {
     wmLog(`<<< ${condRaw.response}`, "ok");
   }
 
-  // ---- 5. Trigger marking — from here on, a failed/ambiguous response
-  // means the physical part MAY already be marked with this serial, so
-  // any failure past this point is AMBIGUOUS (fail), never a plain release. ----
+  // ---- 5. Trigger marking — any failure from here is AMBIGUOUS (part may be marked) ----
   wmLog(`>>> WX,StartMarking=1`);
   const markRaw = await eqSendRaw(conn, "WX,StartMarking=1");
   if (!markRaw.ok) {
@@ -2567,8 +2667,6 @@ async function wmRunStartMarking() {
   }
   wmLog(`<<< ${markRaw.response}`, "ok");
 
-  // Marking succeeded — reservation is consumed ("marked") together
-  // with the production_log write in monReportCount(), not here.
   return { ok: true, message: "Marking complete.", piece_queue_id: pieceQueueId };
 }
 
@@ -2596,8 +2694,8 @@ function code2dGradeRank(letter) {
    instead of failing on the first busy reading. A hard error (status 1)
    still fails immediately — that's a real fault, not a timing issue. ---- */
 async function eqCheckLaserReady(conn, opts = {}) {
-  const maxWaitMs = opts.maxWaitMs ?? 10000;   // total time willing to wait
-  const pollIntervalMs = opts.pollIntervalMs ?? 500; // gap between polls
+  const maxWaitMs = opts.maxWaitMs ?? 10000;
+  const pollIntervalMs = opts.pollIntervalMs ?? 500;
   const deadline = Date.now() + maxWaitMs;
   let attempt = 0;
   let lastMessage = "";
@@ -2607,23 +2705,29 @@ async function eqCheckLaserReady(conn, opts = {}) {
     const raw = await eqSendRaw(conn, "RX,Ready");
 
     if (!raw.ok) {
-      lastMessage = raw.message;
-      // Transport/comm hiccup — treat like busy and retry rather than
-      // aborting instantly, since the marker may just be mid-operation.
+      lastMessage = raw.message; // transport hiccup — retry like busy
     } else {
       const status = (raw.response.split(",")[2] || "").trim();
       if (status === "0") {
+        alarmResolveByTag("ERR_READY_1", "RX,Ready returned to 0");
         return { ready: true };
       }
       if (status === "1") {
-        // Genuine active error — don't waste time retrying this one.
+        // Genuine active error — raise a real alarm, don't retry.
+        alarmRaiseFault("ERR_READY_1", {
+          description: "Laser marker reports RX,Ready=1 (active error on the unit).",
+          context: opts.pallet ? { pallet: opts.pallet } : null,
+          toast: false, // the calling step's verdict is toasted by the sequence runner
+        });
         return {
           ready: false,
           alarm: true,
-          message: "Laser reports an active error (RX,Ready=1). Clear it on the unit first.",
+          message: "Laser reports an active error (RX,Ready=1). Clear it on the unit first — see Alarm Center.",
         };
       }
       if (status === "2") {
+        // Busy is not an error state, so any earlier laser-error alarm is stale.
+        alarmResolveByTag("ERR_READY_1", "RX,Ready no longer reports an error");
         lastMessage = "Laser is busy (marking/expansion in progress).";
       } else {
         lastMessage = `Unexpected RX,Ready response: ${raw.response}`;
@@ -2834,131 +2938,96 @@ async function wmRunCode2DGradeResult() {
       : `Grade ${captured.grade} is below threshold ${threshold}.`,
   };
 }
+
 const WM_FUNCTIONS = {
+  // the equipment commands
   OPEN_FRONT_DOOR: {
-  label: "Open Front Door",
-  group: "io",
-  desc: "IAI EC-R6H-250-3-WA. BACKWARD cylinder = open. Confirmed by DI06 (backward_comp_frontdoor).",
-  run: async () => {
-    wmLog(">>> OPEN_FRONT_DOOR — commanding backward (open)...");
-    try {
-      const res = await apiFetch("/api/io/front-door", {
-        method: "POST",
-        body: JSON.stringify({ action: "open" }),
-      });
-      const data = await res.json();
-      if (!res.ok || !data.ok) {
-        wmLog(`!!! Front door open failed: ${data.error || "unknown error"}`, "error");
-        return { ok: false, alarm: true, message: data.error || "Front door open failed." };
+    label: "Open Front Door",
+    group: "io",
+    desc: "IAI EC-R6H-250-3-WA. BACKWARD cylinder = open. Confirmed by DI06 (backward_comp_frontdoor).",
+    run: async () => {
+      wmLog(">>> OPEN_FRONT_DOOR — commanding backward (open)...");
+      const r = await ioPost("/api/io/front-door", { action: "open" }, "Front door open");
+      if (!r.ok) {
+        wmLog(`!!! Front door open failed: ${r.error}`, "error");
+        return { ok: false, alarm: true, message: r.error };
       }
       wmLog("<<< Door opened.", "ok");
       return { ok: true, message: "Front door open confirmed." };
-    } catch (err) {
-      wmLog("!!! Could not reach I/O service.", "error");
-      return { ok: false, alarm: true, message: "Could not reach I/O service." };
-    }
-  },
+    },
   },
   CLOSE_FRONT_DOOR: {
-  label: "Close Front Door",
-  group: "io",
-  desc: "IAI EC-R6H-250-3-WA. FORWARD cylinder = close. Confirmed by DI07 + DI13 + DI14.",
-  run: async () => {
-    wmLog(">>> CLOSE_FRONT_DOOR — commanding forward (close)...");
-    try {
-      const res = await apiFetch("/api/io/front-door", {
-        method: "POST",
-        body: JSON.stringify({ action: "close" }),
-      });
-      const data = await res.json();
-      if (!res.ok || !data.ok) {
-        wmLog(`!!! Front door close failed: ${data.error || "unknown error"}`, "error");
-        return { ok: false, alarm: true, message: data.error || "Front door close failed." };
+    label: "Close Front Door",
+    group: "io",
+    desc: "IAI EC-R6H-250-3-WA. FORWARD cylinder = close. Confirmed by DI07 + DI13 + DI14.",
+    run: async () => {
+      wmLog(">>> CLOSE_FRONT_DOOR — commanding forward (close)...");
+      const r = await ioPost("/api/io/front-door", { action: "close" }, "Front door close");
+      if (!r.ok) {
+        wmLog(`!!! Front door close failed: ${r.error}`, "error");
+        return { ok: false, alarm: true, message: r.error };
       }
       wmLog("<<< Door closed.", "ok");
       return { ok: true, message: "Front door close confirmed." };
-    } catch (err) {
-      wmLog("!!! Could not reach I/O service.", "error");
-      return { ok: false, alarm: true, message: "Could not reach I/O service." };
-    }
-  },
+    },
   },
   CHANGE_PALLET: {
-  label: "Change Pallet",
-  group: "pallet",
-  desc: "Swaps Pallet1/Pallet2 via the middle door. Interlocks TBD: front door closed, side door closed.",
-  run: async () => {
-    const target = WM_PALLET_STATE.operatorRoomPallet === "Pallet1" ? 2 : 1;
-    wmLog(`>>> CHANGE_PALLET — swapping to bring Pallet ${target} into the Operator Room...`);
-    try {
-      const res = await apiFetch("/api/io/change-pallet", {
-        method: "POST",
-        body: JSON.stringify({ target_pallet: target }),
-      });
-      const data = await res.json();
-      if (!res.ok || !data.ok) {
-        wmLog(`!!! Change pallet failed: ${data.error || "unknown error"}`, "error");
-        return { ok: false, alarm: true, message: data.error || "Change pallet failed." };
+    label: "Change Pallet",
+    group: "pallet",
+    desc: "Swaps Pallet1/Pallet2 via the middle door. Interlocks enforced in io_core.py: front door closed, side door closed, no pallet alarms.",
+    run: async () => {
+      const target = WM_PALLET_STATE.operatorRoomPallet === "Pallet1" ? 2 : 1;
+      wmLog(`>>> CHANGE_PALLET — swapping to bring Pallet ${target} into the Operator Room...`);
+      const r = await ioPost("/api/io/change-pallet", { target_pallet: target }, "Change pallet");
+      if (!r.ok) {
+        wmLog(`!!! Change pallet failed: ${r.error}`, "error");
+        return { ok: false, alarm: true, message: r.error };
       }
       WM_PALLET_STATE.operatorRoomPallet = target === 1 ? "Pallet1" : "Pallet2";
       wmUpdatePalletLocationUI();
       wmLog("<<< Pallet changed.", "ok");
       return { ok: true, message: `Pallet${target} now in Operator Room.` };
-    } catch (err) {
-      wmLog("!!! Could not reach I/O service.", "error");
-      return { ok: false, alarm: true, message: "Could not reach I/O service." };
-    }
-  },
+    },
   },
   CALL_PALLET1: {
-  label: "Call Pallet 1",
-  group: "pallet",
-  desc: "Bring Pallet 1 to the Operator Room (swaps with Pallet 2 if needed).",
-  run: async () => {
-    wmLog(">>> CALL_PALLET1 — bringing Pallet 1 to the Operator Room...");
-    try {
-      const res = await apiFetch("/api/io/call-pallet/1", { method: "POST", body: JSON.stringify({}) });
-      const data = await res.json();
-      if (!res.ok || !data.ok) {
-        wmLog(`!!! Call Pallet 1 failed: ${data.error || "unknown error"}`, "error");
-        return { ok: false, alarm: true, message: data.error || "Call Pallet 1 failed." };
+    label: "Call Pallet 1",
+    group: "pallet",
+    desc: "Bring Pallet 1 to the Operator Room (swaps with Pallet 2 if needed).",
+    run: async () => {
+      wmLog(">>> CALL_PALLET1 — bringing Pallet 1 to the Operator Room...");
+      const r = await ioPost("/api/io/call-pallet/1", {}, "Call Pallet 1");
+      if (!r.ok) {
+        wmLog(`!!! Call Pallet 1 failed: ${r.error}`, "error");
+        return { ok: false, alarm: true, message: r.error };
       }
-      const inOperator = data.state ? !!data.state.p1_operator : true;
-      WM_PALLET_STATE.operatorRoomPallet = inOperator ? "Pallet1" : WM_PALLET_STATE.operatorRoomPallet;
+      const inOperator = r.data.state ? !!r.data.state.p1_operator : true;
+      if (inOperator) WM_PALLET_STATE.operatorRoomPallet = "Pallet1";
       wmUpdatePalletLocationUI();
       wmLog("<<< Pallet changed.", "ok");
       return { ok: true, message: "Pallet 1 in Operator Room." };
-    } catch (err) {
-      wmLog("!!! Could not reach I/O service.", "error");
-      return { ok: false, alarm: true, message: "Could not reach I/O service." };
-    }
-  },
+    },
   },
   CALL_PALLET2: {
-  label: "Call Pallet 2",
-  group: "pallet",
-  desc: "Bring Pallet 2 to the Operator Room (swaps with Pallet 1 if needed).",
-  run: async () => {
-    wmLog(">>> CALL_PALLET2 — bringing Pallet 2 to the Operator Room...");
-    try {
-      const res = await apiFetch("/api/io/call-pallet/2", { method: "POST", body: JSON.stringify({}) });
-      const data = await res.json();
-      if (!res.ok || !data.ok) {
-        wmLog(`!!! Call Pallet 2 failed: ${data.error || "unknown error"}`, "error");
-        return { ok: false, alarm: true, message: data.error || "Call Pallet 2 failed." };
+    label: "Call Pallet 2",
+    group: "pallet",
+    desc: "Bring Pallet 2 to the Operator Room (swaps with Pallet 1 if needed).",
+    run: async () => {
+      wmLog(">>> CALL_PALLET2 — bringing Pallet 2 to the Operator Room...");
+      const r = await ioPost("/api/io/call-pallet/2", {}, "Call Pallet 2");
+      if (!r.ok) {
+        wmLog(`!!! Call Pallet 2 failed: ${r.error}`, "error");
+        return { ok: false, alarm: true, message: r.error };
       }
-      const inOperator = data.state ? !!data.state.p2_operator : true;
-      WM_PALLET_STATE.operatorRoomPallet = inOperator ? "Pallet2" : WM_PALLET_STATE.operatorRoomPallet;
+      const inOperator = r.data.state ? !!r.data.state.p2_operator : true;
+      if (inOperator) WM_PALLET_STATE.operatorRoomPallet = "Pallet2";
       wmUpdatePalletLocationUI();
       wmLog("<<< Pallet changed.", "ok");
       return { ok: true, message: "Pallet 2 in Operator Room." };
-    } catch (err) {
-      wmLog("!!! Could not reach I/O service.", "error");
-      return { ok: false, alarm: true, message: "Could not reach I/O service." };
-    }
-  },
+    },
   },
 
+
+  // the vision/laser commands
   CAMERA_TRIGGER: {
     label: "Camera Trigger",
     group: "vision",
@@ -3438,9 +3507,14 @@ async function wmRunStartSequenceForPallet(pallet) {
 
 /* ============================================================
    LIVE ALARM STORE (stand-in until /api/alarms exists)
-   Shape matches the Alarm Center mock alarms, plus:
-     live:true, kind:'ack' (cleared by operator acknowledgement),
-     pallet, context, dedupeKey, occurrences
+   Shape: { id, tag, source, severity, description, occurred_at, last_at,
+            instructions, attempts, live:true,
+            kind: 'ack'     -> cleared by operator acknowledgement (e.g. GRADE_F)
+                  'recheck' -> tied to a real condition; Alarm Center's
+                               "Reset & Check Again" re-tests it (AC_RECHECKERS)
+                               and it also auto-clears when a later read
+                               shows the condition is gone,
+            pallet, context, dedupeKey, occurrences }
    ============================================================ */
 const LIVE_ALARM_KEY = "nlm_live_alarms";
 const LIVE_ALARM_HISTORY_MAX = 100;
@@ -3472,18 +3546,61 @@ function alarmNotifyChanged() {
   window.dispatchEvent(new CustomEvent("nlm:alarms-changed"));
 }
 
+/* ---- Fault catalog: one entry per real equipment fault.
+   Keys are the alarm tags (kept identical to the old mock tags so any
+   history you already have still lines up). ---- */
+const ALARM_FAULTS = {
+  ERR_READY_1: {
+    source: "MD-X2520A",
+    severity: "error",
+    instructions: [
+      "Check the marker's front panel display for the specific error code.",
+      "Clear the error on the unit itself (an Admin/Engineer can also send WX,ErrorClear from Add New Model > Command browser).",
+      "Confirm the laser safety shutter and enclosure are fully closed.",
+      "Click \"Reset & Check Again\" once the error is cleared on the unit.",
+    ],
+  },
+  IO_DISCONNECT: {
+    source: "Modbus I/O",
+    severity: "error",
+    instructions: [
+      "Check power and the Ethernet cable on the ETH-MODBUS-IO16R module(s) at the IPC panel.",
+      "Confirm the I/O bridge (io_service.py, port 5001) is running on the IPC and IO_SERVICE_URL in backend/node/.env points at it.",
+      "Ping Station 1 and Station 2 from the IPC to confirm they answer on the network.",
+      "Do not attempt a pallet change or door move until this clears.",
+      "Click \"Reset & Check Again\" once the link is back.",
+    ],
+  },
+  PALLET_CONFLICT: {
+    source: "Modbus I/O",
+    severity: "error",
+    instructions: [
+      "Do NOT run Change Pallet / Call Pallet while this alarm is active.",
+      "Look at both pallets: confirm which room each one is physically in.",
+      "Check the position sensors for the pallet(s) named in the description (LS0/LS1 — a stuck, misaligned or miswired sensor is the usual cause).",
+      "If a pallet stopped mid-travel, get an Engineer to recover the cylinder from its driver before continuing.",
+      "Click \"Reset & Check Again\" once the sensors agree.",
+    ],
+  },
+};
+
 // Raises (or, if the same dedupeKey is already active, bumps) an alarm.
+//   quietRepeat: when the alarm is already active, do nothing at all
+//                (no bump, no toast, no system-log row). Use for pollers.
+//   toast:       show a toast when raised (default true)
 function alarmRaise(opts) {
   const {
     tag, source, severity = "error", description,
     instructions = [], pallet = null, context = null,
     dedupeKey = `${tag}:${pallet || ""}`,
-    toast = true,
+    toast = true, kind = "ack", quietRepeat = false,
   } = opts;
 
   const store = alarmLoadStore();
   const nowIso = new Date().toISOString();
   let alarm = store.current.find((a) => a.dedupeKey === dedupeKey);
+
+  if (alarm && quietRepeat) return alarm;
 
   if (alarm) {
     alarm.occurrences = (alarm.occurrences || 1) + 1;
@@ -3495,7 +3612,7 @@ function alarmRaise(opts) {
       id: Date.now(), tag, source, severity, description,
       occurred_at: nowIso, last_at: nowIso,
       instructions, attempts: 0,
-      live: true, kind: "ack",
+      live: true, kind,
       pallet, context, dedupeKey, occurrences: 1,
     };
     store.current.unshift(alarm);
@@ -3509,13 +3626,33 @@ function alarmRaise(opts) {
   return alarm;
 }
 
+// Convenience wrapper for the catalog faults above.
+// opts: { description, pallet?, context?, toast?, quietRepeat? }
+function alarmRaiseFault(tag, opts = {}) {
+  const def = ALARM_FAULTS[tag];
+  if (!def) {
+    console.error(`alarmRaiseFault: unknown fault tag "${tag}"`);
+    return null;
+  }
+  return alarmRaise({
+    tag,
+    source: def.source,
+    severity: def.severity,
+    instructions: def.instructions,
+    kind: "recheck",
+    ...opts,
+  });
+}
+
 // Moves an active alarm to history. Returns the history entry (or null).
-function alarmClear(id, resolution) {
+function alarmClear(id, resolution, opts = {}) {
   const store = alarmLoadStore();
   const idx = store.current.findIndex((a) => a.id === id);
   if (idx === -1) return null;
   const [alarm] = store.current.splice(idx, 1);
-  const who = CURRENT_USER ? `${CURRENT_USER.name} (${CURRENT_USER.employee_id})` : "unknown";
+  const who = opts.auto
+    ? "auto-recovered"
+    : CURRENT_USER ? `${CURRENT_USER.name} (${CURRENT_USER.employee_id})` : "unknown";
   const entry = {
     ...alarm,
     resolved_at: new Date().toISOString(),
@@ -3523,27 +3660,44 @@ function alarmClear(id, resolution) {
   };
   store.history.unshift(entry);
   alarmSaveStore(store);
-  logClientEvent("alarm.cleared", `${alarm.tag}${alarm.pallet ? ` (${alarm.pallet})` : ""} cleared`, { tag: alarm.tag, pallet: alarm.pallet });
+  logClientEvent("alarm.cleared", `${alarm.tag}${alarm.pallet ? ` (${alarm.pallet})` : ""} cleared`, {
+    tag: alarm.tag, pallet: alarm.pallet, auto: !!opts.auto,
+  });
   return entry;
+}
+
+// Auto-clear: called whenever a healthy read proves the fault is gone.
+// Cheap no-op (one localStorage read) when nothing matching is active.
+function alarmResolveByTag(tag, resolution) {
+  const matches = alarmLoadStore().current.filter((a) => a.tag === tag && a.live);
+  matches.forEach((a) => alarmClear(a.id, resolution, { auto: true }));
+  if (matches.length) showToast(`${tag} cleared — ${resolution}.`, "success", 2500);
+  return matches.length;
+}
+
+// Persists a failed "Reset & Check Again" attempt on a live alarm.
+function alarmBumpAttempts(id) {
+  const store = alarmLoadStore();
+  const a = store.current.find((x) => x.id === id);
+  if (!a) return;
+  a.attempts = (a.attempts || 0) + 1;
+  alarmSaveStore(store);
 }
 
 /* ============================================================
    FOR ALARM CENTER PAGE
    ============================================================
-   NOTE: The equipment backend isn't wired up yet (hardware still
-   arriving), so this page runs entirely on mock data below.
-   When the backend is ready, replace acFetchAlarms()'s body with:
-     const [curRes, histRes] = await Promise.all([
-       apiFetch('/api/alarms/current'),
-       apiFetch('/api/alarms/history'),
-     ]);
-     AC.current = await curRes.json();
-     AC.history = await histRes.json();
-   and acResetAlarm() with a real call to
-     POST /api/alarms/:id/reset  -> { cleared: bool, alarm? }
-   Nothing else on this page needs to change.
+   Runs on the live alarm store (alarmRaise / alarmClear above).
+   - kind:'ack'     alarms (e.g. GRADE_F) clear on operator acknowledgement.
+   - kind:'recheck' alarms (laser error, I/O disconnect, pallet conflict)
+     are re-tested for real by AC_RECHECKERS[tag] when the operator clicks
+     "Reset & Check Again", and also auto-clear when a later read
+     (sequence or poller) shows the condition is gone.
+   The store is per-browser localStorage. When /api/alarms exists, swap
+   acFetchAlarms() and alarmSaveStore() — nothing else here needs to change.
    ============================================================ */
 
+// pass
 const AC_SOURCE_ICONS = {
   "MD-X2520A": "fa-solid fa-bullseye",
   "IAI Elecylinder": "fa-solid fa-arrows-left-right",
@@ -3553,109 +3707,6 @@ const AC_SOURCE_ICONS = {
   "Node API": "fa-solid fa-server",
 };
 
-// Each mock alarm carries `clearsAfterAttempts` purely so the "Reset &
-// Check Again" flow has something realistic to demo without hardware:
-// it simulates the alarm clearing after that many reset attempts.
-const AC_MOCK_CURRENT = [
-  {
-    id: 1,
-    tag: "ERR_READY_1",
-    source: "MD-X2520A",
-    severity: "error",
-    description: "Laser marker reports RX,Ready=1 (active error on the unit).",
-    occurred_at: "2026-08-28T08:12:00",
-    instructions: [
-      "Check the marker's front panel display for the specific error code.",
-      "Clear the error on the unit itself (or send WX,ErrorClear from Equipment > Raw Command).",
-      "Confirm the laser safety shutter and enclosure are fully closed.",
-      "Click \"Reset & Check Again\" below once the error is cleared on the unit.",
-    ],
-    clearsAfterAttempts: 1,
-    attempts: 0,
-  },
-  {
-    id: 2,
-    tag: "IO_DISCONNECT",
-    source: "Modbus I/O",
-    severity: "error",
-    description: "ETH-MODBUS-IO16R module (door / pallet cylinder I/O) is not responding on the network.",
-    occurred_at: "2026-08-28T08:05:30",
-    instructions: [
-      "Check the module's power and Ethernet cable at the IPC panel.",
-      "Ping the module's IP from the IPC to confirm it's on the network.",
-      "Power-cycle the module if the link light is off.",
-      "Click \"Reset & Check Again\" once the module is back online.",
-    ],
-    clearsAfterAttempts: 2,
-    attempts: 0,
-  },
-  {
-    id: 3,
-    tag: "CYL_TIMEOUT",
-    source: "IAI Elecylinder",
-    severity: "warn",
-    description: "Cylinder EC-GS4 (pallet exchange) did not reach target position within timeout.",
-    occurred_at: "2026-08-28T07:58:10",
-    instructions: [
-      "Check for a physical obstruction along the cylinder's travel path.",
-      "Verify 24V supply to the elecylinder driver.",
-      "Home the axis from the driver's front panel if available.",
-      "Click \"Reset & Check Again\" to re-check the position.",
-    ],
-    clearsAfterAttempts: 1,
-    attempts: 0,
-  },
-  {
-    id: 4,
-    tag: "DB_CONN_LOST",
-    source: "MySQL",
-    severity: "warn",
-    description: "Node API gateway lost its connection pool to the MySQL database.",
-    occurred_at: "2026-08-28T07:40:00",
-    instructions: [
-      "Check that the MySQL service is running on the host in backend/node/.env.",
-      "Check network connectivity between the Node gateway and the DB host.",
-      "Restart the Node API gateway (npm run dev / npm start) if MySQL is confirmed up.",
-      "Click \"Reset & Check Again\" to re-test the connection.",
-    ],
-    clearsAfterAttempts: 1,
-    attempts: 0,
-  },
-];
-
-const AC_MOCK_HISTORY = [
-  {
-    id: 101,
-    tag: "ERR_READY_1",
-    source: "MD-X2520A",
-    severity: "error",
-    description: "Laser marker reports RX,Ready=1 (active error on the unit).",
-    occurred_at: "2026-08-27T14:02:00",
-    resolved_at: "2026-08-27T14:11:00",
-    resolution: "Enclosure interlock sensor was misaligned; realigned and error cleared.",
-  },
-  {
-    id: 102,
-    tag: "CYL_TIMEOUT",
-    source: "IAI Elecylinder",
-    severity: "warn",
-    description: "Cylinder EC-GS4 (pallet exchange) did not reach target position within timeout.",
-    occurred_at: "2026-08-26T09:15:00",
-    resolved_at: "2026-08-26T09:22:00",
-    resolution: "Loose bracket was catching on the rail; retightened, cylinder homed successfully.",
-  },
-  {
-    id: 103,
-    tag: "IO_DISCONNECT",
-    source: "Modbus I/O",
-    severity: "error",
-    description: "ETH-MODBUS-IO16R module (door / pallet cylinder I/O) is not responding on the network.",
-    occurred_at: "2026-08-25T11:30:00",
-    resolved_at: "2026-08-25T11:34:00",
-    resolution: "Ethernet cable had come loose during panel maintenance; reseated.",
-  },
-];
-
 const AC = {
   tab: "current",
   current: [],
@@ -3663,6 +3714,91 @@ const AC = {
   selectedId: null,
   resetting: false,
 };
+
+// Each re-checker returns { cleared:boolean, message:string }.
+const AC_RECHECKERS = {
+  ERR_READY_1: async () => {
+    const raw = await eqSendRaw(getEquipmentConnection(), "RX,Ready");
+    if (!raw.ok) return { cleared: false, message: `Could not reach the laser: ${raw.message}` };
+    const status = (raw.response.split(",")[2] || "").trim();
+    if (status === "1") return { cleared: false, message: "Laser still reports an active error (RX,Ready=1)." };
+    return { cleared: true, message: `RX,Ready=${status || "?"} — laser no longer reports an error` };
+  },
+
+  IO_DISCONNECT: async () => {
+    const st = await ioFetchStatus();
+    if (!st.ok) return { cleared: false, message: `I/O bridge still not responding: ${st.error}` };
+    return { cleared: true, message: "I/O status read succeeded" };
+  },
+
+  PALLET_CONFLICT: async () => {
+    const st = await ioFetchStatus();
+    if (!st.ok) return { cleared: false, message: `Could not read pallet sensors: ${st.error}` };
+    const reason = ioPalletConflictReason(st.data);
+    if (reason) return { cleared: false, message: `Sensors still contradict each other: ${reason}.` };
+    return { cleared: true, message: "Pallet position sensors agree" };
+  },
+};
+
+async function acFetchAlarms() {
+  const live = alarmLoadStore();
+  AC.current = live.current.map((a) => ({ ...a }));
+  AC.history = live.history.map((a) => ({ ...a }));
+}
+
+async function acRefreshAll() {
+  await acFetchAlarms();
+  acRenderCounts();
+  acRenderTable();
+  acRenderDetail();
+  const stamp = document.getElementById("ac-last-updated");
+  if (stamp) stamp.textContent = `Updated ${new Date().toLocaleTimeString()}`;
+}
+
+async function acResetAlarm(id) {
+  const alarm = AC.current.find((a) => a.id === id);
+  if (!alarm || AC.resetting) return;
+
+  const checker = AC_RECHECKERS[alarm.tag];
+  if (!checker) {
+    showToast(`No re-check exists for ${alarm.tag}.`, "info");
+    return;
+  }
+
+  AC.resetting = true;
+  acRenderDetail();
+
+  let result;
+  try {
+    result = await checker(alarm);
+  } catch (err) {
+    result = { cleared: false, message: `Re-check failed: ${err.message}` };
+  }
+  AC.resetting = false;
+
+  if (result.cleared) {
+    alarmClear(id, result.message || "Re-check confirmed the fault is gone");
+    AC.selectedId = null;
+    await acRefreshAll();
+    showToast(`${alarm.tag} cleared and moved to history.`, "success");
+    return;
+  }
+
+  alarmBumpAttempts(id);
+  await acRefreshAll();
+  const box = document.getElementById("ac-reset-result");
+  if (box) {
+    box.innerHTML = `<div class="alert alert-error" style="margin-top:10px;">${escapeHtml(result.message || "Alarm is still present. Complete the steps above and try again.")}</div>`;
+  }
+  showToast(`${alarm.tag} is still active.`, "error");
+}
+
+// Live refresh: faults can be raised/cleared by sequences or pollers while
+// this page is open.
+function acOnAlarmsChanged() {
+  if (AC.resetting) return;
+  acRefreshAll();
+}
 
 function acSeverityLabel(sev) {
   return { error: "Error", warn: "Warning", info: "Info" }[sev] || sev;
@@ -3681,12 +3817,6 @@ function acDuration(startIso, endIso) {
   return `${Math.floor(mins / 60)}h ${mins % 60}m`;
 }
 
-async function acFetchAlarms() {
-  const live = alarmLoadStore();
-  AC.current = [...live.current, ...AC_MOCK_CURRENT].map((a) => ({ ...a }));
-  AC.history = [...live.history, ...AC_MOCK_HISTORY].map((a) => ({ ...a }));
-}
-
 function acContextText(c) {
   if (!c) return "";
   const parts = [];
@@ -3697,6 +3827,7 @@ function acContextText(c) {
   return parts.join(" · ");
 }
 
+// pass
 function acAcknowledgeAlarm(id) {
   const alarm = AC.current.find((a) => a.id === id);
   if (!alarm) return;
@@ -3718,11 +3849,13 @@ function acRenderCounts() {
   document.getElementById("ac-count-history").textContent = AC.history.length;
 }
 
+// pass
 function acSourceBadge(source) {
   const icon = AC_SOURCE_ICONS[source] || "fa-solid fa-plug";
   return `<span class="ac-source-badge"><i class="${icon}"></i> ${escapeHtml(source)}</span>`;
 }
 
+// pass
 function acRenderTable() {
   const head = document.getElementById("ac-table-head");
   const body = document.getElementById("ac-table-body");
@@ -3777,6 +3910,7 @@ function acFindSelected() {
   return list.find((a) => a.id === AC.selectedId) || null;
 }
 
+// pass
 function acRenderDetail() {
   const empty = document.getElementById("ac-detail-empty");
   const bodyEl = document.getElementById("ac-detail-body");
@@ -3863,60 +3997,10 @@ function acSelect(id) {
   acRenderDetail();
 }
 
-async function acResetAlarm(id) {
-  const alarm = AC.current.find((a) => a.id === id);
-  if (!alarm || AC.resetting) return;
-
-  AC.resetting = true;
-  acRenderDetail();
-
-  // Placeholder: replace with a real POST /api/alarms/:id/reset call that
-  // re-checks the underlying condition and returns { cleared: bool }.
-  await new Promise((resolve) => setTimeout(resolve, 900));
-
-  alarm.attempts += 1;
-  const cleared = alarm.attempts >= alarm.clearsAfterAttempts;
-  AC.resetting = false;
-
-  const resultBox = document.getElementById("ac-reset-result");
-
-  if (cleared) {
-    AC.current = AC.current.filter((a) => a.id !== id);
-    AC.history = [
-      {
-        id: 1000 + id,
-        tag: alarm.tag,
-        source: alarm.source,
-        severity: alarm.severity,
-        description: alarm.description,
-        occurred_at: alarm.occurred_at,
-        resolved_at: new Date().toISOString(),
-        resolution: "Cleared after operator followed the listed recovery steps and reset.",
-      },
-      ...AC.history,
-    ];
-    AC.selectedId = null;
-    acRenderCounts();
-    acRenderTable();
-    acRenderDetail();
-    showToast(`${alarm.tag} cleared and moved to history.`, "success");
-  } else {
-    acRenderTable();
-    acRenderDetail();
-    if (resultBox) {
-      // acRenderDetail rebuilds the DOM, so re-fetch the fresh node.
-    }
-    const freshBox = document.getElementById("ac-reset-result");
-    if (freshBox) {
-      freshBox.innerHTML = `<div class="alert alert-error" style="margin-top:10px;">Alarm is still present. Please complete the steps above and try again.</div>`;
-    }
-    showToast(`${alarm.tag} is still active.`, "error");
-  }
-}
-
 PAGE_INIT.alarm_center = function () {
   AC.tab = "current";
   AC.selectedId = null;
+  AC.resetting = false;
 
   document.querySelectorAll(".ac-tab").forEach((btn) => {
     btn.addEventListener("click", () => {
@@ -3929,21 +4013,13 @@ PAGE_INIT.alarm_center = function () {
     });
   });
 
-  document.getElementById("ac-refresh-btn").addEventListener("click", async () => {
-    await acFetchAlarms();
-    acRenderCounts();
-    acRenderTable();
-    acRenderDetail();
-    document.getElementById("ac-last-updated").textContent = `Updated ${new Date().toLocaleTimeString()}`;
-  });
+  document.getElementById("ac-refresh-btn").addEventListener("click", acRefreshAll);
+  window.addEventListener("nlm:alarms-changed", acOnAlarmsChanged);
+  acRefreshAll();
+};
 
-  (async () => {
-    await acFetchAlarms();
-    acRenderCounts();
-    acRenderTable();
-    acRenderDetail();
-    document.getElementById("ac-last-updated").textContent = `Updated ${new Date().toLocaleTimeString()}`;
-  })();
+PAGE_TEARDOWN.alarm_center = function () {
+  window.removeEventListener("nlm:alarms-changed", acOnAlarmsChanged);
 };
 
 /* ============================================================
@@ -5235,13 +5311,8 @@ function ioRenderStatus(data) {
 }
 
 async function ioPollStatus() {
-  try {
-    const res = await apiFetch("/api/io/status");
-    const data = await res.json().catch(() => ({}));
-    ioRenderStatus(res.ok ? data : { ok: false, error: data.error || `HTTP ${res.status}` });
-  } catch (err) {
-    ioRenderStatus({ ok: false, error: "Could not reach the I/O service." });
-  }
+  const st = await ioFetchStatus({ poll: true });
+  ioRenderStatus(st.ok ? st.data : { ok: false, error: st.error });
 }
 
 PAGE_INIT.add_new_model = function () {
