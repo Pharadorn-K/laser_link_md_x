@@ -267,3 +267,75 @@ role at insert time, not by anything the client sends.
   the exact swap-in points once hardware is connected.
 - CSS/JS files are sectioned with `FOR <PAGE NAME>` comments so new
   pages can be added without hunting through unrelated styles/logic.
+
+## Files for deployment
+
+```
+laser_link_md_x/
+├── .vscode/
+│   └── settings.json ✅
+├── backend/
+│   ├── node/
+│   │   ├── server.js ✅
+│   │   ├── config/
+│   │   │   └── db.js ✅
+│   │   ├── controllers/
+│   │   │   ├── auth.controller.js ✅
+│   │   │   ├── model.controller.js ✅
+│   │   │   ├── modelQueue.controller.js ✅
+│   │   │   ├── production.controller.js ✅
+│   │   │   ├── productionLog.controller.js ✅
+│   │   │   └── systemLog.controller.js ✅
+│   │   ├── db/
+│   │   │   └── schema.sql ✅
+│   │   ├── middleware/
+│   │   │   ├── equipmentCommandPolicy.js  ✅
+│   │   │   ├── requireRole.js ✅
+│   │   │   ├── upload.js ✅
+│   │   │   └── uploadModelPhoto.js ✅
+│   │   ├── routes/
+│   │   │   ├── auth.routes.js ✅
+│   │   │   ├── equipment.routes.js ✅
+│   │   │   ├── io.routes.js ✅
+│   │   │   ├── model.routes.js ✅
+│   │   │   ├── pieceQueue.routes.js ✅
+│   │   │   ├── production.routes.js ✅
+│   │   │   ├── productionLog.routes.js ✅
+│   │   │   ├── systemLog.routes.js ✅
+│   │   │   └── users.routes.js ✅
+│   │   └── services/
+│   │       ├── ioService.js ✅
+│   │       ├── laserService.js ✅
+│   │       └── systemLog.service.js ✅
+│   └── python/
+│       ├── io_core.py ✅
+│       ├── io_service.py ✅
+│       ├── laser_core.py ✅
+│       ├── laser_marker_service.py ✅
+│       └── requirements.txt ✅
+├── frontend/
+│   ├── login.html ✅
+│   ├── index.html ✅
+│   ├── css/
+│   │   ├── base.css ✅
+│   │   ├── login.css ✅
+│   │   └── dashboard.css ✅
+│   ├── images/
+│   │   └── favicon.ico ✅
+│   ├── js/
+│   │   ├── login.js ✅
+│   │   └── dashboard.js  ✅
+│   └── pages/
+│       ├── monitor.html ✅
+│       ├── production_log.html ✅
+│       ├── model_setting.html ✅
+│       ├── add_new_model.html ✅
+│       ├── alarm_center.html ✅
+│       ├── profile.html ✅
+│       ├── all_user.html  ✅
+│       └── system_log.html  ✅
+├── test/
+│   └── machine_simulator.py ✅
+├── .gitignore ✅
+└── README.md ✅
+```

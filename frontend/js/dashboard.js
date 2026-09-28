@@ -1233,21 +1233,21 @@ function monAutoActivePallets(mode) {
   return ["Pallet1", "Pallet2"];
 }
 
-function monAutoNextPallet(mode) {
-  const pallets = monAutoActivePallets(mode);
-  if (pallets.length === 1) return pallets[0];
-  const p = pallets[MON_AUTO.palletCycleIndex % pallets.length];
-  MON_AUTO.palletCycleIndex += 1;
-  return p;
-}
+// function monAutoNextPallet(mode) {
+//   const pallets = monAutoActivePallets(mode);
+//   if (pallets.length === 1) return pallets[0];
+//   const p = pallets[MON_AUTO.palletCycleIndex % pallets.length];
+//   MON_AUTO.palletCycleIndex += 1;
+//   return p;
+// }
 
-// Same lookup as monAutoNextPallet but read-only — used to preview which
-// pallet/model the *next* cycle will run against, without consuming a turn.
-function monPeekNextAutoPallet(mode) {
-  const pallets = monAutoActivePallets(mode);
-  if (pallets.length === 1) return pallets[0];
-  return pallets[MON_AUTO.palletCycleIndex % pallets.length];
-}
+// // Same lookup as monAutoNextPallet but read-only — used to preview which
+// // pallet/model the *next* cycle will run against, without consuming a turn.
+// function monPeekNextAutoPallet(mode) {
+//   const pallets = monAutoActivePallets(mode);
+//   if (pallets.length === 1) return pallets[0];
+//   return pallets[MON_AUTO.palletCycleIndex % pallets.length];
+// }
 
 // Animates step state (pending/active/done) directly on the already-visible
 // First Cycle / Loop Cycle lists built by monRenderSeqPreview(), instead of
@@ -1396,18 +1396,75 @@ async function monRunCycleSteps(pallet, steps, listId) {
   return { markingDone, failed };
 }
 
+// Reads the live pallet sensors and decides which pallet this auto cycle runs.
+//   AUTO1-2 : the pallet currently in the OPERATOR room (the cycle swaps it
+//             into the Machine Room and marks it).
+//   AUTO1/2 : fixed pallet, but it must actually be in the Operator Room.
+// Returns { ok:true, pallet } or { ok:false, message }.
+async function monResolveNextPallet(mode) {
+  const info = wmAutoModeInfo(mode);
+
+  // ioReadPalletPositions() -> ioFetchStatus(): raises IO_DISCONNECT /
+  // PALLET_CONFLICT alarms itself, so we only need to explain here.
+  const pos = await ioReadPalletPositions();
+  if (!pos.ok) {
+    const why = pos.conflict
+      ? "the pallet position sensors contradict each other"
+      : "the pallet position sensors could not be read";
+    return { ok: false, message: `Cannot start: ${why} — see Alarm Center.` };
+  }
+
+  // Prefer the operator-room sensor; if only the machine-room sensor reads,
+  // the other pallet must be in the operator room.
+  const operator =
+    pos.operator || (pos.machine ? (pos.machine === "Pallet1" ? "Pallet2" : "Pallet1") : null);
+
+  if (!operator) {
+    return { ok: false, message: "Cannot start: no pallet reads in either room (in transit or sensor fault)." };
+  }
+
+  if (info.kind === "single") {
+    if (operator !== info.pallet) {
+      return {
+        ok: false,
+        message: `${mode}: ${info.pallet} is not in the Operator Room (${operator} is). Use Call Pallet on Model Setting first.`,
+      };
+    }
+    return { ok: true, pallet: info.pallet };
+  }
+
+  if (!getSelectedJob(operator)) {
+    return {
+      ok: false,
+      message: `${operator} is in the Operator Room but has no model selected — choose one on Model Setting.`,
+    };
+  }
+  return { ok: true, pallet: operator };
+}
+
+// Returns true if a cycle actually started, false if it was refused before
+// anything moved (so the queue processor can stop instead of retrying).
 async function monAutoRunOneCycle(mode) {
   const info = wmAutoModeInfo(mode);
   monShowPreview(); // keep the Pallet 1 / Pallet 2 columns visible the whole run
 
-  let pallet, listId, baseSteps;
+  // Decide the pallet from the live sensors, not from a counter.
+  const next = await monResolveNextPallet(mode);
+  if (!next.ok) {
+    showToast(next.message);
+    return false;
+  }
+  const pallet = next.pallet;
+
+  // Keep the in-memory operator-room state in step with the sensors so
+  // CHANGE_PALLET (which derives its target from it) swaps the right way.
+  WM_PALLET_STATE.operatorRoomPallet = pallet;
+
+  let listId, baseSteps;
   if (info.kind === "single") {
-    pallet = info.pallet;
     listId = "mon-preview-loop-list";
     baseSteps = AUTO_SINGLE_LOOP_STEPS;
   } else {
-    // AUTO1-2: alternate which pallet runs next; animate that pallet's column.
-    pallet = monAutoNextPallet(mode);
     listId = pallet === "Pallet1" ? "mon-preview-p1-list" : "mon-preview-p2-list";
     baseSteps = AUTO_SEQUENCE_STEPS;
   }
@@ -1423,6 +1480,7 @@ async function monAutoRunOneCycle(mode) {
   // Log the part only if it was actually marked. A failed door/pallet/laser
   // step before Start Marking must not create a production_log row.
   if (job && markingDone) await monReportCount(pallet, job);
+  return true;
 }
 
 async function monProcessAutoQueue(mode) {
@@ -1434,14 +1492,24 @@ async function monProcessAutoQueue(mode) {
 
   while (MON_AUTO.queue > 0) {
     MON_AUTO.queue -= 1;
-    await monAutoRunOneCycle(mode);
+    const started = await monAutoRunOneCycle(mode);
+    if (!started) {
+      // Refused before any motion (sensors unreadable / wrong pallet / no
+      // model). Drop the remaining queued starts so the same error
+      // isn't toasted over and over.
+      MON_AUTO.queue = 0;
+      break;
+    }
   }
 
   MON_AUTO.running = false;
   MON.running = false;
   MON.activePallet = null;
-  document.getElementById("mon-signal-pill").className = "status-pill offline";
-  document.getElementById("mon-signal-pill").innerHTML = '<span class="dot"></span> Waiting for signal';
+  const pill = document.getElementById("mon-signal-pill");
+  if (pill) {
+    pill.className = "status-pill offline";
+    pill.innerHTML = '<span class="dot"></span> Waiting for signal';
+  }
   monShowPreview();
   monRenderAll();
 }
@@ -3308,7 +3376,7 @@ async function wmActivateAutoMode(mode) {
   MON_AUTO.queue = 0;
   MON_AUTO.running = false;
   MON_AUTO.roundCount = { Pallet1: 0, Pallet2: 0 };
-  MON_AUTO.palletCycleIndex = 0;
+  // MON_AUTO.palletCycleIndex = 0;
   setTimeout(() => loadPage("monitor"), 0);
 }
 
