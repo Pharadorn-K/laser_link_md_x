@@ -175,6 +175,7 @@ cd backend/python
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 python laser_marker_service.py       # listens on :5000
+python io_service.py                 # listens on :5001
 ```
 
 Talks to the MD-X2520A directly over TCP/IP using the ASCII WX/RX

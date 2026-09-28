@@ -2312,13 +2312,61 @@ async function wmStub(name, ms = 500) {
   return { ok: true, message: `${name} OK (simulated)` };
 }
 
-/* ---- Raw equipment command helper (transport-level only) ----
-   Returns { ok, response, message }. ok=false means the HTTP call
-   itself failed (unreachable service, connection error) — it does
-   NOT parse WX,OK vs WX,NG; callers check that themselves since the
-   right check differs per command (RX,Ready's status digit vs a
-   plain WX,OK/WX,NG). ---- */
-async function eqSendRaw(conn, command) {
+/* ---- Laser NG -> Alarm Center ----
+   The Python service returns HTTP 200 / ok:true for ANY reply from the marker,
+   including "WX,NG,<code>,<message>". Inspect every reply here so a rejected
+   command becomes a real alarm instead of only a toast. Transient "busy"
+   replies are NOT alarms (the sequences already wait/retry those). */
+const LASER_NG_TRANSIENT = /busy|controlling shutter/i;
+
+function eqParseNg(response) {
+  const m = /^(?:WX|RX),NG,([^,]*)(?:,(.*))?$/.exec(String(response || "").trim());
+  return m ? { code: (m[1] || "").trim(), message: (m[2] || "").trim() } : null;
+}
+
+function eqJobNoFromCommand(command) {
+  const m = /^WX,(?:JobNo=|JOB=)(\d{1,4})/.exec(command);
+  return m ? Number(m[1]) : null;
+}
+
+function eqInspectLaserResponse(command, response) {
+  const ng = eqParseNg(response);
+
+  if (!ng) {
+    // A healthy reply proves the matching fault is gone.
+    if (/^WX,JobNo=/.test(command) && /^WX,OK/.test(response)) {
+      alarmResolveByTag("LASER_S006", "marker accepted WX,JobNo again");
+    }
+    if (/^WX,Check2DCode5=/.test(command) && /^WX,OK/.test(response)) {
+      alarmResolveByTag("LASER_S087", "2D code read succeeded");
+    }
+    return;
+  }
+
+  if (LASER_NG_TRANSIENT.test(response)) return; // busy is not a fault
+
+  const pallet = MON.activePallet || WM.runningPallet || null;
+  const job = pallet ? getSelectedJob(pallet) : null;
+  const jobNo = eqJobNoFromCommand(command) ?? (job ? job.job_no : null);
+  const cmdShort = command.length > 60 ? command.slice(0, 57) + "…" : command;
+  const detail = `${ng.code}${ng.message ? ` — ${ng.message}` : ""}`;
+  const context = {
+    command, code: ng.code, job_no: jobNo,
+    ...(job ? { model: job.model, lot_no: job.lot_no || "" } : {}),
+  };
+
+  const known = ng.code === "S006" ? "LASER_S006" : ng.code === "S087" ? "LASER_S087" : "LASER_NG";
+  alarmRaiseFault(known, {
+    description: `Marker rejected "${cmdShort}": ${detail}.`,
+    pallet,
+    context,
+    dedupeKey: `${known}:${known === "LASER_NG" ? ng.code : ""}:${pallet || ""}`,
+    toast: false, // the sequence runner already toasts the failed step
+    ...(known === "LASER_S006" ? {} : { kind: "ack" }),
+  });
+}
+
+async function eqSendRaw(conn, command, opts = {}) {
   try {
     const res = await apiFetch("/api/equipment/raw", {
       method: "POST",
@@ -2328,12 +2376,13 @@ async function eqSendRaw(conn, command) {
     if (!res.ok || data.ok === false) {
       return { ok: false, response: null, message: (data && data.error) || `Command failed (${command}).` };
     }
-    return { ok: true, response: data.response || "", message: data.response || "" };
+    const response = data.response || "";
+    if (!opts.skipInspect) eqInspectLaserResponse(command, response);
+    return { ok: true, response, message: response };
   } catch (err) {
     return { ok: false, response: null, message: "Could not reach the equipment service." };
   }
 }
-
 /* ---- I/O fault detection ----
    ASSUMPTIONS (validate against real hardware):
    1. GET /api/io/status only fails when the Modbus bridge can't read the
@@ -3582,6 +3631,36 @@ const ALARM_FAULTS = {
       "Click \"Reset & Check Again\" once the sensors agree.",
     ],
   },
+  LASER_S006: {
+    source: "MD-X2520A",
+    severity: "error",
+    instructions: [
+      "The marker rejected the command with S006 (Priority Error): another controller almost certainly has control of it.",
+      "Close Program Marking Builder Plus / exit \"Control\" mode on the laptop connected over USB-LAN (or release the marker from any other controlling tool).",
+      "Confirm nobody is operating the marker from its own panel or another PC.",
+      "Click \"Reset & Check Again\" — the job is re-selected to confirm the marker accepts commands again.",
+    ],
+  },
+  LASER_S087: {
+    source: "MD-X2520A",
+    severity: "error",
+    instructions: [
+      "The 2D code could not be read during Check2DCode5 (S087). Remove the part and inspect the mark.",
+      "If the same part was marked twice in the same place, the second mark can destroy the first code. Use a fresh part.",
+      "Check the part sits under the camera in the Machine Room, and lens cleanliness/lighting.",
+      "If it repeats on good parts, call an Engineer to re-tune this job's Check2DCode5 values (A-Q).",
+      "Click \"Acknowledge & Clear\" once the part has been handled.",
+    ],
+  },
+  LASER_NG: {
+    source: "MD-X2520A",
+    severity: "error",
+    instructions: [
+      "The marker rejected a command (see the description for the error code and message).",
+      "Look up the code in the MD-X2000/2500 command reference and correct the cause on the unit or in the job settings.",
+      "Click \"Acknowledge & Clear\" once it is handled.",
+    ],
+  },
 };
 
 // Raises (or, if the same dedupeKey is already active, bumps) an alarm.
@@ -3737,6 +3816,16 @@ const AC_RECHECKERS = {
     const reason = ioPalletConflictReason(st.data);
     if (reason) return { cleared: false, message: `Sensors still contradict each other: ${reason}.` };
     return { cleared: true, message: "Pallet position sensors agree" };
+  },
+
+  LASER_S006: async (alarm) => {
+    const jobNo = alarm.context && alarm.context.job_no;
+    const cmd = jobNo !== null && jobNo !== undefined ? `WX,JobNo=${padJob(jobNo)}` : "RX,Ready";
+    const raw = await eqSendRaw(getEquipmentConnection(), cmd, { skipInspect: true });
+    if (!raw.ok) return { cleared: false, message: `Could not reach the laser: ${raw.message}` };
+    const ng = eqParseNg(raw.response);
+    if (ng) return { cleared: false, message: `Marker still rejects commands: ${ng.code} ${ng.message}`.trim() };
+    return { cleared: true, message: "Marker accepted the command again" };
   },
 };
 
@@ -6310,78 +6399,6 @@ function plCode2dBadgeHtml(code) {
 const PL_SUMMARY_COLSPAN = 13;
 const PL_RAW_COLSPAN = 9;
 
-// function plColspan() {
-//   return PL.view === "summary" ? PL_SUMMARY_COLSPAN : PL_RAW_COLSPAN;
-// }
-
-// function plRenderHead() {
-//   const head = document.getElementById("pl-table-head");
-//   if (!head) return;
-//   head.innerHTML = PL.view === "summary"
-//     ? `<tr>
-//          <th>Part Name</th>
-//          <th>Job No.</th>
-//          <th>Lot No.</th>
-//          <th>Condition</th>
-//          <th>Setting By</th>
-//          <th>Mass Production By</th>
-//          <th>Count Setting</th>
-//          <th>Count Mass</th>
-//          <th>Total Count</th>
-//          <th>Start</th>
-//          <th>End</th>
-//        </tr>`
-//     : `<tr>
-//          <th>When</th>
-//          <th>Part Name</th>
-//          <th>Job No.</th>
-//          <th>Lot No.</th>
-//          <th>Pallet</th>
-//          <th>Type</th>
-//          <th>By</th>
-//          <th>2D Code Result</th>
-//          <th>Condition</th>
-//        </tr>`;
-// }
-
-// function plRenderRows() {
-//   const tbody = document.getElementById("pl-table-body");
-//   if (!tbody) return;
-
-//   if (PL.rows.length === 0) {
-//     tbody.innerHTML = `<tr><td colspan="${plColspan()}" class="eq-queue-empty">No production ${PL.view === "summary" ? "history" : "entries"} for this month.</td></tr>`;
-//     return;
-//   }
-
-//   tbody.innerHTML = PL.view === "summary"
-//     ? PL.rows.map((r) => `
-//         <tr>
-//           <td>${escapeHtml(r.model)}</td>
-//           <td class="mono">${padJob(r.job_no)}</td>
-//           <td class="mono">${escapeHtml(r.lot_no || "—")}</td>
-//           <td>${escapeHtml(r.condition_summary)}</td>
-//           <td>${escapeHtml(r.setting_users)}</td>
-//           <td>${escapeHtml(r.mass_users)}</td>
-//           <td class="mono">${r.count_setting}</td>
-//           <td class="mono">${r.count_mass}</td>
-//           <td class="mono"><strong>${r.total_count}</strong></td>
-//           <td class="mono">${plFormatDate(r.start_at)}</td>
-//           <td class="mono">${plFormatDate(r.end_at)}</td>
-//         </tr>`).join("")
-//     : PL.rows.map((r) => `
-//         <tr>
-//           <td class="mono">${plFormatDate(r.marked_at)}</td>
-//           <td>${escapeHtml(r.model)}</td>
-//           <td class="mono">${padJob(r.job_no)}</td>
-//           <td class="mono">${escapeHtml(r.lot_no || "—")}</td>
-//           <td>${escapeHtml(r.pallet_no || "—")}</td>
-//           <td><span class="tag ${r.type === "mass" ? "approved" : "pending"}">${r.type === "mass" ? "Mass" : "Setting"}</span></td>
-//           <td>${escapeHtml(r.user_name)}${r.employee_id ? ` <span class="mono" style="color:var(--ink-faint)">(${escapeHtml(r.employee_id)})</span>` : ""}</td>
-//           <td>${plCode2dBadgeHtml(r.code2d_result)}</td>
-//           <td>${escapeHtml(r.condition_summary)}</td>
-//         </tr>`).join("");
-// }
-
 
 function plRenderHead() {
   const head = document.getElementById("pl-table-head");
@@ -6542,54 +6559,6 @@ function plCsvCell(value) {
   return str;
 }
 
-// function plBuildSummaryCsv(rows) {
-//   const headers = [
-//     "Part Name", "Job No.", "Lot No.", "Condition",
-//     "Setting By", "Mass Production By",
-//     "Count Setting", "Count Mass", "Total Count",
-//     "Start", "End",
-//   ];
-//   const lines = [headers.map(plCsvCell).join(",")];
-//   rows.forEach((r) => {
-//     lines.push([
-//       plCsvCell(r.model),
-//       plCsvCell(padJob(r.job_no)),
-//       plCsvCell(r.lot_no || ""),
-//       plCsvCell(r.condition_summary),
-//       plCsvCell(r.setting_users),
-//       plCsvCell(r.mass_users),
-//       plCsvCell(r.count_setting),
-//       plCsvCell(r.count_mass),
-//       plCsvCell(r.total_count),
-//       plCsvCell(plFormatDate(r.start_at)),
-//       plCsvCell(plFormatDate(r.end_at)),
-//     ].join(","));
-//   });
-//   return lines.join("\r\n");
-// }
-
-// function plBuildRawCsv(rows) {
-//   const headers = [
-//     "When", "Part Name", "Job No.", "Lot No.", "Pallet",
-//     "Type", "By", "Employee ID", "2D Code Result", "Condition",
-//   ];
-//   const lines = [headers.map(plCsvCell).join(",")];
-//   rows.forEach((r) => {
-//     lines.push([
-//       plCsvCell(plFormatDate(r.marked_at)),
-//       plCsvCell(r.model),
-//       plCsvCell(padJob(r.job_no)),
-//       plCsvCell(r.lot_no || ""),
-//       plCsvCell(r.pallet_no || ""),
-//       plCsvCell(r.type === "mass" ? "Mass" : "Setting"),
-//       plCsvCell(r.user_name),
-//       plCsvCell(r.employee_id || ""),
-//       plCsvCell(PL_CODE2D_LABELS[r.code2d_result] || (r.code2d_result || "")),
-//       plCsvCell(r.condition_summary),
-//     ].join(","));
-//   });
-//   return lines.join("\r\n");
-// }
 
 function plBuildSummaryCsv(rows) {
   const headers = [
