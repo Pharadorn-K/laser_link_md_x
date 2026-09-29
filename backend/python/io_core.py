@@ -109,8 +109,12 @@ POLL_INTERVAL_S = 0.25
 
 
 class IOError_(Exception):
-    pass
-
+    def __init__(self, message, fault_type="interlock"):
+        # fault_type: "comm" (bridge/station unreachable), "alarm" (a real
+        # DI alarm fired while waiting), "timeout" (plain wait timeout,
+        # no alarm), "interlock" (precondition/position check failed)
+        super().__init__(message)
+        self.fault_type = fault_type
 
 class IOClient:
     def __init__(self, stations=None):
@@ -194,9 +198,26 @@ class IOClient:
     def read_s2_di(self, name):
         return self._read_di(2, STATION2_DI, name)
 
-    def wait_for(self, read_fn, expected, timeout=WAIT_TIMEOUT_S, poll=POLL_INTERVAL_S):
+    def wait_for(self, read_fn, expected, timeout=WAIT_TIMEOUT_S, poll=POLL_INTERVAL_S,
+                 abort_fn=None, abort_message=None):
+        """
+        Polls read_fn() against expected every `poll` seconds until it
+        matches or `timeout` elapses.
+
+        If abort_fn is given, it is checked on every poll BEFORE the
+        position read. As soon as it returns True this raises
+        immediately (does NOT wait out the rest of the timeout), with
+        fault_type='alarm' — so a real alarm firing mid-move is reported
+        right away instead of silently waiting up to `timeout` seconds
+        and then reporting a generic "did not confirm position" error.
+        """
         deadline = time.time() + timeout
         while time.time() < deadline:
+            if abort_fn is not None and abort_fn():
+                raise IOError_(
+                    abort_message or "Aborted: fault condition detected while waiting.",
+                    fault_type="alarm",
+                )
             if read_fn() == expected:
                 return True
             time.sleep(poll)
@@ -387,36 +408,126 @@ class IOClient:
         if not (self.read_s1_di("forward_comp_pallet1") and self.read_s1_di("backward_comp_pallet2")):
             raise IOError_("Final position check failed: expected P1 in Operator Room, P2 in Machine Room.")
         log_fn("Step 13: OK — P1 Operator Room, P2 Machine Room.")
+    def _run_case1(self, log_fn):
+        # Case 1: Pallet1 Machine -> Operator, Pallet2 Operator -> Machine.
+        log_fn("Step 4: Pallet 2 clearing down (DO03 ON).")
+        self.write_s1_coil("backward_command_pallet2", True)
+        try:
+            ok = self.wait_for(
+                lambda: self.read_s2_di("limit_pallet2_down"), True,
+                abort_fn=lambda: self.read_s1_di("alarm_pallet2"),
+                abort_message="Pallet 2 alarm (DI05) came on while clearing down — motion stopped.",
+            )
+        finally:
+            log_fn("Step 6: Stopping Pallet 2 clear move (DO03 OFF).")
+            self.write_s1_coil("backward_command_pallet2", False)
+        if not ok:
+            raise IOError_(
+                "Pallet 2 did not confirm clear-level position (DI03 Station2) within timeout.",
+                fault_type="timeout",
+            )
+
+        log_fn("Step 7: Pallet 1 moving to Operator Room (DO01 ON).")
+        self.write_s1_coil("forward_command_pallet1", True)
+        try:
+            ok = self.wait_for(
+                lambda: self.read_s1_di("forward_comp_pallet1"), True,
+                abort_fn=lambda: self.read_s1_di("alarm_pallet1"),
+                abort_message="Pallet 1 alarm (DI02) came on while moving to the Operator Room — motion stopped.",
+            )
+        finally:
+            log_fn("Step 9: Stopping Pallet 1 (DO01 OFF).")
+            self.write_s1_coil("forward_command_pallet1", False)
+        if not ok:
+            raise IOError_(
+                "Pallet 1 did not confirm Operator Room position (DI01) within timeout.",
+                fault_type="timeout",
+            )
+
+        log_fn("Step 10: Pallet 2 moving up into Machine Room (DO03 ON).")
+        self.write_s1_coil("backward_command_pallet2", True)
+        try:
+            ok = self.wait_for(
+                lambda: self.read_s1_di("backward_comp_pallet2"), True,
+                abort_fn=lambda: self.read_s1_di("alarm_pallet2"),
+                abort_message="Pallet 2 alarm (DI05) came on while moving into the Machine Room — motion stopped.",
+            )
+        finally:
+            log_fn("Step 12: Stopping Pallet 2 (DO03 OFF).")
+            self.write_s1_coil("backward_command_pallet2", False)
+        if not ok:
+            raise IOError_(
+                "Pallet 2 did not confirm Machine Room position (DI03 Station1) within timeout.",
+                fault_type="timeout",
+            )
+
+        log_fn("Step 13: Recheck final position...")
+        if not (self.read_s1_di("forward_comp_pallet1") and self.read_s1_di("backward_comp_pallet2")):
+            raise IOError_(
+                "Final position check failed: expected P1 in Operator Room, P2 in Machine Room.",
+                fault_type="interlock",
+            )
+        log_fn("Step 13: OK — P1 Operator Room, P2 Machine Room.")
 
     def _run_case2(self, log_fn):
         # Case 2: Pallet1 Operator -> Machine, Pallet2 Machine -> Operator.
         log_fn("Step 4: Pallet 2 clearing down (DO04 ON).")
         self.write_s1_coil("forward_command_pallet2", True)
-        ok = self.wait_for(lambda: self.read_s2_di("limit_pallet2_down"), True)
-        log_fn("Step 6: Stopping Pallet 2 clear move (DO04 OFF).")
-        self.write_s1_coil("forward_command_pallet2", False)
+        try:
+            ok = self.wait_for(
+                lambda: self.read_s2_di("limit_pallet2_down"), True,
+                abort_fn=lambda: self.read_s1_di("alarm_pallet2"),
+                abort_message="Pallet 2 alarm (DI05) came on while clearing down — motion stopped.",
+            )
+        finally:
+            log_fn("Step 6: Stopping Pallet 2 clear move (DO04 OFF).")
+            self.write_s1_coil("forward_command_pallet2", False)
         if not ok:
-            raise IOError_("Pallet 2 did not confirm clear-level position (DI03 Station2) within timeout.")
+            raise IOError_(
+                "Pallet 2 did not confirm clear-level position (DI03 Station2) within timeout.",
+                fault_type="timeout",
+            )
 
         log_fn("Step 7: Pallet 1 moving to Machine Room (DO00 ON).")
         self.write_s1_coil("backward_command_pallet1", True)
-        ok = self.wait_for(lambda: self.read_s1_di("backward_comp_pallet1"), True)
-        log_fn("Step 9: Stopping Pallet 1 (DO00 OFF).")
-        self.write_s1_coil("backward_command_pallet1", False)
+        try:
+            ok = self.wait_for(
+                lambda: self.read_s1_di("backward_comp_pallet1"), True,
+                abort_fn=lambda: self.read_s1_di("alarm_pallet1"),
+                abort_message="Pallet 1 alarm (DI02) came on while moving to the Machine Room — motion stopped.",
+            )
+        finally:
+            log_fn("Step 9: Stopping Pallet 1 (DO00 OFF).")
+            self.write_s1_coil("backward_command_pallet1", False)
         if not ok:
-            raise IOError_("Pallet 1 did not confirm Machine Room position (DI00) within timeout.")
+            raise IOError_(
+                "Pallet 1 did not confirm Machine Room position (DI00) within timeout.",
+                fault_type="timeout",
+            )
 
         log_fn("Step 10: Pallet 2 moving up into Operator Room (DO04 ON).")
         self.write_s1_coil("forward_command_pallet2", True)
-        ok = self.wait_for(lambda: self.read_s1_di("forward_comp_pallet2"), True)
-        log_fn("Step 12: Stopping Pallet 2 (DO04 OFF).")
-        self.write_s1_coil("forward_command_pallet2", False)
+        try:
+            ok = self.wait_for(
+                lambda: self.read_s1_di("forward_comp_pallet2"), True,
+                abort_fn=lambda: self.read_s1_di("alarm_pallet2"),
+                abort_message="Pallet 2 alarm (DI05) came on while moving into the Operator Room — motion stopped.",
+            )
+        finally:
+            log_fn("Step 12: Stopping Pallet 2 (DO04 OFF).")
+            self.write_s1_coil("forward_command_pallet2", False)
         if not ok:
-            raise IOError_("Pallet 2 did not confirm Operator Room position (DI04) within timeout.")
+            raise IOError_(
+                "Pallet 2 did not confirm Operator Room position (DI04) within timeout.",
+                fault_type="timeout",
+            )
 
         log_fn("Step 13: Recheck final position...")
         if not (self.read_s1_di("backward_comp_pallet1") and self.read_s1_di("forward_comp_pallet2")):
-            raise IOError_("Final position check failed: expected P1 in Machine Room, P2 in Operator Room.")
+            raise IOError_(
+                "Final position check failed: expected P1 in Machine Room, P2 in Operator Room.",
+                fault_type="interlock",
+            )
         log_fn("Step 13: OK — P1 Machine Room, P2 Operator Room.")
 
     # ---- Lamps (stack light) ----

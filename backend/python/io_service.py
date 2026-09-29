@@ -29,8 +29,11 @@ def front_door():
             return jsonify({"ok": False, "error": "action must be 'open' or 'close'."}), 400
         return jsonify({"ok": True})
     except IOError_ as e:
-        return jsonify({"ok": False, "error": str(e)}), 502
-
+        return jsonify({
+            "ok": False,
+            "error": str(e),
+            "fault_type": getattr(e, "fault_type", "interlock"),
+        }), 502
 
 def _run_change_pallet(target_pallet):
     logs = []
@@ -38,8 +41,12 @@ def _run_change_pallet(target_pallet):
         final_state = _client.change_pallet_to_operator(target_pallet, log_fn=lambda m: logs.append(m))
         return jsonify({"ok": True, "log": logs, "state": final_state})
     except IOError_ as e:
-        return jsonify({"ok": False, "error": str(e), "log": logs}), 502
-
+        return jsonify({
+            "ok": False,
+            "error": str(e),
+            "log": logs,
+            "fault_type": getattr(e, "fault_type", "interlock"),
+        }), 502
 
 @app.post("/api/io/change-pallet")
 def change_pallet():
@@ -82,8 +89,11 @@ def alarm_reset(axis):
         _client.reset_axis_alarm(axis)
         return jsonify({"ok": True})
     except IOError_ as e:
-        return jsonify({"ok": False, "error": str(e)}), 502
-
+        return jsonify({
+            "ok": False,
+            "error": str(e),
+            "fault_type": getattr(e, "fault_type", "interlock"),
+        }), 502
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5001, debug=True, use_reloader=False, threaded=True)

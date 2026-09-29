@@ -2616,10 +2616,23 @@ async function ioPost(path, body, label) {
     const data = await res.json().catch(() => ({}));
     if (!res.ok || !data.ok) {
       const error = data.error || `${label} failed.`;
-      if (ioIsCommFaultMessage(error)) ioRaiseDisconnect(error);
-      return { ok: false, data, error };
+      // Prefer the structured fault_type from the Python service; fall
+      // back to the old message-sniffing only if it's absent (older
+      // service build).
+      const faultType = data.fault_type || (ioIsCommFaultMessage(error) ? "comm" : null);
+
+      if (faultType === "comm") {
+        ioRaiseDisconnect(error);
+      } else if (faultType === "alarm") {
+        alarmRaiseFault("PALLET_ALARM", {
+          description: `${label}: ${alarmShortText(error, 160)}`,
+          toast: false, // the sequence runner / caller already toasts the failed step
+        });
+      }
+      return { ok: false, data, error, fault_type: faultType };
     }
     alarmResolveByTag("IO_DISCONNECT", "an I/O command succeeded");
+    alarmResolveByTag("PALLET_ALARM", "the command completed without an active alarm");
     return { ok: true, data };
   } catch (err) {
     if (err && err.message === "Not authenticated") return { ok: false, data: {}, error: "Not authenticated." };
@@ -3796,8 +3809,18 @@ const ALARM_FAULTS = {
       "Click \"Reset & Check Again\" once the marker responds to RX,Ready.",
     ],
   },
+  PALLET_ALARM: {
+    source: "Modbus I/O",
+    severity: "error",
+    instructions: [
+      "A pallet alarm (DI02 Pallet 1 / DI05 Pallet 2) came on while the pallet cylinder was moving — the command coil was already turned off automatically.",
+      "Physically inspect the pallet cylinder (IAI EC-S7H-500-3-WA #2 = Pallet 1, #3 = Pallet 2) for an obstruction, E-stop, or servo fault.",
+      "Check that cylinder's own driver/controller for a fault code and clear it there first.",
+      "Once the physical cause is cleared, use Alarm Reset for that pallet before retrying.",
+      "Click \"Reset & Check Again\" once the alarm is cleared.",
+    ],
+  },
 };
-
 // Raises (or, if the same dedupeKey is already active, bumps) an alarm.
 //   quietRepeat: when the alarm is already active, do nothing at all
 //                (no bump, no toast, no system-log row). Use for pollers.
@@ -3967,6 +3990,16 @@ const AC_RECHECKERS = {
     const raw = await eqSendRaw(getEquipmentConnection(), "RX,Ready", { skipInspect: true });
     if (!raw.ok) return { cleared: false, message: raw.message };
     return { cleared: true, message: "The marker responded to RX,Ready again." };
+  },
+  PALLET_ALARM: async () => {
+    const st = await ioFetchStatus();
+    if (!st.ok) return { cleared: false, message: `Could not read pallet sensors: ${st.error}` };
+    if (st.data.alarm_pallet1 || st.data.alarm_pallet2) {
+      const which = [st.data.alarm_pallet1 ? "Pallet 1" : null, st.data.alarm_pallet2 ? "Pallet 2" : null]
+        .filter(Boolean).join(", ");
+      return { cleared: false, message: `${which} alarm is still active.` };
+    }
+    return { cleared: true, message: "No pallet alarm is active." };
   },
 };
 
