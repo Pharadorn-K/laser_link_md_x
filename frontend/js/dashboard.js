@@ -15,6 +15,11 @@ function authToken() {
   return localStorage.getItem("nlm_token");
 }
 
+function alarmShortText(str, max = 100) {
+  const s = String(str || "");
+  return s.length > max ? `${s.slice(0, max - 1).trimEnd()}…` : s;
+}
+
 /* ============================================================
    TOP BAR CLOCK — DD/MM/YYYY HH:MM:SS, ticks every second
    ============================================================ */
@@ -877,12 +882,13 @@ function monRenderAlarmBanner() {
     return;
   }
   const latest = active[0];
+  const fullText = `${active.length} active alarm${active.length === 1 ? "" : "s"} — latest: ${latest.tag}${latest.pallet ? ` (${latest.pallet})` : ""}: ${latest.description}`;
   el.style.display = "";
   el.innerHTML = `
     <i class="fa-solid fa-triangle-exclamation"></i>
-    <div class="mon-alarm-text">
+    <div class="mon-alarm-text" title="${escapeHtml(fullText)}">
       <strong>${active.length} active alarm${active.length === 1 ? "" : "s"}</strong>
-      — latest: ${escapeHtml(latest.tag)}${latest.pallet ? ` (${escapeHtml(latest.pallet)})` : ""}: ${escapeHtml(latest.description)}
+      — latest: ${escapeHtml(latest.tag)}${latest.pallet ? ` (${escapeHtml(latest.pallet)})` : ""}: ${escapeHtml(alarmShortText(latest.description, 90))}
     </div>
     <button type="button" class="btn btn-sm" id="mon-alarm-open-btn">Open Alarm Center</button>`;
   document.getElementById("mon-alarm-open-btn").addEventListener("click", () => loadPage("alarm_center"));
@@ -2446,11 +2452,11 @@ async function eqSendRaw(conn, command, opts = {}) {
       const message = (data && data.error) || `Command failed (${command}).`;
       if (!opts.skipInspect) {
         alarmRaiseFault("LASER_DISCONNECT", {
-          description: `Could not reach the MD-X2520A while sending "${command}": ${message}`,
+          description: `Could not reach the MD-X2520A while sending "${command}": ${alarmShortText(message, 160)}`,
           pallet: MON.activePallet || WM.runningPallet || null,
           context: { command, error: message },
           dedupeKey: "LASER_DISCONNECT",
-          toast: false, // the sequence runner already toasts the failed step
+          toast: false,
         });
       }
       return { ok: false, response: null, message };
@@ -2476,6 +2482,7 @@ async function eqSendRaw(conn, command, opts = {}) {
     return { ok: false, response: null, message };
   }
 }
+
 /* ---- I/O fault detection ----
    ASSUMPTIONS (validate against real hardware):
    1. GET /api/io/status only fails when the Modbus bridge can't read the
@@ -2504,7 +2511,7 @@ function ioIsCommFaultMessage(msg) {
 //               toasts the failed step, so don't double-toast.
 function ioRaiseDisconnect(detail, poll = false) {
   return alarmRaiseFault("IO_DISCONNECT", {
-    description: `Modbus I/O bridge is not responding — ${detail}`,
+    description: `Modbus I/O bridge is not responding — ${alarmShortText(detail, 160)}`,
     context: { detail },
     toast: poll,
     quietRepeat: poll,
@@ -3451,7 +3458,7 @@ async function wmRunSingleFunction(key, btn) {
   btn.disabled = false;
   if (!verdict.ok) {
     wmLog(`!!! ${fn.label} failed: ${verdict.message}`, "error");
-    if (verdict.alarm) showToast(`Alarm: ${fn.label} — ${verdict.message}`);
+    if (verdict.alarm) showToast(`Alarm: ${steps[i].label} — ${alarmShortText(verdict.message, 100)}`);
   }
 }
 
