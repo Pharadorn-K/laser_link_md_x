@@ -172,7 +172,7 @@ async function getRaw(req, res) {
       `SELECT
           id, model, job_no, lot_no, pallet_no, type,
           user_name, employee_id, user_role,
-          conditions, code2d_result, marked_at
+          conditions, code2d_result, code2d_detail, marked_at
         FROM production_log
         WHERE marked_at >= ? AND marked_at < ?
         ORDER BY marked_at DESC
@@ -195,6 +195,7 @@ async function getRaw(req, res) {
         conditions,
         condition_summary: conditionsSummary(conditions),
         code2d_result: r.code2d_result || null,
+        code2d_detail: parseCode2DDetail(r.code2d_detail),
         marked_at: r.marked_at,
       };
     });
@@ -206,4 +207,12 @@ async function getRaw(req, res) {
   }
 }
 
+function parseCode2DDetail(raw) {
+  if (!raw) return null;
+  try {
+    return typeof raw === 'string' ? JSON.parse(raw) : raw;
+  } catch (e) {
+    return null;
+  }
+}
 module.exports = { getSummary, getRaw };

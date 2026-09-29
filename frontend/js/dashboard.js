@@ -641,6 +641,28 @@ function monDeriveCode2DResult(pallet, job) {
   return "R";
 }
 
+// Snapshot of everything the operator saw for this cycle — camera, start
+// reader, code result, total grade, grade check, matching level, read
+// data — plus which 2D-code step (start_reader vs read_result) actually
+// captured the grade/matching/read values. Sent alongside code2d_result
+// so the exact result set is preserved in production_log, not just the
+// R/S/T summary code.
+function monBuildCode2DDetail(pallet) {
+  const status = getCheckStatus(pallet);
+  if (!status) return null;
+  const captured = MON.code2d[pallet];
+  return {
+    camera: status.camera,
+    start_reader: status.startReader,
+    code_result: status.codeResult,
+    total_grade: status.totalGrade,
+    grade_check: status.gradeCheck,
+    matching_lv: status.matchingLv,
+    read_data: status.readData,
+    source: captured ? captured.source : null,
+  };
+}
+
 // Fetches the true, database-backed count for a pallet's current
 // (model, lot_no) and updates both MON.counts and the DOM if mounted.
 async function monRefreshCount(pallet, job) {
@@ -1921,6 +1943,7 @@ function monRenderSeqList(steps, activeIndex, palletTag) {
 
 async function monReportCount(pallet, job) {
   const code2d_result = monDeriveCode2DResult(pallet, job);
+  const code2d_detail = monBuildCode2DDetail(pallet); // NEW
 
   // The queue id reserved by wmRunStartMarking() for this pallet's cycle.
   const pieceQueueId = (MON.activePieceQueueId && MON.activePieceQueueId[pallet]) || null;
@@ -1938,6 +1961,7 @@ async function monReportCount(pallet, job) {
         model_condition_id: job.id,
         pallet_no: pallet,
         code2d_result,
+        code2d_detail, // NEW
         piece_queue_id: pieceQueueId,
         read_qrcode,
       }),
@@ -6513,8 +6537,20 @@ function plCode2dBadgeHtml(code) {
   return `<span class="pl-code2d-badge pl-code2d-${cls}">${escapeHtml(label)}</span>`;
 }
 
+// Small pill for an individual code2d_detail field (Camera, Start Reader,
+// etc.) — reuses the same good/bad/skip/pending classifiers Monitor uses
+// so a row here looks the same as it did live on the Monitor page.
+function plDetailFieldHtml(value, classifier) {
+  if (value === undefined || value === null || value === "") {
+    return `<span class="pl-code2d-badge pl-code2d-none">—</span>`;
+  }
+  const cls = classifier(value);
+  const clsMap = { good: "pass", bad: "fail", skip: "skipped", pending: "none" };
+  return `<span class="pl-code2d-badge pl-code2d-${clsMap[cls] || "none"}">${escapeHtml(value)}</span>`;
+}
+
 const PL_SUMMARY_COLSPAN = 13;
-const PL_RAW_COLSPAN = 9;
+const PL_RAW_COLSPAN = 16;
 
 
 function plRenderHead() {
@@ -6545,10 +6581,16 @@ function plRenderHead() {
          <th>Type</th>
          <th>By</th>
          <th>2D Code Result</th>
+         <th>Camera</th>
+         <th>Start Reader</th>
+         <th>Code Result</th>
+         <th>Total Grade</th>
+         <th>Grade Check</th>
+         <th>Matching Lv.</th>
+         <th>Read Data</th>
          <th>Condition</th>
        </tr>`;
 }
-
 function plColspan() {
   return PL.view === "summary" ? PL_SUMMARY_COLSPAN : PL_RAW_COLSPAN;
 }
@@ -6585,7 +6627,9 @@ function plRenderRows() {
           <td class="mono">${plFormatDate(r.start_at)}</td>
           <td class="mono">${plFormatDate(r.end_at)}</td>
         </tr>`).join("")
-    : PL.rows.map((r) => `
+    : PL.rows.map((r) => {
+        const d = r.code2d_detail || {};
+        return `
         <tr>
           <td class="mono">${plFormatDate(r.marked_at)}</td>
           <td>${escapeHtml(r.model)}</td>
@@ -6595,8 +6639,16 @@ function plRenderRows() {
           <td>${plTypeTagHtml(r.type)}</td>
           <td>${escapeHtml(r.user_name)}${r.employee_id ? ` <span class="mono" style="color:var(--ink-faint)">(${escapeHtml(r.employee_id)})</span>` : ""}</td>
           <td>${plCode2dBadgeHtml(r.code2d_result)}</td>
+          <td>${plDetailFieldHtml(d.camera, monStatusClass)}</td>
+          <td>${plDetailFieldHtml(d.start_reader, monStatusClass)}</td>
+          <td>${plDetailFieldHtml(d.code_result, monStatusClass)}</td>
+          <td>${plDetailFieldHtml(d.total_grade, monGradeStatusClass)}</td>
+          <td>${plDetailFieldHtml(d.grade_check, monStatusClass)}</td>
+          <td class="mono">${d.matching_lv ? escapeHtml(d.matching_lv) : "—"}</td>
+          <td class="mono">${d.read_data ? escapeHtml(d.read_data) : "—"}</td>
           <td>${escapeHtml(r.condition_summary)}</td>
-        </tr>`).join("");
+        </tr>`;
+      }).join("");
 }
 
 
@@ -6708,10 +6760,13 @@ function plBuildSummaryCsv(rows) {
 function plBuildRawCsv(rows) {
   const headers = [
     "When", "Part Name", "Job No.", "Lot No.", "Pallet",
-    "Type", "By", "Employee ID", "2D Code Result", "Condition",
+    "Type", "By", "Employee ID", "2D Code Result",
+    "Camera", "Start Reader", "Code Result", "Total Grade", "Grade Check",
+    "Matching Lv.", "Read Data", "Condition",
   ];
   const lines = [headers.map(plCsvCell).join(",")];
   rows.forEach((r) => {
+    const d = r.code2d_detail || {};
     lines.push([
       plCsvCell(plFormatDate(r.marked_at)),
       plCsvCell(r.model),
@@ -6722,12 +6777,18 @@ function plBuildRawCsv(rows) {
       plCsvCell(r.user_name),
       plCsvCell(r.employee_id || ""),
       plCsvCell(PL_CODE2D_LABELS[r.code2d_result] || (r.code2d_result || "")),
+      plCsvCell(d.camera || ""),
+      plCsvCell(d.start_reader || ""),
+      plCsvCell(d.code_result || ""),
+      plCsvCell(d.total_grade || ""),
+      plCsvCell(d.grade_check || ""),
+      plCsvCell(d.matching_lv || ""),
+      plCsvCell(d.read_data || ""),
       plCsvCell(r.condition_summary),
     ].join(","));
   });
   return lines.join("\r\n");
 }
-
 function plDownloadCsvContent(content, filenamePart) {
   const csvContent = "\uFEFF" + content; // BOM so Excel opens UTF-8 (Thai text) correctly
   const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });

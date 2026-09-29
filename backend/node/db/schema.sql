@@ -163,9 +163,10 @@ CREATE TABLE IF NOT EXISTS production_log (
     employee_id         VARCHAR(32) NULL DEFAULT NULL,
     user_name           VARCHAR(100) NULL DEFAULT NULL,
     user_role           VARCHAR(32) NULL DEFAULT NULL,
-    type                ENUM('mass', 'setting') NOT NULL DEFAULT 'setting',
+    type                ENUM('mass', 'setting', 'rework') NOT NULL DEFAULT 'setting',
     conditions          JSON NULL DEFAULT NULL,
     code2d_result       ENUM('R', 'S', 'T') NULL DEFAULT NULL,
+    code2d_detail       JSON NULL DEFAULT NULL,
     marked_at           TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB;
 

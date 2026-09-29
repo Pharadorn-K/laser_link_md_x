@@ -284,21 +284,23 @@ async function continueLot(req, res) {
 }
 
 // ---------------- POST /api/production/log ----------------
-// Accepts optional piece_queue_id (from POST /api/piece-queue/reserve)
-// and read_qrcode (the value captured off the 2D read-back). When present,
-// the production_log insert and the queue row's transition to 'marked'
-// happen in ONE transaction — so a part is never logged without its
-// reserved serial being consumed, and vice versa. The conditions JSON
-// snapshot written to production_log has every per-piece (is_variable)
-// condition's value replaced with the value actually reserved/marked
-// for this part — NOT the placeholder value saved on the model.
+// Accepts optional piece_queue_id (from POST /api/piece-queue/reserve),
+// read_qrcode (the value captured off the 2D read-back), and code2d_detail
+// (the full check snapshot — camera/start reader/code result/total grade/
+// grade check/matching level/read data — captured client-side over the
+// course of the cycle). code2d_detail is stored as-is (JSON) so the
+// Production Log / any future detail view can show exactly what the
+// operator saw at the time, without re-deriving it from separate columns.
 async function logProduction(req, res) {
-  const { model_condition_id, pallet_no, code2d_result, piece_queue_id, read_qrcode } = req.body || {};
+  const { model_condition_id, pallet_no, code2d_result, code2d_detail, piece_queue_id, read_qrcode } = req.body || {};
   if (!model_condition_id || !pallet_no) {
     return res.status(400).json({ error: 'model_condition_id and pallet_no are required.' });
   }
   if (code2d_result !== undefined && code2d_result !== null && !['R', 'S', 'T'].includes(code2d_result)) {
     return res.status(400).json({ error: "code2d_result must be one of 'R', 'S', 'T'." });
+  }
+  if (code2d_detail !== undefined && code2d_detail !== null && typeof code2d_detail !== 'object') {
+    return res.status(400).json({ error: 'code2d_detail must be an object.' });
   }
 
   try {
@@ -361,9 +363,6 @@ async function logProduction(req, res) {
       }
       const values = typeof queueRow.piece_values === 'string' ? JSON.parse(queueRow.piece_values) : queueRow.piece_values;
 
-      // Substitute every per-piece condition's value with the one actually
-      // reserved for this cycle, so the history snapshot reflects what was
-      // really marked on this part rather than the model's placeholder.
       loggedItems = items.map((it) => {
         const value = (it.is_variable && values && Object.prototype.hasOwnProperty.call(values, it.condition_name))
           ? values[it.condition_name]
@@ -371,9 +370,6 @@ async function logProduction(req, res) {
         return { condition_name: it.condition_name, condition_value: value, block_no: it.block_no };
       });
 
-      // Compare against whichever per-piece condition is named "QR Code"
-      // (case-insensitive). Lots that use a different per-piece name
-      // simply get no comparison.
       const expectedKey = Object.keys(values || {}).find((k) => k.trim().toLowerCase() === 'qr code');
       if (expectedKey && read_qrcode !== undefined && read_qrcode !== null && String(read_qrcode).trim() !== '') {
         readMatch = String(values[expectedKey]).trim() === String(read_qrcode).trim();
@@ -394,8 +390,8 @@ async function logProduction(req, res) {
       const [result] = await conn.query(
         `INSERT INTO production_log
           (model, job_no, pallet_no, lot_no, count, model_condition_id,
-           user_id, employee_id, user_name, user_role, type, conditions, code2d_result)
-         VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           user_id, employee_id, user_name, user_role, type, conditions, code2d_result, code2d_detail)
+         VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           model.model,
           model.job_no,
@@ -409,6 +405,7 @@ async function logProduction(req, res) {
           type,
           JSON.stringify(loggedItems),
           code2d_result ?? null,
+          code2d_detail ? JSON.stringify(code2d_detail) : null,
         ]
       );
       insertId = result.insertId;

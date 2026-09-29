@@ -1592,7 +1592,7 @@ table.data-table tr:last-child td { border-bottom: none; }
 }
 .pl-view-btn {
   border: none;
-  background: transparent;
+  background: #fff;
   padding: 7px 14px;
   border-radius: 999px;
   font-size: 12.5px;
@@ -1600,6 +1600,7 @@ table.data-table tr:last-child td { border-bottom: none; }
   color: var(--ink-soft);
 }
 .pl-view-btn.active { background: var(--bg-sidebar); color: #fff; }
+
 .pl-pager {
   display: flex;
   align-items: center;
