@@ -2441,14 +2441,39 @@ async function eqSendRaw(conn, command, opts = {}) {
       body: JSON.stringify({ ip: conn.ip, port: conn.port, command }),
     });
     const data = await res.json().catch(() => ({}));
+
     if (!res.ok || data.ok === false) {
-      return { ok: false, response: null, message: (data && data.error) || `Command failed (${command}).` };
+      const message = (data && data.error) || `Command failed (${command}).`;
+      if (!opts.skipInspect) {
+        alarmRaiseFault("LASER_DISCONNECT", {
+          description: `Could not reach the MD-X2520A while sending "${command}": ${message}`,
+          pallet: MON.activePallet || WM.runningPallet || null,
+          context: { command, error: message },
+          dedupeKey: "LASER_DISCONNECT",
+          toast: false, // the sequence runner already toasts the failed step
+        });
+      }
+      return { ok: false, response: null, message };
     }
+
     const response = data.response || "";
-    if (!opts.skipInspect) eqInspectLaserResponse(command, response);
+    if (!opts.skipInspect) {
+      alarmResolveByTag("LASER_DISCONNECT", "the marker responded again");
+      eqInspectLaserResponse(command, response);
+    }
     return { ok: true, response, message: response };
   } catch (err) {
-    return { ok: false, response: null, message: "Could not reach the equipment service." };
+    const message = "Could not reach the equipment service.";
+    if (!opts.skipInspect) {
+      alarmRaiseFault("LASER_DISCONNECT", {
+        description: `Could not reach the MD-X2520A while sending "${command}": ${message}`,
+        pallet: MON.activePallet || WM.runningPallet || null,
+        context: { command, error: message },
+        dedupeKey: "LASER_DISCONNECT",
+        toast: false,
+      });
+    }
+    return { ok: false, response: null, message };
   }
 }
 /* ---- I/O fault detection ----
@@ -3729,6 +3754,17 @@ const ALARM_FAULTS = {
       "Click \"Acknowledge & Clear\" once it is handled.",
     ],
   },
+  LASER_DISCONNECT: {
+    source: "MD-X2520A",
+    severity: "error",
+    instructions: [
+      "Check the marker is powered on and the front-panel display is lit.",
+      "Check the Ethernet/USB-LAN cable between the IPC and the marker.",
+      "Confirm the IP address and port match the marker (Add New Model > MD-X2520A panel) — currently 10.207.1.202:50002 by default.",
+      "Confirm the Python equipment service (laser_marker_service.py, port 5000) is still running on the IPC.",
+      "Click \"Reset & Check Again\" once the marker responds to RX,Ready.",
+    ],
+  },
 };
 
 // Raises (or, if the same dedupeKey is already active, bumps) an alarm.
@@ -3894,6 +3930,12 @@ const AC_RECHECKERS = {
     const ng = eqParseNg(raw.response);
     if (ng) return { cleared: false, message: `Marker still rejects commands: ${ng.code} ${ng.message}`.trim() };
     return { cleared: true, message: "Marker accepted the command again" };
+  },
+
+  LASER_DISCONNECT: async () => {
+    const raw = await eqSendRaw(getEquipmentConnection(), "RX,Ready", { skipInspect: true });
+    if (!raw.ok) return { cleared: false, message: raw.message };
+    return { cleared: true, message: "The marker responded to RX,Ready again." };
   },
 };
 
