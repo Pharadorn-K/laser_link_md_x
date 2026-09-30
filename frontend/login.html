@@ -1,5 +1,5 @@
 <!-- frontend/login.html -->
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
@@ -7,40 +7,68 @@
     <title>LASER LINK MD-X</title>
     <link rel="stylesheet" href="css/base.css" />
     <link rel="stylesheet" href="css/login.css" />
-    <link rel="icon" type="image/x-icon" href="/images/favicon.ico">
-    <link rel="stylesheet" href="/css/fontawesome/all.min.css">
+    <link rel="icon" type="image/x-icon" href="/images/favicon.ico" />
+    <link rel="stylesheet" href="/css/fontawesome/all.min.css" />
   </head>
 
   <body>
     <div class="login-wrap">
-
       <!-- ---- left: brand panel ---- -->
       <div class="login-brand">
         <div class="beam-line"></div>
-        <div class="login-brand-mark"><span class="beam"></span> LASER LINK MD-X</div>
+        <div class="login-brand-mark">
+          <span class="beam"></span> LASER LINK MD-X
+        </div>
         <h1>Job queueing and full command control for the MD‑X2520A.</h1>
-        <p>Queue marking jobs, run any command from the full protocol reference, and keep a live log
-          of everything sent to the marker — from one browser tab.</p>
+        <p>
+          Queue marking jobs, run any command from the full protocol reference,
+          and keep a live log of everything sent to the marker — from one
+          browser tab.
+        </p>
         <div class="login-brand-meta">
-          <div><div class="k">Protocol</div><div class="v">ASCII / \r delimited</div></div>
-          <div><div class="k">Marker</div><div class="v">MD-X2000 / 2500 series</div></div>
-          <div><div class="k">Access</div><div class="v">Admin-approved accounts</div></div>
+          <div>
+            <div class="k">Protocol</div>
+            <div class="v">ASCII / \r delimited</div>
+          </div>
+          <div>
+            <div class="k">Marker</div>
+            <div class="v">MD-X2000 / 2500 series</div>
+          </div>
+          <div>
+            <div class="k">Access</div>
+            <div class="v">Admin-approved accounts</div>
+          </div>
         </div>
         <div class="login-brand-meta">
-          <div><div class="k">Admin</div><div class="v">`admin` / `Admin@123`</div></div>
-          <div><div class="k">Engineer</div><div class="v">`60014` / `ENG123`</div></div>
-          <div><div class="k">Machine Controller</div><div class="v">`64036` / `MCC123`</div></div>
-          <div><div class="k">Operator</div><div class="v">`66005` / `OPT123`</div></div>
+          <div>
+            <div class="k">Admin</div>
+            <div class="v">`admin` / `Admin@123`</div>
+          </div>
+          <div>
+            <div class="k">Engineer</div>
+            <div class="v">`60014` / `ENG123`</div>
+          </div>
+          <div>
+            <div class="k">Machine Controller</div>
+            <div class="v">`64036` / `MCC123`</div>
+          </div>
+          <div>
+            <div class="k">Operator</div>
+            <div class="v">`66005` / `OPT123`</div>
+          </div>
         </div>
       </div>
 
       <!-- ---- right: form panel ---- -->
       <div class="login-form-panel">
         <div class="login-box">
-
           <div class="login-tabs">
-            <button class="login-tab active" data-tab="signin" type="button">Sign in</button>
-            <button class="login-tab" data-tab="signup" type="button">Sign up</button>
+            <button class="login-tab active" data-tab="signin" type="button">
+              Sign in
+            </button>
+            <button class="login-tab" data-tab="signup" type="button">
+              Sign up
+            </button>
           </div>
 
           <div id="alert-box"></div>
@@ -49,24 +77,51 @@
           <form class="login-form active" id="signin-form" data-tab="signin">
             <div class="field">
               <label for="si-employee-id">Employee ID</label>
-              <input type="text" id="si-employee-id" name="employee_id" autocomplete="username" required />
+              <input
+                type="text"
+                id="si-employee-id"
+                name="employee_id"
+                autocomplete="username"
+                required
+              />
             </div>
 
             <div class="field">
               <label for="si-password">Password</label>
-              <input type="password" id="si-password" name="password" autocomplete="current-password" required />
+              <input
+                type="password"
+                id="si-password"
+                name="password"
+                autocomplete="current-password"
+                required
+              />
             </div>
-            <button type="submit" class="btn btn-primary btn-block">Sign in</button>
-            <p class="login-submit-note">Only approved accounts can sign in. New accounts need admin approval first.</p>
+            <button type="submit" class="btn btn-primary btn-block">
+              Sign in
+            </button>
+            <p class="login-submit-note">
+              Only approved accounts can sign in. New accounts need admin
+              approval first.
+            </p>
           </form>
 
           <!-- ================= SIGN UP ================= -->
           <form class="login-form" id="signup-form" data-tab="signup">
             <div class="login-photo-row">
-              <img id="su-photo-preview" class="login-photo-preview" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3C/svg%3E" alt="" />
-              <div class="field" style="margin-bottom:0; flex:1;">
+              <img
+                id="su-photo-preview"
+                class="login-photo-preview"
+                src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3C/svg%3E"
+                alt=""
+              />
+              <div class="field" style="margin-bottom: 0; flex: 1">
                 <label for="su-photo">Photo (optional)</label>
-                <input type="file" id="su-photo" name="photo" accept="image/png,image/jpeg,image/webp" />
+                <input
+                  type="file"
+                  id="su-photo"
+                  name="photo"
+                  accept="image/png,image/jpeg,image/webp"
+                />
               </div>
             </div>
             <div class="field">
@@ -75,7 +130,12 @@
             </div>
             <div class="field">
               <label for="su-employee-id">Employee ID</label>
-              <input type="text" id="su-employee-id" name="employee_id" required />
+              <input
+                type="text"
+                id="su-employee-id"
+                name="employee_id"
+                required
+              />
             </div>
             <div class="field">
               <label for="su-role">Role</label>
@@ -88,17 +148,33 @@
             </div>
             <div class="field">
               <label for="su-password">Password</label>
-              <input type="password" id="su-password" name="password" autocomplete="new-password" required minlength="6" />
+              <input
+                type="password"
+                id="su-password"
+                name="password"
+                autocomplete="new-password"
+                required
+                minlength="6"
+              />
             </div>
             <div class="field">
               <label for="su-password2">Confirm password</label>
-              <input type="password" id="su-password2" name="password2" autocomplete="new-password" required minlength="6" />
+              <input
+                type="password"
+                id="su-password2"
+                name="password2"
+                autocomplete="new-password"
+                required
+                minlength="6"
+              />
             </div>
-            <button type="submit" class="btn btn-primary btn-block">Create account</button>
-            <p class="login-submit-note">An admin must approve your account before you can sign in.</p>
-
+            <button type="submit" class="btn btn-primary btn-block">
+              Create account
+            </button>
+            <p class="login-submit-note">
+              An admin must approve your account before you can sign in.
+            </p>
           </form>
-
         </div>
       </div>
     </div>

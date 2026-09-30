@@ -1,36 +1,110 @@
 <!-- frontend/index.html -->
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title> LASER LINK MD-X</title>
+    <title>LASER LINK MD-X</title>
     <link rel="stylesheet" href="css/base.css" />
     <link rel="stylesheet" href="css/dashboard.css" />
-    <link rel="stylesheet" href="/css/fontawesome/all.min.css">
-    <link rel="icon" type="image/x-icon" href="/images/favicon.ico">
+    <link rel="stylesheet" href="/css/fontawesome/all.min.css" />
+    <link rel="icon" type="image/x-icon" href="/images/favicon.ico" />
   </head>
 
   <body>
     <div class="app-shell">
-
       <!-- ================= Sidebar ================= -->
       <nav class="sidebar">
-        <div class="sidebar-brand"><span class="beam"></span> LASER LINK MD-X</div>
+        <div class="sidebar-brand">
+          <span class="beam"></span> LASER LINK MD-X
+        </div>
 
         <div class="nav-section-label">Overview</div>
-        <button class="nav-link" data-page="monitor"><span class="ic"><i class="fa-solid fa-desktop" style="color: rgb(255, 255, 255);"></i></span> Monitor</button>
-        <button class="nav-link" data-page="production_log" data-roles="admin,engineer"><span class="ic"><i class="fa-solid fa-chart-column" style="color: rgb(255, 255, 255);"></i></span> Production Log</button>
+        <button class="nav-link" data-page="monitor">
+          <span class="ic"
+            ><i
+              class="fa-solid fa-desktop"
+              style="color: rgb(255, 255, 255)"
+            ></i
+          ></span>
+          Monitor
+        </button>
+        <button
+          class="nav-link"
+          data-page="production_log"
+          data-roles="admin,engineer"
+        >
+          <span class="ic"
+            ><i
+              class="fa-solid fa-chart-column"
+              style="color: rgb(255, 255, 255)"
+            ></i
+          ></span>
+          Production Log
+        </button>
 
         <div class="nav-section-label">Marking</div>
-        <button class="nav-link" data-page="model_setting" data-roles="admin,engineer,machine_controller"><span class="ic"><i class="fa-solid fa-sliders" style="color: rgb(255, 255, 255);"></i></span> Model Setting</button>
-        <button class="nav-link" data-page="add_new_model" data-roles="admin,engineer"><span class="ic"><i class="fa-solid fa-circle-plus" style="color: rgb(255, 255, 255);"></i></span> Add New Model</button>
-       <button class="nav-link" data-page="alarm_center"><span class="ic"><i class="fa-solid fa-bell" style="color: rgb(255, 255, 255);"></i></span> Alarm Center <span class="nav-badge" id="nav-alarm-badge" style="display:none;">0</span></button>
+        <button
+          class="nav-link"
+          data-page="model_setting"
+          data-roles="admin,engineer,machine_controller"
+        >
+          <span class="ic"
+            ><i
+              class="fa-solid fa-sliders"
+              style="color: rgb(255, 255, 255)"
+            ></i
+          ></span>
+          Model Setting
+        </button>
+        <button
+          class="nav-link"
+          data-page="add_new_model"
+          data-roles="admin,engineer"
+        >
+          <span class="ic"
+            ><i
+              class="fa-solid fa-circle-plus"
+              style="color: rgb(255, 255, 255)"
+            ></i
+          ></span>
+          Add New Model
+        </button>
+        <button class="nav-link" data-page="alarm_center">
+          <span class="ic"
+            ><i class="fa-solid fa-bell" style="color: rgb(255, 255, 255)"></i
+          ></span>
+          Alarm Center
+          <span class="nav-badge" id="nav-alarm-badge" style="display: none"
+            >0</span
+          >
+        </button>
         <div class="nav-section-label">Account</div>
-        <button class="nav-link" data-page="profile"><span class="ic"><i class="fa-solid fa-address-card" style="color: rgb(255, 255, 255);"></i></span> Profile</button>
+        <button class="nav-link" data-page="profile">
+          <span class="ic"
+            ><i
+              class="fa-solid fa-address-card"
+              style="color: rgb(255, 255, 255)"
+            ></i
+          ></span>
+          Profile
+        </button>
         <div class="nav-section-label" data-roles="admin">Admin</div>
-        <button class="nav-link" data-page="all_user" data-roles="admin"><span class="ic"><i class="fa-solid fa-users" style="color: rgb(255, 255, 255);"></i></span> All User</button>
-        <button class="nav-link" data-page="system_log" data-roles="admin"><span class="ic"><i class="fa-solid fa-list-check" style="color: rgb(255, 255, 255);"></i></span> System Log</button>
+        <button class="nav-link" data-page="all_user" data-roles="admin">
+          <span class="ic"
+            ><i class="fa-solid fa-users" style="color: rgb(255, 255, 255)"></i
+          ></span>
+          All User
+        </button>
+        <button class="nav-link" data-page="system_log" data-roles="admin">
+          <span class="ic"
+            ><i
+              class="fa-solid fa-list-check"
+              style="color: rgb(255, 255, 255)"
+            ></i
+          ></span>
+          System Log
+        </button>
 
         <div class="sidebar-footer">v0.5 · laser_link_md_x</div>
       </nav>
@@ -38,10 +112,16 @@
       <!-- ================= Topbar ================= -->
       <header class="topbar">
         <div class="topbar-title" id="topbar-title">Monitor</div>
-        <div class="topbar-clock mono" id="topbar-clock">--/--/---- --:--:--</div>
+        <div class="topbar-clock mono" id="topbar-clock">
+          --/--/---- --:--:--
+        </div>
         <div class="topbar-right">
           <div class="topbar-user">
-            <img id="topbar-avatar" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3C/svg%3E" alt="" />
+            <img
+              id="topbar-avatar"
+              src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3C/svg%3E"
+              alt=""
+            />
             <span id="topbar-username">—</span>
             <span class="role-badge" id="topbar-role">USER</span>
           </div>
@@ -53,12 +133,18 @@
       <main class="content" id="content">
         <div class="page-placeholder">Loading…</div>
       </main>
-
     </div>
     <!-- ================= Photo Lightbox (global) ================= -->
     <div class="lightbox-backdrop" id="lightbox-backdrop">
       <img class="lightbox-img" id="lightbox-img" src="" alt="" />
-      <button type="button" class="lightbox-close" id="lightbox-close-btn" aria-label="Close">&times;</button>
+      <button
+        type="button"
+        class="lightbox-close"
+        id="lightbox-close-btn"
+        aria-label="Close"
+      >
+        &times;
+      </button>
     </div>
 
     <script src="js/dashboard.js"></script>
