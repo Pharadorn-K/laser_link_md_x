@@ -341,3 +341,6 @@ laser_link_md_x/
 ├── .gitignore ✅
 └── README.md ✅
 ```
+
+PS D:\GitHub\laser_link_md_x> cd backend\python
+PS D:\GitHub\laser_link_md_x\backend\python> .\venv\Scripts\Activate.ps1

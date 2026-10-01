@@ -14,7 +14,9 @@ tabs.forEach((tab) => {
     tabs.forEach((t) => t.classList.remove("active"));
     forms.forEach((f) => f.classList.remove("active"));
     tab.classList.add("active");
-    document.querySelector(`.login-form[data-tab="${tab.dataset.tab}"]`).classList.add("active");
+    document
+      .querySelector(`.login-form[data-tab="${tab.dataset.tab}"]`)
+      .classList.add("active");
     clearAlert();
   });
 });
@@ -94,15 +96,22 @@ signupForm.addEventListener("submit", async (e) => {
   if (photoInput.files[0]) fd.append("photo", photoInput.files[0]);
 
   try {
-    const res = await fetch(`${API_BASE}/api/auth/signup`, { method: "POST", body: fd });
+    const res = await fetch(`${API_BASE}/api/auth/signup`, {
+      method: "POST",
+      body: fd,
+    });
     const data = await res.json();
     if (!res.ok) {
       showAlert(data.error || "Sign up failed.");
       return;
     }
-    showAlert("Account created. Please wait for admin approval before signing in.", "success");
+    showAlert(
+      "Account created. Please wait for admin approval before signing in.",
+      "success",
+    );
     signupForm.reset();
-    photoPreview.src = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3C/svg%3E";
+    photoPreview.src =
+      "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3C/svg%3E";
     tabs[0].click();
   } catch (err) {
     showAlert("Could not reach the server. Please try again.");

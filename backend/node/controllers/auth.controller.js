@@ -8,16 +8,16 @@
 //   Profile  : each user can update their own name / password / photo
 //   Every meaningful action is recorded to system_log via systemLog.service.
 // ============================================================
-const bcrypt = require('bcryptjs');
-const jwt = require('jsonwebtoken');
-const pool = require('../config/db');
-const systemLog = require('../services/systemLog.service');
-require('dotenv').config();
+const bcrypt = require("bcryptjs");
+const jwt = require("jsonwebtoken");
+const pool = require("../config/db");
+const systemLog = require("../services/systemLog.service");
+require("dotenv").config();
 
 const SALT_ROUNDS = 10;
 
-const SIGNUP_ROLES = ['operator', 'machine_controller', 'engineer']; // never 'admin' — that account already exists
-const ASSIGNABLE_ROLES = ['operator', 'machine_controller', 'engineer']; // admin can't be granted via API either
+const SIGNUP_ROLES = ["operator", "machine_controller", "engineer"]; // never 'admin' — that account already exists
+const ASSIGNABLE_ROLES = ["operator", "machine_controller", "engineer"]; // admin can't be granted via API either
 
 function signToken(user) {
   return jwt.sign(
@@ -29,7 +29,7 @@ function signToken(user) {
       status: user.status,
     },
     process.env.JWT_SECRET,
-    { expiresIn: process.env.JWT_EXPIRES_IN || '8h' }
+    { expiresIn: process.env.JWT_EXPIRES_IN || "8h" },
   );
 }
 
@@ -50,23 +50,30 @@ async function signup(req, res) {
   try {
     const { employee_id, name, password, role } = req.body;
     if (!employee_id || !name || !password || !role) {
-      return res.status(400).json({ error: 'employee_id, name, password and role are required.' });
+      return res
+        .status(400)
+        .json({ error: "employee_id, name, password and role are required." });
     }
     if (!SIGNUP_ROLES.includes(role)) {
-      return res.status(400).json({ error: `role must be one of: ${SIGNUP_ROLES.join(', ')}.` });
+      return res
+        .status(400)
+        .json({ error: `role must be one of: ${SIGNUP_ROLES.join(", ")}.` });
     }
 
-    const [existing] = await pool.query('SELECT id FROM users WHERE employee_id = ?', [employee_id]);
+    const [existing] = await pool.query(
+      "SELECT id FROM users WHERE employee_id = ?",
+      [employee_id],
+    );
     if (existing.length > 0) {
       await systemLog.logAction({
         req,
         user: { employee_id, name, role },
-        action: 'auth.signup',
-        targetType: 'user',
+        action: "auth.signup",
+        targetType: "user",
         description: `Signup rejected: employee ID "${employee_id}" already registered`,
-        status: 'failed',
+        status: "failed",
       });
-      return res.status(409).json({ error: 'Employee ID already registered.' });
+      return res.status(409).json({ error: "Employee ID already registered." });
     }
 
     const password_hash = await bcrypt.hash(password, SALT_ROUNDS);
@@ -75,26 +82,27 @@ async function signup(req, res) {
     const [result] = await pool.query(
       `INSERT INTO users (employee_id, name, password_hash, photo_path, role, status)
        VALUES (?, ?, ?, ?, ?, 'pending')`,
-      [employee_id, name, password_hash, photo_path, role]
+      [employee_id, name, password_hash, photo_path, role],
     );
 
     await systemLog.logAction({
       req,
       user: { id: result.insertId, employee_id, name, role },
-      action: 'auth.signup',
-      targetType: 'user',
+      action: "auth.signup",
+      targetType: "user",
       targetId: result.insertId,
       description: `New account requested: ${name} (${employee_id}), role ${role}`,
       details: { role },
     });
 
     return res.status(201).json({
-      message: 'Account created. Please wait for admin approval before signing in.',
+      message:
+        "Account created. Please wait for admin approval before signing in.",
       id: result.insertId,
     });
   } catch (err) {
     console.error(err);
-    return res.status(500).json({ error: 'Server error during sign up.' });
+    return res.status(500).json({ error: "Server error during sign up." });
   }
 }
 
@@ -103,19 +111,26 @@ async function signin(req, res) {
   try {
     const { employee_id, password } = req.body;
     if (!employee_id || !password) {
-      return res.status(400).json({ error: 'employee_id and password are required.' });
+      return res
+        .status(400)
+        .json({ error: "employee_id and password are required." });
     }
 
-    const [rows] = await pool.query('SELECT * FROM users WHERE employee_id = ?', [employee_id]);
+    const [rows] = await pool.query(
+      "SELECT * FROM users WHERE employee_id = ?",
+      [employee_id],
+    );
     if (rows.length === 0) {
       await systemLog.logAction({
         req,
         user: { employee_id },
-        action: 'auth.signin',
+        action: "auth.signin",
         description: `Sign-in failed: unknown employee ID "${employee_id}"`,
-        status: 'failed',
+        status: "failed",
       });
-      return res.status(401).json({ error: 'Invalid employee ID or password.' });
+      return res
+        .status(401)
+        .json({ error: "Invalid employee ID or password." });
     }
     const user = rows[0];
 
@@ -124,32 +139,38 @@ async function signin(req, res) {
       await systemLog.logAction({
         req,
         user,
-        action: 'auth.signin',
+        action: "auth.signin",
         description: `Sign-in failed: incorrect password for ${user.name} (${user.employee_id})`,
-        status: 'failed',
+        status: "failed",
       });
-      return res.status(401).json({ error: 'Invalid employee ID or password.' });
+      return res
+        .status(401)
+        .json({ error: "Invalid employee ID or password." });
     }
 
-    if (user.status === 'pending') {
+    if (user.status === "pending") {
       await systemLog.logAction({
         req,
         user,
-        action: 'auth.signin',
+        action: "auth.signin",
         description: `Sign-in blocked: ${user.name} (${user.employee_id}) is pending approval`,
-        status: 'failed',
+        status: "failed",
       });
-      return res.status(403).json({ error: 'Your account is awaiting admin approval.' });
+      return res
+        .status(403)
+        .json({ error: "Your account is awaiting admin approval." });
     }
-    if (user.status === 'rejected') {
+    if (user.status === "rejected") {
       await systemLog.logAction({
         req,
         user,
-        action: 'auth.signin',
+        action: "auth.signin",
         description: `Sign-in blocked: ${user.name} (${user.employee_id}) was rejected`,
-        status: 'failed',
+        status: "failed",
       });
-      return res.status(403).json({ error: 'Your account request was rejected. Contact an admin.' });
+      return res.status(403).json({
+        error: "Your account request was rejected. Contact an admin.",
+      });
     }
 
     const token = signToken(user);
@@ -157,14 +178,14 @@ async function signin(req, res) {
     await systemLog.logAction({
       req,
       user,
-      action: 'auth.signin',
+      action: "auth.signin",
       description: `${user.name} (${user.employee_id}) signed in`,
     });
 
     return res.json({ token, user: publicUser(user) });
   } catch (err) {
     console.error(err);
-    return res.status(500).json({ error: 'Server error during sign in.' });
+    return res.status(500).json({ error: "Server error during sign in." });
   }
 }
 
@@ -174,7 +195,7 @@ async function signin(req, res) {
 async function signout(req, res) {
   await systemLog.logAction({
     req,
-    action: 'auth.signout',
+    action: "auth.signout",
     description: `${req.user.name} (${req.user.employee_id}) signed out`,
   });
   return res.json({ ok: true });
@@ -182,8 +203,11 @@ async function signout(req, res) {
 
 // ---------------- Current user ----------------
 async function me(req, res) {
-  const [rows] = await pool.query('SELECT * FROM users WHERE id = ?', [req.user.id]);
-  if (rows.length === 0) return res.status(404).json({ error: 'User not found.' });
+  const [rows] = await pool.query("SELECT * FROM users WHERE id = ?", [
+    req.user.id,
+  ]);
+  if (rows.length === 0)
+    return res.status(404).json({ error: "User not found." });
   return res.json(publicUser(rows[0]));
 }
 
@@ -196,57 +220,62 @@ async function updateProfile(req, res) {
     const changed = [];
 
     if (name) {
-      fields.push('name = ?');
+      fields.push("name = ?");
       values.push(name);
-      changed.push('name');
+      changed.push("name");
     }
     if (password) {
       const password_hash = await bcrypt.hash(password, SALT_ROUNDS);
-      fields.push('password_hash = ?');
+      fields.push("password_hash = ?");
       values.push(password_hash);
-      changed.push('password'); // never log the actual value
+      changed.push("password"); // never log the actual value
     }
     if (req.file) {
-      fields.push('photo_path = ?');
+      fields.push("photo_path = ?");
       values.push(`/uploads/photos/${req.file.filename}`);
-      changed.push('photo');
+      changed.push("photo");
     }
 
     if (fields.length === 0) {
-      return res.status(400).json({ error: 'Nothing to update.' });
+      return res.status(400).json({ error: "Nothing to update." });
     }
 
     values.push(req.user.id);
-    await pool.query(`UPDATE users SET ${fields.join(', ')} WHERE id = ?`, values);
+    await pool.query(
+      `UPDATE users SET ${fields.join(", ")} WHERE id = ?`,
+      values,
+    );
 
-    const [rows] = await pool.query('SELECT * FROM users WHERE id = ?', [req.user.id]);
+    const [rows] = await pool.query("SELECT * FROM users WHERE id = ?", [
+      req.user.id,
+    ]);
 
     await systemLog.logAction({
       req,
-      action: 'auth.profile_update',
-      targetType: 'user',
+      action: "auth.profile_update",
+      targetType: "user",
       targetId: req.user.id,
-      description: `${req.user.name} updated their profile (${changed.join(', ')})`,
+      description: `${req.user.name} updated their profile (${changed.join(", ")})`,
       details: { changed },
     });
 
     return res.json(publicUser(rows[0]));
   } catch (err) {
     console.error(err);
-    return res.status(500).json({ error: 'Server error updating profile.' });
+    return res.status(500).json({ error: "Server error updating profile." });
   }
 }
 
 // ---------------- Admin: list users ----------------
 async function listUsers(req, res) {
   const { status } = req.query; // optional filter e.g. ?status=pending
-  let sql = 'SELECT * FROM users';
+  let sql = "SELECT * FROM users";
   const params = [];
   if (status) {
-    sql += ' WHERE status = ?';
+    sql += " WHERE status = ?";
     params.push(status);
   }
-  sql += ' ORDER BY created_at DESC';
+  sql += " ORDER BY created_at DESC";
   const [rows] = await pool.query(sql, params);
   return res.json(rows.map(publicUser));
 }
@@ -255,21 +284,26 @@ async function listUsers(req, res) {
 async function setUserStatus(req, res) {
   const { id } = req.params;
   const { status } = req.body; // 'approved' | 'rejected' | 'pending'
-  if (!['approved', 'rejected', 'pending'].includes(status)) {
-    return res.status(400).json({ error: "status must be 'approved', 'rejected' or 'pending'." });
+  if (!["approved", "rejected", "pending"].includes(status)) {
+    return res
+      .status(400)
+      .json({ error: "status must be 'approved', 'rejected' or 'pending'." });
   }
 
-  const [beforeRows] = await pool.query('SELECT * FROM users WHERE id = ?', [id]);
-  if (beforeRows.length === 0) return res.status(404).json({ error: 'User not found.' });
+  const [beforeRows] = await pool.query("SELECT * FROM users WHERE id = ?", [
+    id,
+  ]);
+  if (beforeRows.length === 0)
+    return res.status(404).json({ error: "User not found." });
   const before = beforeRows[0];
 
-  await pool.query('UPDATE users SET status = ? WHERE id = ?', [status, id]);
-  const [rows] = await pool.query('SELECT * FROM users WHERE id = ?', [id]);
+  await pool.query("UPDATE users SET status = ? WHERE id = ?", [status, id]);
+  const [rows] = await pool.query("SELECT * FROM users WHERE id = ?", [id]);
 
   await systemLog.logAction({
     req,
-    action: 'user.status_change',
-    targetType: 'user',
+    action: "user.status_change",
+    targetType: "user",
     targetId: id,
     description: `Set status of ${before.name} (${before.employee_id}) from "${before.status}" to "${status}"`,
     details: { from: before.status, to: status },
@@ -283,20 +317,25 @@ async function setUserRole(req, res) {
   const { id } = req.params;
   const { role } = req.body;
   if (!ASSIGNABLE_ROLES.includes(role)) {
-    return res.status(400).json({ error: `role must be one of: ${ASSIGNABLE_ROLES.join(', ')}.` });
+    return res
+      .status(400)
+      .json({ error: `role must be one of: ${ASSIGNABLE_ROLES.join(", ")}.` });
   }
 
-  const [beforeRows] = await pool.query('SELECT * FROM users WHERE id = ?', [id]);
-  if (beforeRows.length === 0) return res.status(404).json({ error: 'User not found.' });
+  const [beforeRows] = await pool.query("SELECT * FROM users WHERE id = ?", [
+    id,
+  ]);
+  if (beforeRows.length === 0)
+    return res.status(404).json({ error: "User not found." });
   const before = beforeRows[0];
 
-  await pool.query('UPDATE users SET role = ? WHERE id = ?', [role, id]);
-  const [rows] = await pool.query('SELECT * FROM users WHERE id = ?', [id]);
+  await pool.query("UPDATE users SET role = ? WHERE id = ?", [role, id]);
+  const [rows] = await pool.query("SELECT * FROM users WHERE id = ?", [id]);
 
   await systemLog.logAction({
     req,
-    action: 'user.role_change',
-    targetType: 'user',
+    action: "user.role_change",
+    targetType: "user",
     targetId: id,
     description: `Changed role of ${before.name} (${before.employee_id}) from "${before.role}" to "${role}"`,
     details: { from: before.role, to: role },

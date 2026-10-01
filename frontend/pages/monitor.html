@@ -4,29 +4,41 @@
      Logic lives in dashboard.js, section "FOR MONITOR PAGE"
      ============================================================ -->
 <div class="mon-page">
-
   <div class="mon-mode-row">
-    <div class="mon-alarm-banner" id="mon-alarm-banner" style="display:none;"></div>
-    <div class="mon-mode-banner" id="mon-mode-banner" style="flex:1;"><!-- filled by JS --></div>
-    <button class="btn btn-primary" id="mon-complete-setting-btn" style="display:none;">
+    <div
+      class="mon-alarm-banner"
+      id="mon-alarm-banner"
+      style="display: none"
+    ></div>
+    <div class="mon-mode-banner" id="mon-mode-banner" style="flex: 1">
+      <!-- filled by JS -->
+    </div>
+    <button
+      class="btn btn-primary"
+      id="mon-complete-setting-btn"
+      style="display: none"
+    >
       <i class="fa-solid fa-clipboard-check"></i> Complete Setting
     </button>
   </div>
-  
-  <div class="card mon-goal-card" id="mon-goal-card" style="display:none;">
+
+  <div class="card mon-goal-card" id="mon-goal-card" style="display: none">
     <div class="card-title">Production Goal</div>
     <div id="mon-goal-list"><!-- filled by JS --></div>
   </div>
 
   <div class="mon-grid">
-
     <!-- ================= PALLET 1 ================= -->
     <div class="card mon-pallet-card" id="mon-card-Pallet1">
       <div class="card-title">Pallet 1</div>
-      <div class="mon-pallet-body" id="mon-body-Pallet1"><!-- filled by JS --></div>
+      <div class="mon-pallet-body" id="mon-body-Pallet1">
+        <!-- filled by JS -->
+      </div>
       <div class="wm-lock-overlay" id="mon-lock-Pallet1">
         <div class="wm-lock-icon"><i class="fa-solid fa-ban"></i></div>
-        <div class="wm-lock-text">No model selected for Pallet 1 — choose one on Model Setting.</div>
+        <div class="wm-lock-text">
+          No model selected for Pallet 1 — choose one on Model Setting.
+        </div>
       </div>
     </div>
 
@@ -37,29 +49,45 @@
 
         <!-- AUTO mode: sequence preview + 2-hand start -->
         <div id="mon-auto-block">
-          <div id="mon-seq-preview"><!-- filled by JS: First/Loop (dual) or Loop (single) --></div>
+          <div id="mon-seq-preview">
+            <!-- filled by JS: First/Loop (dual) or Loop (single) -->
+          </div>
 
-          <div class="mon-seq-idle" id="mon-seq-idle" style="display:none;">Waiting for the 2-push-button start signal…</div>
-          <ol class="wm-seq-list" id="mon-seq-list" style="display:none;"></ol>
+          <div class="mon-seq-idle" id="mon-seq-idle" style="display: none">
+            Waiting for the 2-push-button start signal…
+          </div>
+          <ol class="wm-seq-list" id="mon-seq-list" style="display: none"></ol>
 
           <div class="mon-seq-actions">
-            <span class="status-pill offline" id="mon-signal-pill"><span class="dot"></span> Waiting for signal</span>
-            <button class="btn btn-primary" id="mon-simulate-btn">2-Button Start</button>
+            <span class="status-pill offline" id="mon-signal-pill"
+              ><span class="dot"></span> Waiting for signal</span
+            >
+            <button class="btn btn-primary" id="mon-simulate-btn">
+              2-Button Start
+            </button>
           </div>
         </div>
 
         <!-- MANUAL mode: read-only notice, start button disabled/hidden -->
-        <div id="mon-manual-block" style="display:none;">
+        <div id="mon-manual-block" style="display: none">
           <div class="mon-manual-notice">
             <i class="fa-solid fa-hand"></i>
             <div>
               <strong>Manual mode active.</strong>
-              <p>Marking is triggered from the <b>Model Setting</b> page in manual mode. This page shows model details only — the 2‑hand start / auto sequence here is disabled.</p>
+              <p>
+                Marking is triggered from the <b>Model Setting</b> page in
+                manual mode. This page shows model details only — the 2‑hand
+                start / auto sequence here is disabled.
+              </p>
             </div>
           </div>
           <div class="mon-seq-actions">
-            <span class="status-pill offline"><span class="dot"></span> Manual mode</span>
-            <button class="btn" id="mon-goto-modelsetting-btn">Go to Model Setting</button>
+            <span class="status-pill offline"
+              ><span class="dot"></span> Manual mode</span
+            >
+            <button class="btn" id="mon-goto-modelsetting-btn">
+              Go to Model Setting
+            </button>
           </div>
         </div>
       </div>
@@ -68,35 +96,53 @@
     <!-- ================= PALLET 2 ================= -->
     <div class="card mon-pallet-card" id="mon-card-Pallet2">
       <div class="card-title">Pallet 2</div>
-      <div class="mon-pallet-body" id="mon-body-Pallet2"><!-- filled by JS --></div>
+      <div class="mon-pallet-body" id="mon-body-Pallet2">
+        <!-- filled by JS -->
+      </div>
       <div class="wm-lock-overlay" id="mon-lock-Pallet2">
         <div class="wm-lock-icon"><i class="fa-solid fa-ban"></i></div>
-        <div class="wm-lock-text">No model selected for Pallet 2 — choose one on Model Setting.</div>
+        <div class="wm-lock-text">
+          No model selected for Pallet 2 — choose one on Model Setting.
+        </div>
       </div>
     </div>
-
   </div>
 
   <!-- ================= Confirm "Set value" modal (Monitor) ================= -->
   <div class="ms-modal-backdrop" id="mon-confirm-backdrop">
     <div class="ms-modal ms-modal-sm">
       <div class="ms-modal-title">Confirm change</div>
-      <p id="mon-confirm-text" style="font-size:13px;color:var(--ink-soft);"></p>
-      <div style="display:flex; gap:8px; margin-top:14px;">
-        <button type="button" class="btn btn-primary" id="mon-confirm-yes-btn">Yes, set it</button>
-        <button type="button" class="btn" id="mon-confirm-no-btn">Cancel</button>
+      <p
+        id="mon-confirm-text"
+        style="font-size: 13px; color: var(--ink-soft)"
+      ></p>
+      <div style="display: flex; gap: 8px; margin-top: 14px">
+        <button type="button" class="btn btn-primary" id="mon-confirm-yes-btn">
+          Yes, set it
+        </button>
+        <button type="button" class="btn" id="mon-confirm-no-btn">
+          Cancel
+        </button>
       </div>
     </div>
   </div>
 
   <!-- ================= Complete Setting summary modal ================= -->
   <div class="ms-modal-backdrop" id="mon-complete-setting-backdrop">
-    <div class="ms-modal" style="max-width:640px;">
+    <div class="ms-modal" style="max-width: 640px">
       <div class="ms-modal-title">Complete Setting — Summary</div>
       <div id="mon-complete-setting-body"><!-- filled by JS --></div>
-      <div style="display:flex; gap:8px; margin-top:16px;">
-        <button type="button" class="btn btn-primary" id="mon-complete-setting-finish-btn">Finish &amp; Sign Out</button>
-        <button type="button" class="btn" id="mon-complete-setting-cancel-btn">Cancel</button>
+      <div style="display: flex; gap: 8px; margin-top: 16px">
+        <button
+          type="button"
+          class="btn btn-primary"
+          id="mon-complete-setting-finish-btn"
+        >
+          Finish &amp; Sign Out
+        </button>
+        <button type="button" class="btn" id="mon-complete-setting-cancel-btn">
+          Cancel
+        </button>
       </div>
     </div>
   </div>
@@ -107,20 +153,29 @@
       <div class="ms-modal-title" id="mon-edit-modal-title">Edit</div>
       <div id="mon-edit-modal-alert"></div>
       <div id="mon-edit-modal-body"><!-- filled by JS --></div>
-      <div style="display:flex; gap:8px; margin-top:16px;">
-        <button type="button" class="btn btn-primary" id="mon-edit-modal-save-btn">Save changes</button>
-        <button type="button" class="btn" id="mon-edit-modal-cancel-btn">Cancel</button>
+      <div style="display: flex; gap: 8px; margin-top: 16px">
+        <button
+          type="button"
+          class="btn btn-primary"
+          id="mon-edit-modal-save-btn"
+        >
+          Save changes
+        </button>
+        <button type="button" class="btn" id="mon-edit-modal-cancel-btn">
+          Cancel
+        </button>
       </div>
     </div>
   </div>
 
   <!-- ================= Next Step modal (operator, goal reached) ================= -->
   <div class="ms-modal-backdrop" id="mon-nextstep-backdrop">
-    <div class="ms-modal" style="max-width:600px;">
+    <div class="ms-modal" style="max-width: 600px">
       <div class="ms-modal-title">Production Goal Reached — Next Step</div>
-      <p style="font-size:13px;color:var(--ink-soft);margin-top:-8px;">Choose how to proceed before continuing production.</p>
+      <p style="font-size: 13px; color: var(--ink-soft); margin-top: -8px">
+        Choose how to proceed before continuing production.
+      </p>
       <div id="mon-nextstep-body"><!-- filled by JS --></div>
     </div>
   </div>
-  
 </div>
