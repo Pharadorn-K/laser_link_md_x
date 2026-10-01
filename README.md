@@ -113,6 +113,7 @@ laser_link_md_x/
 │   │       ├── photos/                # user photos
 │   │       └── models/                # model part photos
 │   └── python/
+│       ├── venv/                      # Python virtual environment
 │       ├── io_core.py                 # Modbus IOClient: doors, pallet swap, interlocks
 │       ├── io_service.py              # Flask wrapper for io_core (:5001)
 │       ├── laser_core.py              # LaserClient + full COMMAND_GROUPS reference
