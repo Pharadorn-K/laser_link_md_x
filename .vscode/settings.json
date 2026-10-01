@@ -5,5 +5,6 @@
     "**/.venv": true
   },
   "editor.formatOnSave": true,
-  "python.defaultInterpreterPath": "${workspaceFolder}/backend/python/.venv/bin/python"
+  "python.defaultInterpreterPath": "${workspaceFolder}/backend/python/venv/Scripts/python.exe",
+  "python.terminal.activateEnvironment": true
 }

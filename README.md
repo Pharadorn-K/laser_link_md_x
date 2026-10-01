@@ -140,6 +140,7 @@ laser_link_md_x/
 │       ├── all_user.html              # admin — approve/reject, role changes
 │       └── system_log.html            # admin — filterable audit log
 ├── test/
+├── env
 ├── .gitignore
 └── README.md
 ```
