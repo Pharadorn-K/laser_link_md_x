@@ -34,5 +34,8 @@ router.post('/reset', settingGuard, ctrl.resetCount);
 router.get('/setting-summary', settingGuard, ctrl.getSettingSummary);
 router.post('/complete-setting', settingGuard, ctrl.completeSetting);
 router.post('/continue-lot', goalGuard, ctrl.continueLot);
+router.post('/goal', goalGuard, ctrl.setGoal);
+router.post('/rework', goalGuard, ctrl.setRework); // NEW
+router.delete('/goal', goalGuard, ctrl.deleteGoal);
 
 module.exports = router;

@@ -15,6 +15,11 @@ function authToken() {
   return localStorage.getItem("nlm_token");
 }
 
+function alarmShortText(str, max = 100) {
+  const s = String(str || "");
+  return s.length > max ? `${s.slice(0, max - 1).trimEnd()}…` : s;
+}
+
 /* ============================================================
    TOP BAR CLOCK — DD/MM/YYYY HH:MM:SS, ticks every second
    ============================================================ */
@@ -139,9 +144,13 @@ function initShell() {
     btn.addEventListener("click", () => loadPage(btn.dataset.page));
   });
   document.getElementById("logout-btn").addEventListener("click", performSignOut);
-  
+
+  alarmUpdateNavBadge();
+  window.addEventListener("storage", (e) => { if (e.key === LIVE_ALARM_KEY) alarmNotifyChanged(); });
+
   startTopbarClock();
   initLightbox(); // NEW
+
 }
 
 function applyUserToChrome(user) {
@@ -360,6 +369,68 @@ function setEquipmentConnection(ip, port) {
   );
 }
 
+/* ============================================================
+   PER-PIECE QUEUE (shared by model+lot_no) — reserve / release / fail
+   ============================================================ */
+async function pieceReserveNext(job, pallet) {
+  if (!job || !job.lot_no) return { ok: false, error: 'No model/lot selected.' };
+  try {
+    const res = await apiFetch('/api/piece-queue/reserve', {
+      method: 'POST',
+      body: JSON.stringify({
+        model: job.model,
+        lot_no: job.lot_no,
+        model_condition_id: job.id,
+        pallet_no: pallet,
+      }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) return { ok: false, error: data.error || 'Could not reserve a per-piece row.' };
+    return { ok: true, queue_id: data.queue_id, seq_no: data.seq_no, values: data.values || {} };
+  } catch (err) {
+    return { ok: false, error: 'Could not reach the server to reserve a per-piece row.' };
+  }
+}
+
+async function pieceRelease(queueId) {
+  if (!queueId) return;
+  try {
+    await apiFetch(`/api/piece-queue/${queueId}/release`, { method: 'POST', body: JSON.stringify({}) });
+  } catch (err) {
+    // best-effort — a stale reservation still gets swept server-side after STALE_RESERVATION_MS
+  }
+}
+
+async function pieceFail(queueId, reason) {
+  if (!queueId) return;
+  try {
+    await apiFetch(`/api/piece-queue/${queueId}/fail`, { method: 'POST', body: JSON.stringify({ reason }) });
+  } catch (err) {
+    // best-effort
+  }
+}
+
+// True if this job has at least one per-piece (is_variable) condition.
+function jobHasPerPieceConditions(job) {
+  return !!job && Array.isArray(job.conditions) && job.conditions.some((c) => c && (c.is_variable === 1 || c.is_variable === true || c.is_variable === '1'));
+}
+
+// Returns a shallow-cloned job whose per-piece condition_value(s) are
+// swapped for the values reserved from the queue (matched by
+// condition_name), so buildBaseCommand()/the per-condition send loop
+// in wmRunStartMarking picks up the real serial instead of the
+// Setting-time placeholder value.
+function jobWithPieceValues(job, pieceValues) {
+  if (!job || !pieceValues) return job;
+  const cloned = { ...job, conditions: (job.conditions || []).map((c) => ({ ...c })) };
+  cloned.conditions.forEach((c) => {
+    if (c.is_variable && Object.prototype.hasOwnProperty.call(pieceValues, c.condition_name)) {
+      c.condition_value = pieceValues[c.condition_name];
+    }
+  });
+  return cloned;
+}
+
 /* ---- Check-result status (Camera / 2D Read / 2D Grade) per pallet ----
    Simulated for now — no equipment signal wired up yet. Persisted so
    Monitor reflects the latest result even if the sequence that produced
@@ -515,16 +586,6 @@ function monApplyStepResult(pallet, step, ok) {
   }
 }
 
-// ASSUMPTION (no equipment connected yet — adjust once real replies are
-// confirmed): reads MON.code2d[pallet], set by wmRunCode2DStartReader()
-// (values v1/v2/v3 from WX,Check2DCode5's WX,OK,<v1>,<v2>,<v3> reply) or
-// wmRunCode2DResultReader() (grade B + values w/x/y or c/v/w/x/y from
-// RX,CodeReadResult). Currently:
-//   Total Grade  -> captured.grade   (v1, or B)
-//   Matching Lv. -> v2 (start_reader) / w (read_result)
-//   Read data    -> v3 (start_reader) / y (read_result)
-// If the real protocol puts these values in different positions, only
-// this function needs to change — everything else keys off its output.
 function monApplyCode2DDerivedFields(pallet, ok, skipped) {
   if (skipped) {
     // Don't let a skipped step erase a real capture the OTHER 2D-code
@@ -536,6 +597,7 @@ function monApplyCode2DDerivedFields(pallet, ok, skipped) {
     }
     return;
   }
+
   if (!ok) {
     monSetCheckStatus(pallet, "totalGrade", "Error");
     monSetCheckStatus(pallet, "matchingLv", "Error");
@@ -577,6 +639,28 @@ function monDeriveCode2DResult(pallet, job) {
   if (status.codeResult === "Skipped" && status.gradeCheck === "Skipped") return "S";
   if (status.codeResult === "Error" || status.gradeCheck === "Error") return "T";
   return "R";
+}
+
+// Snapshot of everything the operator saw for this cycle — camera, start
+// reader, code result, total grade, grade check, matching level, read
+// data — plus which 2D-code step (start_reader vs read_result) actually
+// captured the grade/matching/read values. Sent alongside code2d_result
+// so the exact result set is preserved in production_log, not just the
+// R/S/T summary code.
+function monBuildCode2DDetail(pallet) {
+  const status = getCheckStatus(pallet);
+  if (!status) return null;
+  const captured = MON.code2d[pallet];
+  return {
+    camera: status.camera,
+    start_reader: status.startReader,
+    code_result: status.codeResult,
+    total_grade: status.totalGrade,
+    grade_check: status.gradeCheck,
+    matching_lv: status.matchingLv,
+    read_data: status.readData,
+    source: captured ? captured.source : null,
+  };
 }
 
 // Fetches the true, database-backed count for a pallet's current
@@ -701,9 +785,10 @@ function monGoalInnerHtml(pallet, job) {
   }
 
   const pct = monGoalProgressPct(d.current_count, d.goal_count);
+  const reworkBadge = d.rework_mode ? `<span class="tag rejected" style="margin-left:6px;">Rework</span>` : "";
   return `
     <div class="mon-goal-bar-track"><div class="mon-goal-bar-fill${d.reached ? " reached" : ""}" style="width:${pct}%;"></div></div>
-    <div class="mon-goal-bar-label">${d.current_count} / ${d.goal_count} pcs (${pct}%)${d.reached ? " · Reached" : ""}</div>
+    <div class="mon-goal-bar-label">${d.current_count} / ${d.goal_count} pcs (${pct}%)${d.reached ? " · Reached" : ""}${reworkBadge}</div>
     ${canEdit ? `
       <div class="mon-goal-edit-row">
         <input type="number" min="1" class="mon-goal-input" id="mon-goal-input-${pallet}" value="${d.goal_count}" />
@@ -809,6 +894,28 @@ async function monRefreshGoal(pallet, job) {
   }
 }
 
+function monRenderAlarmBanner() {
+  const el = document.getElementById("mon-alarm-banner");
+  if (!el) return;
+  const active = alarmLoadStore().current;
+  if (!active.length) {
+    el.style.display = "none";
+    el.innerHTML = "";
+    return;
+  }
+  const latest = active[0];
+  const fullText = `${active.length} active alarm${active.length === 1 ? "" : "s"} — latest: ${latest.tag}${latest.pallet ? ` (${latest.pallet})` : ""}: ${latest.description}`;
+  el.style.display = "";
+  el.innerHTML = `
+    <i class="fa-solid fa-triangle-exclamation"></i>
+    <div class="mon-alarm-text" title="${escapeHtml(fullText)}">
+      <strong>${active.length} active alarm${active.length === 1 ? "" : "s"}</strong>
+      — latest: ${escapeHtml(latest.tag)}${latest.pallet ? ` (${escapeHtml(latest.pallet)})` : ""}: ${escapeHtml(alarmShortText(latest.description, 90))}
+    </div>
+    <button type="button" class="btn btn-sm" id="mon-alarm-open-btn">Open Alarm Center</button>`;
+  document.getElementById("mon-alarm-open-btn").addEventListener("click", () => loadPage("alarm_center"));
+}
+
 /* ============================================================
    NEXT STEP MODAL — operator hits the production goal.
    Blocking modal: no backdrop-close, no cancel button. Three paths:
@@ -848,15 +955,15 @@ function monRenderNextStepChoices() {
       ${data.current_count} / ${data.goal_count} pcs.
     </div>
     <div class="ns-choice-grid">
-      <button type="button" class="ns-choice-btn" id="ns-choice-continuous">
+      <button type="button" class="ns-choice-btn" id="ns-choice-nextlot">
         <i class="fa-solid fa-arrows-rotate"></i>
-        Continuous
-        <span class="ns-choice-desc">Keep running this model — update conditions and extend the target.</span>
+        Next Lot
+        <span class="ns-choice-desc">Same model, new lot — update conditions/Lot No. on both pallets and set a fresh target.</span>
       </button>
-      <button type="button" class="ns-choice-btn" id="ns-choice-updategoal">
-        <i class="fa-solid fa-bullseye"></i>
-        Update Goal
-        <span class="ns-choice-desc">The target was set wrong — correct it and keep going.</span>
+      <button type="button" class="ns-choice-btn" id="ns-choice-rework">
+        <i class="fa-solid fa-arrow-rotate-left"></i>
+        Rework
+        <span class="ns-choice-desc">Same lot — some parts were NG (grade F, a failed mark, etc.) and need to be scrubbed and remarked. No new target needed.</span>
       </button>
       <button type="button" class="ns-choice-btn" id="ns-choice-changemodel">
         <i class="fa-solid fa-right-from-bracket"></i>
@@ -865,8 +972,8 @@ function monRenderNextStepChoices() {
       </button>
     </div>
   `;
-  document.getElementById("ns-choice-continuous").addEventListener("click", monRenderNextStepContinuous);
-  document.getElementById("ns-choice-updategoal").addEventListener("click", monRenderNextStepUpdateGoal);
+  document.getElementById("ns-choice-nextlot").addEventListener("click", monRenderNextStepContinuous);
+  document.getElementById("ns-choice-rework").addEventListener("click", monRenderNextStepRework);
   document.getElementById("ns-choice-changemodel").addEventListener("click", monRenderNextStepChangeModel);
 }
 
@@ -1065,45 +1172,44 @@ async function monSubmitNextStepContinuous() {
   monRefreshGoals();
 }
 
-/* ---- 2. Update Goal: correct a wrong target ---- */
-function monRenderNextStepUpdateGoal() {
+/* ---- 2. Rework: confirm, no new target needed ---- */
+function monRenderNextStepRework() {
   const { job, data } = NEXTSTEP;
   document.getElementById("mon-nextstep-body").innerHTML = `
     <div class="ns-back-row"><button type="button" class="btn btn-sm btn-ghost" id="ns-back-btn">&larr; Back</button></div>
     <div id="ns-alert-box"></div>
-    <p style="font-size:13px;color:var(--ink-soft);">Current count: <strong>${data.current_count}</strong> pcs for "${escapeHtml(job.model)}" (Lot ${escapeHtml(job.lot_no)}).</p>
-    <div class="field">
-      <label for="ns-newgoal">New target (pcs)</label>
-      <input type="number" min="1" id="ns-newgoal" value="${data.goal_count || data.current_count}" />
-    </div>
+    <p style="font-size:13.5px;color:var(--ink);">
+      "${escapeHtml(job.model)}" (Lot ${escapeHtml(job.lot_no)}) reached its target of
+      ${data.goal_count} pcs (currently ${data.current_count}), but some parts came out NG
+      and need to be scrubbed and remarked.
+    </p>
+    <p style="font-size:13px;color:var(--ink-soft);">
+      No new target is needed. From now on, parts marked on this lot are recorded separately
+      as <strong>Rework</strong> in the production log instead of Mass Production.
+    </p>
     <div style="display:flex; gap:8px; margin-top:10px;">
-      <button type="button" class="btn btn-primary" id="ns-updategoal-ok">OK</button>
+      <button type="button" class="btn btn-primary" id="ns-rework-ok">OK</button>
     </div>
   `;
   document.getElementById("ns-back-btn").addEventListener("click", monRenderNextStepChoices);
-  document.getElementById("ns-updategoal-ok").addEventListener("click", monSubmitNextStepUpdateGoal);
+  document.getElementById("ns-rework-ok").addEventListener("click", monSubmitNextStepRework);
 }
 
-async function monSubmitNextStepUpdateGoal() {
+async function monSubmitNextStepRework() {
   const alertBox = document.getElementById("ns-alert-box");
   alertBox.innerHTML = "";
-  const input = document.getElementById("ns-newgoal");
-  const value = input ? parseInt(input.value, 10) : NaN;
-  if (Number.isNaN(value) || value <= 0) {
-    alertBox.innerHTML = `<div class="alert alert-error">Enter a target greater than 0.</div>`;
-    return;
-  }
   const { job } = NEXTSTEP;
-  const okBtn = document.getElementById("ns-updategoal-ok");
+  const okBtn = document.getElementById("ns-rework-ok");
   if (okBtn) okBtn.disabled = true;
+
   try {
-    const res = await apiFetch("/api/production/goal", {
+    const res = await apiFetch("/api/production/rework", {
       method: "POST",
-      body: JSON.stringify({ model: job.model, lot_no: job.lot_no, goal_count: value }),
+      body: JSON.stringify({ model: job.model, lot_no: job.lot_no }),
     });
     const data = await res.json();
     if (!res.ok) {
-      alertBox.innerHTML = `<div class="alert alert-error">${escapeHtml(data.error || "Could not update target.")}</div>`;
+      alertBox.innerHTML = `<div class="alert alert-error">${escapeHtml(data.error || "Could not enable rework mode.")}</div>`;
       if (okBtn) okBtn.disabled = false;
       return;
     }
@@ -1112,8 +1218,9 @@ async function monSubmitNextStepUpdateGoal() {
     if (okBtn) okBtn.disabled = false;
     return;
   }
+
   monCloseNextStepModal();
-  showToast("Target updated.", "success");
+  showToast("Rework mode on — parts from here are logged as Rework.", "success");
   monRefreshGoals();
 }
 
@@ -1154,21 +1261,21 @@ function monAutoActivePallets(mode) {
   return ["Pallet1", "Pallet2"];
 }
 
-function monAutoNextPallet(mode) {
-  const pallets = monAutoActivePallets(mode);
-  if (pallets.length === 1) return pallets[0];
-  const p = pallets[MON_AUTO.palletCycleIndex % pallets.length];
-  MON_AUTO.palletCycleIndex += 1;
-  return p;
-}
+// function monAutoNextPallet(mode) {
+//   const pallets = monAutoActivePallets(mode);
+//   if (pallets.length === 1) return pallets[0];
+//   const p = pallets[MON_AUTO.palletCycleIndex % pallets.length];
+//   MON_AUTO.palletCycleIndex += 1;
+//   return p;
+// }
 
-// Same lookup as monAutoNextPallet but read-only — used to preview which
-// pallet/model the *next* cycle will run against, without consuming a turn.
-function monPeekNextAutoPallet(mode) {
-  const pallets = monAutoActivePallets(mode);
-  if (pallets.length === 1) return pallets[0];
-  return pallets[MON_AUTO.palletCycleIndex % pallets.length];
-}
+// // Same lookup as monAutoNextPallet but read-only — used to preview which
+// // pallet/model the *next* cycle will run against, without consuming a turn.
+// function monPeekNextAutoPallet(mode) {
+//   const pallets = monAutoActivePallets(mode);
+//   if (pallets.length === 1) return pallets[0];
+//   return pallets[MON_AUTO.palletCycleIndex % pallets.length];
+// }
 
 // Animates step state (pending/active/done) directly on the already-visible
 // First Cycle / Loop Cycle lists built by monRenderSeqPreview(), instead of
@@ -1268,86 +1375,140 @@ function monShowLiveList() {
   if (list) list.style.display = "";
 }
 
-async function monAutoRunOneCycle(mode) {
-  const info = wmAutoModeInfo(mode);
-  monShowPreview(); // keep the Pallet 1 / Pallet 2 columns visible the whole run
+// Runs one pallet's step list, updating the live preview + check-status pills.
+// Returns { markingDone, failed }.
+//   markingDone -> Start Marking completed OK (a part was physically marked)
+//   failed      -> a step returned ok:false (sequence stopped there)
+async function monRunCycleSteps(pallet, steps, listId) {
+  monRenderSeqPreviewList(listId, steps);
+  monResetPreviewStepState(listId, steps);
 
-  if (info.kind === "single") {
-    const pallet = info.pallet;
-    MON.activePallet = pallet;
+  let markingDone = false;
+  let failed = false;
 
-    const job = getSelectedJob(pallet);
-    monInitCheckStatusForJob(pallet, job); // reset to pending/skipped for this cycle
-    monRenderPalletBlock(pallet);
-
-    const steps = applySkipFlags(AUTO_SINGLE_LOOP_STEPS, job);
-    monRenderSeqPreviewList("mon-preview-loop-list", steps);
-    monResetPreviewStepState("mon-preview-loop-list", steps);
-    
-    for (let i = 0; i < steps.length; i++) {
-      monSetPreviewStepState("mon-preview-loop-list", steps, i);
-      if (steps[i].skipped) {
-        monApplyStepResult(pallet, steps[i], true);
-        await new Promise((r) => setTimeout(r, 150)); // brief pause so the yellow state is visible
-        continue;
-      }
-      let verdict;
-      try {
-        verdict = await steps[i].fn();
-      } catch (err) {
-        verdict = { ok: false, alarm: true, message: String(err) };
-      }
-      if (!verdict || verdict.ok !== false) {
-        monApplyStepResult(pallet, steps[i], true);
-      } else {
-        monApplyStepResult(pallet, steps[i], false);
-        showToast(verdict.alarm ? `Alarm: ${steps[i].label} — ${verdict.message}` : `${steps[i].label}: ${verdict.message}`);
-        break;
-      }
-    }
-    monSetPreviewStepState("mon-preview-loop-list", steps, steps.length);
-
-    if (job) await monReportCount(pallet, job);
-    return;
-  }
-
-  // AUTO1-2: still alternates which pallet runs next, but now animates
-  // that pallet's own column instead of juggling a "first" vs "loop"
-  // list — the steps and skip logic were identical either way.
-  const pallet = monAutoNextPallet(mode);
-  const activeListId = pallet === "Pallet1" ? "mon-preview-p1-list" : "mon-preview-p2-list";
-  MON.activePallet = pallet;
-
-  const job = getSelectedJob(pallet);
-  monInitCheckStatusForJob(pallet, job); // reset to pending/skipped for this cycle
-  monRenderPalletBlock(pallet);
-
-  const steps = applySkipFlags(AUTO_SEQUENCE_STEPS, job);
-  monRenderSeqPreviewList(activeListId, steps);
-  monResetPreviewStepState(activeListId, steps);
   for (let i = 0; i < steps.length; i++) {
-    monSetPreviewStepState(activeListId, steps, i);
+    monSetPreviewStepState(listId, steps, i);
+
     if (steps[i].skipped) {
       monApplyStepResult(pallet, steps[i], true);
-      await new Promise((r) => setTimeout(r, 150));
+      await new Promise((r) => setTimeout(r, 150)); // brief pause so the yellow state is visible
       continue;
     }
+
     let verdict;
     try {
       verdict = await steps[i].fn();
     } catch (err) {
       verdict = { ok: false, alarm: true, message: String(err) };
     }
+
     if (!verdict || verdict.ok !== false) {
       monApplyStepResult(pallet, steps[i], true);
+      if (steps[i].id === "start_marking") markingDone = true;
     } else {
       monApplyStepResult(pallet, steps[i], false);
-      showToast(verdict.alarm ? `Alarm: ${steps[i].label} — ${verdict.message}` : `${steps[i].label}: ${verdict.message}`);
+      showToast(
+        verdict.alarm
+          ? `Alarm: ${steps[i].label} — ${verdict.message}`
+          : `${steps[i].label}: ${verdict.message}`
+      );
+      failed = true;
       break;
     }
   }
-  monSetPreviewStepState(activeListId, steps, steps.length);
-  if (job) monReportCount(pallet, job);
+
+  // Only mark the whole list "done" when nothing failed; otherwise leave
+  // the list parked on the step that stopped the cycle.
+  if (!failed) monSetPreviewStepState(listId, steps, steps.length);
+
+  return { markingDone, failed };
+}
+
+// Reads the live pallet sensors and decides which pallet this auto cycle runs.
+//   AUTO1-2 : the pallet currently in the OPERATOR room (the cycle swaps it
+//             into the Machine Room and marks it).
+//   AUTO1/2 : fixed pallet, but it must actually be in the Operator Room.
+// Returns { ok:true, pallet } or { ok:false, message }.
+async function monResolveNextPallet(mode) {
+  const info = wmAutoModeInfo(mode);
+
+  // ioReadPalletPositions() -> ioFetchStatus(): raises IO_DISCONNECT /
+  // PALLET_CONFLICT alarms itself, so we only need to explain here.
+  const pos = await ioReadPalletPositions();
+  if (!pos.ok) {
+    const why = pos.conflict
+      ? "the pallet position sensors contradict each other"
+      : "the pallet position sensors could not be read";
+    return { ok: false, message: `Cannot start: ${why} — see Alarm Center.` };
+  }
+
+  // Prefer the operator-room sensor; if only the machine-room sensor reads,
+  // the other pallet must be in the operator room.
+  const operator =
+    pos.operator || (pos.machine ? (pos.machine === "Pallet1" ? "Pallet2" : "Pallet1") : null);
+
+  if (!operator) {
+    return { ok: false, message: "Cannot start: no pallet reads in either room (in transit or sensor fault)." };
+  }
+
+  if (info.kind === "single") {
+    if (operator !== info.pallet) {
+      return {
+        ok: false,
+        message: `${mode}: ${info.pallet} is not in the Operator Room (${operator} is). Use Call Pallet on Model Setting first.`,
+      };
+    }
+    return { ok: true, pallet: info.pallet };
+  }
+
+  if (!getSelectedJob(operator)) {
+    return {
+      ok: false,
+      message: `${operator} is in the Operator Room but has no model selected — choose one on Model Setting.`,
+    };
+  }
+  return { ok: true, pallet: operator };
+}
+
+// Returns true if a cycle actually started, false if it was refused before
+// anything moved (so the queue processor can stop instead of retrying).
+async function monAutoRunOneCycle(mode) {
+  const info = wmAutoModeInfo(mode);
+  monShowPreview(); // keep the Pallet 1 / Pallet 2 columns visible the whole run
+
+  // Decide the pallet from the live sensors, not from a counter.
+  const next = await monResolveNextPallet(mode);
+  if (!next.ok) {
+    showToast(next.message);
+    return false;
+  }
+  const pallet = next.pallet;
+
+  // Keep the in-memory operator-room state in step with the sensors so
+  // CHANGE_PALLET (which derives its target from it) swaps the right way.
+  WM_PALLET_STATE.operatorRoomPallet = pallet;
+
+  let listId, baseSteps;
+  if (info.kind === "single") {
+    listId = "mon-preview-loop-list";
+    baseSteps = AUTO_SINGLE_LOOP_STEPS;
+  } else {
+    listId = pallet === "Pallet1" ? "mon-preview-p1-list" : "mon-preview-p2-list";
+    baseSteps = AUTO_SEQUENCE_STEPS;
+  }
+
+  MON.activePallet = pallet;
+  const job = getSelectedJob(pallet);
+  monInitCheckStatusForJob(pallet, job); // reset to pending/skipped for this cycle
+  monRenderPalletBlock(pallet);
+
+  const steps = applySkipFlags(baseSteps, job);
+  const { markingDone } = await monRunCycleSteps(pallet, steps, listId);
+
+  // Log the part only if it was actually marked. A failed door/pallet/laser
+  // step before Start Marking must not create a production_log row.
+  if (job && markingDone) await monReportCount(pallet, job);
+  return true;
 }
 
 async function monProcessAutoQueue(mode) {
@@ -1359,14 +1520,24 @@ async function monProcessAutoQueue(mode) {
 
   while (MON_AUTO.queue > 0) {
     MON_AUTO.queue -= 1;
-    await monAutoRunOneCycle(mode);
+    const started = await monAutoRunOneCycle(mode);
+    if (!started) {
+      // Refused before any motion (sensors unreadable / wrong pallet / no
+      // model). Drop the remaining queued starts so the same error
+      // isn't toasted over and over.
+      MON_AUTO.queue = 0;
+      break;
+    }
   }
 
   MON_AUTO.running = false;
   MON.running = false;
   MON.activePallet = null;
-  document.getElementById("mon-signal-pill").className = "status-pill offline";
-  document.getElementById("mon-signal-pill").innerHTML = '<span class="dot"></span> Waiting for signal';
+  const pill = document.getElementById("mon-signal-pill");
+  if (pill) {
+    pill.className = "status-pill offline";
+    pill.innerHTML = '<span class="dot"></span> Waiting for signal';
+  }
   monShowPreview();
   monRenderAll();
 }
@@ -1772,6 +1943,17 @@ function monRenderSeqList(steps, activeIndex, palletTag) {
 
 async function monReportCount(pallet, job) {
   const code2d_result = monDeriveCode2DResult(pallet, job);
+  const code2d_detail = monBuildCode2DDetail(pallet); // NEW
+
+  // The queue id reserved by wmRunStartMarking() for this pallet's cycle.
+  const pieceQueueId = (MON.activePieceQueueId && MON.activePieceQueueId[pallet]) || null;
+
+  // Read-back value to compare against the expected "QR Code" per-piece
+  // value — pulled from whichever 2D-code step most recently captured
+  // data this cycle (Start Reader's v3, or Read Result's y).
+  const captured = MON.code2d[pallet];
+  const read_qrcode = captured && captured.values ? (captured.values.v3 || captured.values.y || null) : null;
+
   try {
     const res = await apiFetch("/api/production/log", {
       method: "POST",
@@ -1779,6 +1961,9 @@ async function monReportCount(pallet, job) {
         model_condition_id: job.id,
         pallet_no: pallet,
         code2d_result,
+        code2d_detail, // NEW
+        piece_queue_id: pieceQueueId,
+        read_qrcode,
       }),
     });
     const data = await res.json();
@@ -1788,12 +1973,16 @@ async function monReportCount(pallet, job) {
     }
     MON.counts[pallet] = data.count;
     MON.lastMarked[pallet] = data.marked_at || new Date().toISOString();
+    if (data.read_match === false) {
+      showToast(`2D read-back did not match the expected QR Code for this part.`, "error", 4000);
+    }
   } catch (err) {
     showToast("Could not reach the server to log production count.");
   } finally {
+    if (MON.activePieceQueueId) MON.activePieceQueueId[pallet] = null;
     if (document.getElementById(`mon-body-${pallet}`)) monRenderPalletBlock(pallet);
-    monRefreshGoal("Pallet1", getSelectedJob("Pallet1")); // NEW
-    monRefreshGoal("Pallet2", getSelectedJob("Pallet2")); // NEW
+    monRefreshGoal("Pallet1", getSelectedJob("Pallet1"));
+    monRefreshGoal("Pallet2", getSelectedJob("Pallet2"));
   }
 }
 
@@ -2023,12 +2212,33 @@ function monApplyModeView() {
   }
 }
 
+// Detects a selected job whose model_condition row no longer exists
+// (deleted, or the model was recreated with a new id) and clears the
+// stale localStorage selection instead of repeatedly 404'ing against it.
+async function monValidateSelectedJob(pallet) {
+  const job = getSelectedJob(pallet);
+  if (!job) return;
+  try {
+    const res = await apiFetch(`/api/models/${job.id}`);
+    if (res.status === 404) {
+      setSelectedJob(pallet, null);
+      monRenderPalletBlock(pallet);
+      showToast(`The model previously selected for ${pallet} no longer exists — please re-select it on Model Setting.`, "info", 4000);
+    }
+  } catch (err) {
+    // transient network issue — leave the selection alone, don't clear on a guess
+  }
+}
 PAGE_INIT.monitor = function () {
   MON.running = false;
   MON.activePallet = null;
   MON.pendingSet = null;
+  monValidateSelectedJob("Pallet1");
+  monValidateSelectedJob("Pallet2");
   monRenderAll();
   monApplyModeView();
+  monRenderAlarmBanner();
+  window.addEventListener("nlm:alarms-changed", monRenderAlarmBanner);
 
   const completeBtn = document.getElementById("mon-complete-setting-btn");
   if (completeBtn) {
@@ -2039,13 +2249,13 @@ PAGE_INIT.monitor = function () {
   document.getElementById("mon-complete-setting-finish-btn").addEventListener("click", monConfirmCompleteSetting);
   document.getElementById("mon-complete-setting-cancel-btn").addEventListener("click", () => {
     document.getElementById("mon-complete-setting-backdrop").classList.remove("open");
-    monResumeCompleteSettingAttentionIfEligible(); // NEW — they backed out, keep reminding
+    monResumeCompleteSettingAttentionIfEligible();
   });
 
   document.getElementById("mon-complete-setting-backdrop").addEventListener("click", (e) => {
     if (e.target.id === "mon-complete-setting-backdrop") {
       document.getElementById("mon-complete-setting-backdrop").classList.remove("open");
-      monResumeCompleteSettingAttentionIfEligible(); // NEW
+      monResumeCompleteSettingAttentionIfEligible();
     }
   });
 
@@ -2060,20 +2270,16 @@ PAGE_INIT.monitor = function () {
     MON.pendingSet = null;
   });
   document.getElementById("mon-confirm-backdrop").addEventListener("click", (e) => {
-    if (e.target.id === "mon-confirm-backdrop") {document.getElementById("mon-confirm-backdrop").classList.remove("open");MON.pendingSet = null;}
+    if (e.target.id === "mon-confirm-backdrop") {
+      document.getElementById("mon-confirm-backdrop").classList.remove("open");
+      MON.pendingSet = null;
+    }
   });
   document.getElementById("mon-edit-modal-save-btn").addEventListener("click", monSubmitEditModal);
   document.getElementById("mon-edit-modal-cancel-btn").addEventListener("click", monCloseEditModal);
   document.getElementById("mon-edit-modal-backdrop").addEventListener("click", (e) => {
     if (e.target.id === "mon-edit-modal-backdrop") monCloseEditModal();
   });
-};
-
-PAGE_TEARDOWN.monitor = function () {
-  MON.running = false;
-  MON_AUTO.running = false;
-  clearTimeout(MON.timer);
-  monCloseNextStepModal(); // NEW
 };
 
 /* ============================================================
@@ -2204,44 +2410,308 @@ async function wmStub(name, ms = 500) {
   return { ok: true, message: `${name} OK (simulated)` };
 }
 
-/* ---- Raw equipment command helper (transport-level only) ----
-   Returns { ok, response, message }. ok=false means the HTTP call
-   itself failed (unreachable service, connection error) — it does
-   NOT parse WX,OK vs WX,NG; callers check that themselves since the
-   right check differs per command (RX,Ready's status digit vs a
-   plain WX,OK/WX,NG). ---- */
-async function eqSendRaw(conn, command) {
+/* ---- Laser NG -> Alarm Center ----
+   The Python service returns HTTP 200 / ok:true for ANY reply from the marker,
+   including "WX,NG,<code>,<message>". Inspect every reply here so a rejected
+   command becomes a real alarm instead of only a toast. Transient "busy"
+   replies are NOT alarms (the sequences already wait/retry those). */
+const LASER_NG_TRANSIENT = /busy|controlling shutter/i;
+
+function eqParseNg(response) {
+  const m = /^(?:WX|RX),NG,([^,]*)(?:,(.*))?$/.exec(String(response || "").trim());
+  return m ? { code: (m[1] || "").trim(), message: (m[2] || "").trim() } : null;
+}
+
+function eqJobNoFromCommand(command) {
+  const m = /^WX,(?:JobNo=|JOB=)(\d{1,4})/.exec(command);
+  return m ? Number(m[1]) : null;
+}
+
+function eqInspectLaserResponse(command, response) {
+  const ng = eqParseNg(response);
+
+  if (!ng) {
+    // A healthy reply proves the matching fault is gone.
+    if (/^WX,JobNo=/.test(command) && /^WX,OK/.test(response)) {
+      alarmResolveByTag("LASER_S006", "marker accepted WX,JobNo again");
+    }
+    if (/^WX,Check2DCode5=/.test(command) && /^WX,OK/.test(response)) {
+      alarmResolveByTag("LASER_S087", "2D code read succeeded");
+    }
+    return;
+  }
+
+  if (LASER_NG_TRANSIENT.test(response)) return; // busy is not a fault
+
+  const pallet = MON.activePallet || WM.runningPallet || null;
+  const job = pallet ? getSelectedJob(pallet) : null;
+  const jobNo = eqJobNoFromCommand(command) ?? (job ? job.job_no : null);
+  const cmdShort = command.length > 60 ? command.slice(0, 57) + "…" : command;
+  const detail = `${ng.code}${ng.message ? ` — ${ng.message}` : ""}`;
+  const context = {
+    command, code: ng.code, job_no: jobNo,
+    ...(job ? { model: job.model, lot_no: job.lot_no || "" } : {}),
+  };
+
+  const known = ng.code === "S006" ? "LASER_S006" : ng.code === "S087" ? "LASER_S087" : "LASER_NG";
+  alarmRaiseFault(known, {
+    description: `Marker rejected "${cmdShort}": ${detail}.`,
+    pallet,
+    context,
+    dedupeKey: `${known}:${known === "LASER_NG" ? ng.code : ""}:${pallet || ""}`,
+    toast: false, // the sequence runner already toasts the failed step
+    ...(known === "LASER_S006" ? {} : { kind: "ack" }),
+  });
+}
+
+async function eqSendRaw(conn, command, opts = {}) {
   try {
     const res = await apiFetch("/api/equipment/raw", {
       method: "POST",
       body: JSON.stringify({ ip: conn.ip, port: conn.port, command }),
     });
     const data = await res.json().catch(() => ({}));
+
     if (!res.ok || data.ok === false) {
-      return { ok: false, response: null, message: (data && data.error) || `Command failed (${command}).` };
+      const message = (data && data.error) || `Command failed (${command}).`;
+      if (!opts.skipInspect) {
+        alarmRaiseFault("LASER_DISCONNECT", {
+          description: `Could not reach the MD-X2520A while sending "${command}": ${alarmShortText(message, 160)}`,
+          pallet: MON.activePallet || WM.runningPallet || null,
+          context: { command, error: message },
+          dedupeKey: "LASER_DISCONNECT",
+          toast: false,
+        });
+      }
+      return { ok: false, response: null, message };
     }
-    return { ok: true, response: data.response || "", message: data.response || "" };
+
+    const response = data.response || "";
+    if (!opts.skipInspect) {
+      alarmResolveByTag("LASER_DISCONNECT", "the marker responded again");
+      eqInspectLaserResponse(command, response);
+    }
+    return { ok: true, response, message: response };
   } catch (err) {
-    return { ok: false, response: null, message: "Could not reach the equipment service." };
+    const message = "Could not reach the equipment service.";
+    if (!opts.skipInspect) {
+      alarmRaiseFault("LASER_DISCONNECT", {
+        description: `Could not reach the MD-X2520A while sending "${command}": ${message}`,
+        pallet: MON.activePallet || WM.runningPallet || null,
+        context: { command, error: message },
+        dedupeKey: "LASER_DISCONNECT",
+        toast: false,
+      });
+    }
+    return { ok: false, response: null, message };
   }
 }
 
-// TODO: read the middle-door / side-door state via the Modbus I/O
-// service once it exists (README "Recommended next step" #2). Until
-// then this always reports closed so the laser-side steps built here
-// aren't blocked on hardware that isn't wired up yet.
-async function ioCheckDoorsClosed() {
-  return { ok: true, closed: true };
+/* ---- I/O fault detection ----
+   ASSUMPTIONS (validate against real hardware):
+   1. GET /api/io/status only fails when the Modbus bridge can't read the
+      stations, so ANY failure there = IO_DISCONNECT.
+   2. For action endpoints (front-door, change-pallet, call-pallet) the
+      Python service returns 502 for BOTH comms faults and normal
+      interlock failures, so those are classified by message text. The
+      pattern below matches the strings currently produced by io_core.py
+      and ioService.js; if those messages change, update it here only. */
+const IO_COMM_FAULT_PATTERN =
+  /Cannot reach I\/O service|Could not connect to Station|connection lost|reconnect retry/i;
+
+// Poll-mode conflict debounce: a swap can briefly show contradictory
+// sensors, so the background poller needs N consecutive bad reads.
+// (~4.5 s at the 1.5 s poll interval.) Sequence-time reads are NOT
+// debounced — pallets should be stationary when a cycle starts.
+const IO_CONFLICT_DEBOUNCE_READS = 3;
+const IOFAULT = { conflictStreak: 0 };
+
+function ioIsCommFaultMessage(msg) {
+  return IO_COMM_FAULT_PATTERN.test(String(msg || ""));
 }
 
-// TODO: read EC-S7H-500-3-WA #2/#3 limit switches via the Modbus I/O
-// service once it exists:
-//   #2 LS0=1 & #3 LS1=1 -> Pallet1 physically in the Machine Room
-//   #2 LS1=1 & #3 LS0=1 -> Pallet2 physically in the Machine Room
-// Until then this trusts whichever pallet the software believes
-// CHANGE_PALLET most recently moved in, rather than a real sensor.
+// poll=true  -> called by a background poller: toast once, then stay quiet.
+// poll=false -> called inside a sequence: the sequence runner already
+//               toasts the failed step, so don't double-toast.
+function ioRaiseDisconnect(detail, poll = false) {
+  return alarmRaiseFault("IO_DISCONNECT", {
+    description: `Modbus I/O bridge is not responding — ${alarmShortText(detail, 160)}`,
+    context: { detail },
+    toast: poll,
+    quietRepeat: poll,
+  });
+}
+
+// Mirrors the wiring rules in io_core.py: DI00 & DI03 must never both be
+// ON (machine-room crash), DI01 & DI04 must never both be ON
+// (operator-room crash), and one pallet can't be in both rooms.
+// Returns a human-readable reason, or null when sensors are consistent.
+function ioPalletConflictReason(data) {
+  const p1m = !!data.pallet1_in_machine_room;
+  const p2m = !!data.pallet2_in_machine_room;
+  const p1o = !!data.pallet1_in_operator_room;
+  const p2o = !!data.pallet2_in_operator_room;
+  const reasons = [];
+  if (p1m && p1o) reasons.push("Pallet 1 reads in BOTH rooms (DI00 & DI01)");
+  if (p2m && p2o) reasons.push("Pallet 2 reads in BOTH rooms (DI03 & DI04)");
+  if (p1m && p2m) reasons.push("both pallets read in the Machine Room (DI00 & DI03)");
+  if (p1o && p2o) reasons.push("both pallets read in the Operator Room (DI01 & DI04)");
+  return reasons.length ? reasons.join("; ") : null;
+}
+
+function ioEvaluatePalletConflict(data, { poll = false } = {}) {
+  const reason = ioPalletConflictReason(data);
+  if (!reason) {
+    IOFAULT.conflictStreak = 0;
+    alarmResolveByTag("PALLET_CONFLICT", "pallet position sensors agree again");
+    return null;
+  }
+  if (poll) {
+    if (data.pallet2_clearing) { // mid-swap: contradictory reads are expected
+      IOFAULT.conflictStreak = 0;
+      return reason;
+    }
+    IOFAULT.conflictStreak += 1;
+    if (IOFAULT.conflictStreak < IO_CONFLICT_DEBOUNCE_READS) return reason;
+  }
+  alarmRaiseFault("PALLET_CONFLICT", {
+    description: `Pallet position sensors contradict each other: ${reason}.`,
+    context: { reason },
+    toast: poll,
+    quietRepeat: poll,
+  });
+  return reason;
+}
+
+// Single entry point for GET /api/io/status. Every read raises or clears
+// IO_DISCONNECT / PALLET_CONFLICT as a side effect.
+// Returns { ok:true, data } or { ok:false, commFault, error }.
+async function ioFetchStatus({ poll = false } = {}) {
+  let res, data;
+  try {
+    res = await apiFetch("/api/io/status");
+    data = await res.json().catch(() => ({}));
+  } catch (err) {
+    if (err && err.message === "Not authenticated") {
+      return { ok: false, commFault: false, error: "Not authenticated." };
+    }
+    ioRaiseDisconnect("the Node gateway could not be reached", poll);
+    return { ok: false, commFault: true, error: "Could not reach the I/O service." };
+  }
+  if (!res.ok || !data.ok) {
+    const error = data.error || `HTTP ${res.status}`;
+    ioRaiseDisconnect(error, poll);
+    return { ok: false, commFault: true, error };
+  }
+  alarmResolveByTag("IO_DISCONNECT", "I/O status read succeeded again");
+  ioEvaluatePalletConflict(data, { poll });
+  return { ok: true, data };
+}
+
+// POST helper for door/pallet actions. Raises IO_DISCONNECT only when the
+// failure looks like a comms fault (not a normal interlock refusal).
+async function ioPost(path, body, label) {
+  try {
+    const res = await apiFetch(path, { method: "POST", body: JSON.stringify(body || {}) });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.ok) {
+      const error = data.error || `${label} failed.`;
+      // Prefer the structured fault_type from the Python service; fall
+      // back to the old message-sniffing only if it's absent (older
+      // service build).
+      const faultType = data.fault_type || (ioIsCommFaultMessage(error) ? "comm" : null);
+
+      if (faultType === "comm") {
+        ioRaiseDisconnect(error);
+      } else if (faultType === "alarm") {
+        alarmRaiseFault("PALLET_ALARM", {
+          description: `${label}: ${alarmShortText(error, 160)}`,
+          toast: false, // the sequence runner / caller already toasts the failed step
+        });
+      }
+      return { ok: false, data, error, fault_type: faultType };
+    }
+    alarmResolveByTag("IO_DISCONNECT", "an I/O command succeeded");
+    alarmResolveByTag("PALLET_ALARM", "the command completed without an active alarm");
+    return { ok: true, data };
+  } catch (err) {
+    if (err && err.message === "Not authenticated") return { ok: false, data: {}, error: "Not authenticated." };
+    ioRaiseDisconnect("the Node gateway could not be reached");
+    return { ok: false, data: {}, error: "Could not reach I/O service." };
+  }
+}
+
+/* ---- replacements for your existing reads ---- */
+async function ioCheckSideDoorSafe() {
+  const st = await ioFetchStatus();
+  if (!st.ok) return { ok: false, closed: false };
+  // Only the side door belongs in this check — the front door is
+  // intentionally open at this point in the sequence.
+  return { ok: true, closed: !!st.data.side_door_safe };
+}
+
 async function ioReadPalletInMachineRoom(expectedPallet) {
-  return { ok: true, pallet: expectedPallet };
+  const st = await ioFetchStatus();
+  if (!st.ok) return { ok: false, pallet: null, commFault: !!st.commFault };
+  if (ioPalletConflictReason(st.data)) return { ok: false, pallet: null, conflict: true };
+  const p1 = st.data.pallet1_in_machine_room;
+  const p2 = st.data.pallet2_in_machine_room;
+  return { ok: true, pallet: p1 ? "Pallet1" : p2 ? "Pallet2" : null };
+}
+
+async function ioReadPalletPositions() {
+  const st = await ioFetchStatus();
+  if (!st.ok) return { ok: false, commFault: !!st.commFault };
+  const reason = ioPalletConflictReason(st.data);
+  if (reason) return { ok: false, conflict: true, reason };
+  const d = st.data;
+  return {
+    ok: true,
+    machine: d.pallet1_in_machine_room ? "Pallet1" : d.pallet2_in_machine_room ? "Pallet2" : null,
+    operator: d.pallet1_in_operator_room ? "Pallet1" : d.pallet2_in_operator_room ? "Pallet2" : null,
+  };
+}
+
+// Which pallet is in the MACHINE ROOM (under the laser/camera) right now.
+// Priority: running sequence context -> live I/O sensors -> inferred
+// (the pallet that is NOT in the Operator Room).
+async function wmResolveMachineRoomPallet() {
+  const ctx = MON.activePallet || WM.runningPallet;
+  if (ctx) return { pallet: ctx, source: "running sequence" };
+
+  const pos = await ioReadPalletPositions();
+  if (pos.ok && pos.machine) {
+    const operator = pos.machine === "Pallet1" ? "Pallet2" : "Pallet1";
+    if (WM_PALLET_STATE.operatorRoomPallet !== operator) {
+      WM_PALLET_STATE.operatorRoomPallet = operator; // self-correct stale UI state
+      wmUpdatePalletLocationUI();
+    }
+    return { pallet: pos.machine, source: "I/O sensors" };
+  }
+
+  const inferred = WM_PALLET_STATE.operatorRoomPallet === "Pallet1" ? "Pallet2" : "Pallet1";
+  return { pallet: inferred, source: "last known position (no sensor reading)" };
+}
+
+// Called when Model Setting opens so the in-memory state isn't stuck on the default.
+async function wmSyncPalletStateFromSensors() {
+  const pos = await ioReadPalletPositions();
+  if (!pos.ok) return;
+  const operator =
+    pos.operator || (pos.machine ? (pos.machine === "Pallet1" ? "Pallet2" : "Pallet1") : null);
+  if (operator && operator !== WM_PALLET_STATE.operatorRoomPallet) {
+    WM_PALLET_STATE.operatorRoomPallet = operator;
+    wmUpdatePalletLocationUI();
+  }
+}
+
+function wmLaserErrorHint(response) {
+  if (/S087/.test(response || "")) {
+    return "S087: the marker could not read the 2D code during the test marking. " +
+           "Check the part is under the camera in the Machine Room and that this job's " +
+           "Check2DCode5 values (A-Q) are the ones tuned for this part.";
+  }
+  return "";
 }
 
 /* ---- Real Start Marking sequence ----
@@ -2255,61 +2725,105 @@ async function ioReadPalletInMachineRoom(expectedPallet) {
    the pallet currently in the Operator Room if called stand-alone
    from the quick manual-function button grid. ---- */
 async function wmRunStartMarking() {
-  const pallet = MON.activePallet || WM.runningPallet || WM_PALLET_STATE.operatorRoomPallet;
-  const job = getSelectedJob(pallet);
+  const { pallet } = await wmResolveMachineRoomPallet();
+  let job = getSelectedJob(pallet);
   if (!job) {
     return { ok: false, alarm: true, message: `No model selected for ${pallet}.` };
   }
   const conn = getEquipmentConnection();
 
+  // ---- 0. Per-piece reservation, if this model has any per-piece condition ----
+  let pieceQueueId = null;
+  if (jobHasPerPieceConditions(job)) {
+    const reserved = await pieceReserveNext(job, pallet);
+    if (!reserved.ok) {
+      wmLog(`!!! Per-piece reservation failed: ${reserved.error}`, "error");
+      return { ok: false, alarm: true, message: reserved.error };
+    }
+    pieceQueueId = reserved.queue_id;
+    job = jobWithPieceValues(job, reserved.values);
+    wmLog(`<<< Reserved per-piece row #${reserved.queue_id} (seq ${reserved.seq_no})`, "ok");
+  }
+  MON.activePieceQueueId = MON.activePieceQueueId || {};
+  MON.activePieceQueueId[pallet] = pieceQueueId;
+
+  const fail = async (result) => {
+    if (pieceQueueId) await pieceRelease(pieceQueueId); // failed before marking -> back to pending
+    MON.activePieceQueueId[pallet] = null;
+    return result;
+  };
+  const ambiguous = async (result) => {
+    if (pieceQueueId) await pieceFail(pieceQueueId, result.message); // outcome unknown -> failed, never reused
+    MON.activePieceQueueId[pallet] = null;
+    return result;
+  };
+
   // ---- 1. Interlock ----
   wmLog(`>>> START_MARKING interlock check (${pallet})`);
-  const doors = await ioCheckDoorsClosed();
-  if (!doors.ok || !doors.closed) {
-    wmLog(`!!! Door interlock not satisfied`, "error");
-    return { ok: false, alarm: true, message: "Middle or side door is not closed." };
+  const doorSafe = await ioCheckSideDoorSafe(); // raises IO_DISCONNECT / PALLET_CONFLICT itself
+  if (!doorSafe.ok) {
+    wmLog(`!!! Could not read the I/O status (see Alarm Center)`, "error");
+    return fail({ ok: false, alarm: true, message: "Could not read door/pallet status — I/O service unreachable." });
   }
+  if (!doorSafe.closed) {
+    wmLog(`!!! Side door interlock not satisfied`, "error");
+    return fail({ ok: false, alarm: true, message: "Side door is not closed/safe." });
+  }
+
   const readyRaw = await eqSendRaw(conn, "RX,Ready");
   if (!readyRaw.ok) {
     wmLog(`!!! Could not reach laser: ${readyRaw.message}`, "error");
-    return { ok: false, alarm: true, message: readyRaw.message };
+    return fail({ ok: false, alarm: true, message: readyRaw.message });
   }
   const readyStatus = (readyRaw.response.split(",")[2] || "").trim();
   if (readyStatus === "1") {
+    alarmRaiseFault("ERR_READY_1", {
+      description: "Laser marker reports RX,Ready=1 (active error on the unit) — Start Marking was blocked.",
+      context: { pallet, model: job.model, job_no: job.job_no, lot_no: job.lot_no || "" },
+      toast: false,
+    });
     wmLog(`!!! Laser has an active error (RX,Ready=1)`, "error");
-    return { ok: false, alarm: true, message: "Laser reports an active error. Clear it on the unit first." };
+    return fail({ ok: false, alarm: true, message: "Laser reports an active error. Clear it on the unit first — see Alarm Center." });
+  }
+  if (readyStatus === "0" || readyStatus === "2") {
+    alarmResolveByTag("ERR_READY_1", "RX,Ready no longer reports an error");
   }
   if (readyStatus !== "0") {
     wmLog(`!!! Laser not ready (RX,Ready=${readyStatus || "?"})`, "warn");
-    return { ok: false, alarm: false, message: `Laser is not ready yet (status ${readyStatus || "unknown"}).` };
+    return fail({ ok: false, alarm: false, message: `Laser is not ready yet (status ${readyStatus || "unknown"}).` });
   }
-  wmLog(`<<< Interlock OK — doors closed, laser ready`, "ok");
+  wmLog(`<<< Interlock OK — side door safe, laser ready`, "ok");
 
   // ---- 2. Confirm pallet physically in the Machine Room ----
   const palletCheck = await ioReadPalletInMachineRoom(pallet);
-  if (!palletCheck.ok || palletCheck.pallet !== pallet) {
+  if (palletCheck.conflict) {
+    wmLog(`!!! Pallet position sensors contradict each other`, "error");
+    return fail({ ok: false, alarm: true, message: "Pallet position sensors contradict each other — see Alarm Center." });
+  }
+  if (!palletCheck.ok) {
+    wmLog(`!!! Could not read pallet position sensors`, "error");
+    return fail({ ok: false, alarm: true, message: "Could not read pallet position sensors — I/O service unreachable." });
+  }
+  if (palletCheck.pallet !== pallet) {
     wmLog(`!!! Pallet mismatch: expected ${pallet}, sensors report ${palletCheck.pallet || "unknown"}`, "error");
-    return { ok: false, alarm: true, message: "Pallet position sensors do not match the expected pallet." };
+    return fail({ ok: false, alarm: true, message: "Pallet position sensors do not match the expected pallet." });
   }
 
-  // ---- 3. Select the job (its own command) ----
+  // ---- 3. Select the job ----
   const jobNoCommand = `WX,JobNo=${padJob(job.job_no)}`;
   wmLog(`>>> ${jobNoCommand}`);
   const jobNoRaw = await eqSendRaw(conn, jobNoCommand);
   if (!jobNoRaw.ok) {
     wmLog(`!!! Could not reach laser: ${jobNoRaw.message}`, "error");
-    return { ok: false, alarm: true, message: jobNoRaw.message };
+    return fail({ ok: false, alarm: true, message: jobNoRaw.message });
   }
   if (!jobNoRaw.response.startsWith("WX,OK")) {
     wmLog(`!!! Job selection failed: ${jobNoRaw.response}`, "error");
-    return { ok: false, alarm: true, message: jobNoRaw.response };
+    return fail({ ok: false, alarm: true, message: jobNoRaw.response });
   }
   wmLog(`<<< ${jobNoRaw.response}`, "ok");
 
-  // ---- 4. Push every condition value individually. The marker treats
-  // "WX,JOB=..,BLK=..,CharacterString=.." as ONE command per block — a
-  // single line can't carry two BLKs, so each condition must be its
-  // own command with its own WX,OK reply before the next one goes out.
+  // ---- 4. Push every condition value ----
   const conditions = job.conditions || [];
   for (const item of conditions) {
     const condCommand = `WX,JOB=${padJob(job.job_no)},BLK=${padBlk(item.block_no)},CharacterString=${item.condition_value}`;
@@ -2317,29 +2831,29 @@ async function wmRunStartMarking() {
     const condRaw = await eqSendRaw(conn, condCommand);
     if (!condRaw.ok) {
       wmLog(`!!! Could not reach laser: ${condRaw.message}`, "error");
-      return { ok: false, alarm: true, message: condRaw.message };
+      return fail({ ok: false, alarm: true, message: condRaw.message });
     }
     if (!condRaw.response.startsWith("WX,OK")) {
       wmLog(`!!! Setting "${item.condition_name}" (BLK ${padBlk(item.block_no)}) failed: ${condRaw.response}`, "error");
-      return { ok: false, alarm: true, message: condRaw.response };
+      return fail({ ok: false, alarm: true, message: condRaw.response });
     }
     wmLog(`<<< ${condRaw.response}`, "ok");
   }
 
-  // ---- 5. Trigger marking, wait for WX,OK ----
+  // ---- 5. Trigger marking — any failure from here is AMBIGUOUS (part may be marked) ----
   wmLog(`>>> WX,StartMarking=1`);
   const markRaw = await eqSendRaw(conn, "WX,StartMarking=1");
   if (!markRaw.ok) {
     wmLog(`!!! Could not reach laser: ${markRaw.message}`, "error");
-    return { ok: false, alarm: true, message: markRaw.message };
+    return ambiguous({ ok: false, alarm: true, message: markRaw.message });
   }
   if (!markRaw.response.startsWith("WX,OK")) {
     wmLog(`!!! Marking failed: ${markRaw.response}`, "error");
-    return { ok: false, alarm: true, message: markRaw.response };
+    return ambiguous({ ok: false, alarm: true, message: markRaw.response });
   }
   wmLog(`<<< ${markRaw.response}`, "ok");
 
-  return { ok: true, message: "Marking complete." };
+  return { ok: true, message: "Marking complete.", piece_queue_id: pieceQueueId };
 }
 
 /* ---- 2D Code grade ranking ----
@@ -2366,8 +2880,8 @@ function code2dGradeRank(letter) {
    instead of failing on the first busy reading. A hard error (status 1)
    still fails immediately — that's a real fault, not a timing issue. ---- */
 async function eqCheckLaserReady(conn, opts = {}) {
-  const maxWaitMs = opts.maxWaitMs ?? 10000;   // total time willing to wait
-  const pollIntervalMs = opts.pollIntervalMs ?? 500; // gap between polls
+  const maxWaitMs = opts.maxWaitMs ?? 10000;
+  const pollIntervalMs = opts.pollIntervalMs ?? 500;
   const deadline = Date.now() + maxWaitMs;
   let attempt = 0;
   let lastMessage = "";
@@ -2377,23 +2891,29 @@ async function eqCheckLaserReady(conn, opts = {}) {
     const raw = await eqSendRaw(conn, "RX,Ready");
 
     if (!raw.ok) {
-      lastMessage = raw.message;
-      // Transport/comm hiccup — treat like busy and retry rather than
-      // aborting instantly, since the marker may just be mid-operation.
+      lastMessage = raw.message; // transport hiccup — retry like busy
     } else {
       const status = (raw.response.split(",")[2] || "").trim();
       if (status === "0") {
+        alarmResolveByTag("ERR_READY_1", "RX,Ready returned to 0");
         return { ready: true };
       }
       if (status === "1") {
-        // Genuine active error — don't waste time retrying this one.
+        // Genuine active error — raise a real alarm, don't retry.
+        alarmRaiseFault("ERR_READY_1", {
+          description: "Laser marker reports RX,Ready=1 (active error on the unit).",
+          context: opts.pallet ? { pallet: opts.pallet } : null,
+          toast: false, // the calling step's verdict is toasted by the sequence runner
+        });
         return {
           ready: false,
           alarm: true,
-          message: "Laser reports an active error (RX,Ready=1). Clear it on the unit first.",
+          message: "Laser reports an active error (RX,Ready=1). Clear it on the unit first — see Alarm Center.",
         };
       }
       if (status === "2") {
+        // Busy is not an error state, so any earlier laser-error alarm is stale.
+        alarmResolveByTag("ERR_READY_1", "RX,Ready no longer reports an error");
         lastMessage = "Laser is busy (marking/expansion in progress).";
       } else {
         lastMessage = `Unexpected RX,Ready response: ${raw.response}`;
@@ -2419,12 +2939,12 @@ async function eqCheckLaserReady(conn, opts = {}) {
    value (positionally analogous to "B" in CodeReadResult's reply —
    see CODE2D_RESULT_READER below). ---- */
 async function wmRunCode2DStartReader() {
-  const pallet = MON.activePallet || WM.runningPallet || WM_PALLET_STATE.operatorRoomPallet;
+  const { pallet, source } = await wmResolveMachineRoomPallet();
   const job = getSelectedJob(pallet);
   if (!job) return { ok: false, alarm: true, message: `No model selected for ${pallet}.` };
   const conn = getEquipmentConnection();
 
-  wmLog(`>>> 2D CODE START READER interlock check (${pallet})`);
+  wmLog(`>>> 2D CODE START READER — target ${pallet} (from ${source}): ${job.model} / Job ${padJob(job.job_no)}`);
   const interlock = await eqCheckLaserReady(conn);
   if (!interlock.ready) {
     wmLog(`!!! ${interlock.message}`, interlock.alarm ? "error" : "warn");
@@ -2442,6 +2962,20 @@ async function wmRunCode2DStartReader() {
     };
   }
 
+  // Make sure the marker is on THIS pallet's job before checking the code.
+  const jobNoCommand = `WX,JobNo=${padJob(job.job_no)}`;
+  wmLog(`>>> ${jobNoCommand}`);
+  const jobRaw = await eqSendRaw(conn, jobNoCommand);
+  if (!jobRaw.ok) {
+    wmLog(`!!! Could not reach laser: ${jobRaw.message}`, "error");
+    return { ok: false, alarm: true, message: jobRaw.message };
+  }
+  if (!jobRaw.response.startsWith("WX,OK")) {
+    wmLog(`!!! Job selection failed: ${jobRaw.response}`, "error");
+    return { ok: false, alarm: true, message: jobRaw.response };
+  }
+  wmLog(`<<< ${jobRaw.response}`, "ok");
+
   const command = `WX,Check2DCode5=${params.join(",")}`;
   wmLog(`>>> ${command}`);
   const raw = await eqSendRaw(conn, command);
@@ -2451,7 +2985,9 @@ async function wmRunCode2DStartReader() {
   }
   if (!raw.response.startsWith("WX,OK")) {
     wmLog(`!!! Check2DCode5 failed: ${raw.response}`, "error");
-    return { ok: false, alarm: true, message: raw.response };
+    const hint = wmLaserErrorHint(raw.response);
+    if (hint) wmLog(`    ${hint}`, "warn");
+    return { ok: false, alarm: true, message: hint ? `${raw.response} — ${hint}` : raw.response };
   }
   wmLog(`<<< ${raw.response}`, "ok");
 
@@ -2469,7 +3005,7 @@ async function wmRunCode2DStartReader() {
      detailed (=1): RX,OK,B,C,V,W,X,Y
    B is the grade-bearing value. ---- */
 async function wmRunCode2DResultReader() {
-  const pallet = MON.activePallet || WM.runningPallet || WM_PALLET_STATE.operatorRoomPallet;
+  const { pallet } = await wmResolveMachineRoomPallet();
   const job = getSelectedJob(pallet);
   if (!job) return { ok: false, alarm: true, message: `No model selected for ${pallet}.` };
   const conn = getEquipmentConnection();
@@ -2521,7 +3057,7 @@ async function wmRunCode2DResultReader() {
    raising an alarm (a failing grade is a process result, not an
    equipment fault). ---- */
 async function wmRunCode2DGradeResult() {
-  const pallet = MON.activePallet || WM.runningPallet || WM_PALLET_STATE.operatorRoomPallet;
+  const { pallet } = await wmResolveMachineRoomPallet();
   const job = getSelectedJob(pallet);
   if (!job) return { ok: false, alarm: true, message: `No model selected for ${pallet}.` };
 
@@ -2552,6 +3088,31 @@ async function wmRunCode2DGradeResult() {
     return { ok: false, alarm: true, message: `Unrecognized grade ("${captured.grade}") or threshold ("${threshold}").` };
   }
 
+  // Grade F is always a hard fail + alarm notification, whatever the threshold.
+  const gradeLetter = String(captured.grade).trim().toUpperCase().charAt(0);
+  if (gradeLetter === "F") {
+    alarmRaise({
+      tag: "GRADE_F",
+      source: "2D Code",
+      severity: "error",
+      pallet,
+      dedupeKey: `GRADE_F:${pallet}:${job.model}:${job.lot_no || ""}`,
+      description: `2D code grade F on ${job.model} (Job ${padJob(job.job_no)}, Lot ${job.lot_no || "—"}).`,
+      instructions: [
+        "Take the part out of the Operator Room and quarantine it — do not pass it on as good product.",
+        "Inspect the mark: lens cleanliness, focus, surface condition, and the marking conditions for this model.",
+        "If it repeats on the same lot, call an Engineer or Machine Controller to adjust the marking conditions.",
+        "Click \"Acknowledge & Clear\" once the part has been handled.",
+      ],
+      context: {
+        model: job.model, job_no: job.job_no, lot_no: job.lot_no || "",
+        grade: "F", threshold, source: captured.source,
+      },
+    });
+    wmLog(`!!! Grade F on ${pallet} — alarm raised`, "error");
+    return { ok: false, alarm: false, message: "Grade F — part rejected. Alarm raised; see Alarm Center." };
+  }
+
   const pass = actualRank >= thresholdRank;
   wmLog(`${pass ? "<<<" : "!!!"} Grade ${captured.grade} vs threshold ${threshold}: ${pass ? "PASS" : "FAIL"}`, pass ? "ok" : "warn");
 
@@ -2565,52 +3126,94 @@ async function wmRunCode2DGradeResult() {
 }
 
 const WM_FUNCTIONS = {
+  // the equipment commands
   OPEN_FRONT_DOOR: {
     label: "Open Front Door",
     group: "io",
-    desc: "IAI EC-R6H-250-3-WA. Interlocks TBD: pallet not mid-travel, middle door state OK.",
-    run: () => wmStub("OPEN_FRONT_DOOR"),
+    desc: "IAI EC-R6H-250-3-WA. BACKWARD cylinder = open. Confirmed by DI06 (backward_comp_frontdoor).",
+    run: async () => {
+      wmLog(">>> OPEN_FRONT_DOOR — commanding backward (open)...");
+      const r = await ioPost("/api/io/front-door", { action: "open" }, "Front door open");
+      if (!r.ok) {
+        wmLog(`!!! Front door open failed: ${r.error}`, "error");
+        return { ok: false, alarm: true, message: r.error };
+      }
+      wmLog("<<< Door opened.", "ok");
+      return { ok: true, message: "Front door open confirmed." };
+    },
   },
   CLOSE_FRONT_DOOR: {
     label: "Close Front Door",
     group: "io",
-    desc: "IAI EC-R6H-250-3-WA. Closes before pallet change or marking.",
-    run: () => wmStub("CLOSE_FRONT_DOOR"),
+    desc: "IAI EC-R6H-250-3-WA. FORWARD cylinder = close. Confirmed by DI07 + DI13 + DI14.",
+    run: async () => {
+      wmLog(">>> CLOSE_FRONT_DOOR — commanding forward (close)...");
+      const r = await ioPost("/api/io/front-door", { action: "close" }, "Front door close");
+      if (!r.ok) {
+        wmLog(`!!! Front door close failed: ${r.error}`, "error");
+        return { ok: false, alarm: true, message: r.error };
+      }
+      wmLog("<<< Door closed.", "ok");
+      return { ok: true, message: "Front door close confirmed." };
+    },
   },
   CHANGE_PALLET: {
     label: "Change Pallet",
     group: "pallet",
-    desc: "Swaps Pallet1/Pallet2 via the middle door. Interlocks TBD: front door closed, side door closed.",
+    desc: "Swaps Pallet1/Pallet2 via the middle door. Interlocks enforced in io_core.py: front door closed, side door closed, no pallet alarms.",
     run: async () => {
-      const result = await wmStub("CHANGE_PALLET", 900);
-      WM_PALLET_STATE.operatorRoomPallet =
-        WM_PALLET_STATE.operatorRoomPallet === "Pallet1" ? "Pallet2" : "Pallet1";
+      const target = WM_PALLET_STATE.operatorRoomPallet === "Pallet1" ? 2 : 1;
+      wmLog(`>>> CHANGE_PALLET — swapping to bring Pallet ${target} into the Operator Room...`);
+      const r = await ioPost("/api/io/change-pallet", { target_pallet: target }, "Change pallet");
+      if (!r.ok) {
+        wmLog(`!!! Change pallet failed: ${r.error}`, "error");
+        return { ok: false, alarm: true, message: r.error };
+      }
+      WM_PALLET_STATE.operatorRoomPallet = target === 1 ? "Pallet1" : "Pallet2";
       wmUpdatePalletLocationUI();
-      return result;
+      wmLog("<<< Pallet changed.", "ok");
+      return { ok: true, message: `Pallet${target} now in Operator Room.` };
     },
   },
   CALL_PALLET1: {
     label: "Call Pallet 1",
     group: "pallet",
-    desc: "IAI EC-S7H-500-3-WA #2 — bring Pallet 1 to the operator-side load position.",
+    desc: "Bring Pallet 1 to the Operator Room (swaps with Pallet 2 if needed).",
     run: async () => {
-      const result = await wmStub("CALL_PALLET1", 900);
-      WM_PALLET_STATE.operatorRoomPallet = "Pallet1";
+      wmLog(">>> CALL_PALLET1 — bringing Pallet 1 to the Operator Room...");
+      const r = await ioPost("/api/io/call-pallet/1", {}, "Call Pallet 1");
+      if (!r.ok) {
+        wmLog(`!!! Call Pallet 1 failed: ${r.error}`, "error");
+        return { ok: false, alarm: true, message: r.error };
+      }
+      const inOperator = r.data.state ? !!r.data.state.p1_operator : true;
+      if (inOperator) WM_PALLET_STATE.operatorRoomPallet = "Pallet1";
       wmUpdatePalletLocationUI();
-      return result;
+      wmLog("<<< Pallet changed.", "ok");
+      return { ok: true, message: "Pallet 1 in Operator Room." };
     },
   },
   CALL_PALLET2: {
     label: "Call Pallet 2",
     group: "pallet",
-    desc: "IAI EC-S7H-500-3-WA #3 — bring Pallet 2 to the operator-side load position.",
+    desc: "Bring Pallet 2 to the Operator Room (swaps with Pallet 1 if needed).",
     run: async () => {
-      const result = await wmStub("CALL_PALLET2", 900);
-      WM_PALLET_STATE.operatorRoomPallet = "Pallet2";
+      wmLog(">>> CALL_PALLET2 — bringing Pallet 2 to the Operator Room...");
+      const r = await ioPost("/api/io/call-pallet/2", {}, "Call Pallet 2");
+      if (!r.ok) {
+        wmLog(`!!! Call Pallet 2 failed: ${r.error}`, "error");
+        return { ok: false, alarm: true, message: r.error };
+      }
+      const inOperator = r.data.state ? !!r.data.state.p2_operator : true;
+      if (inOperator) WM_PALLET_STATE.operatorRoomPallet = "Pallet2";
       wmUpdatePalletLocationUI();
-      return result;
+      wmLog("<<< Pallet changed.", "ok");
+      return { ok: true, message: "Pallet 2 in Operator Room." };
     },
   },
+
+
+  // the vision/laser commands
   CAMERA_TRIGGER: {
     label: "Camera Trigger",
     group: "vision",
@@ -2842,7 +3445,7 @@ async function wmActivateAutoMode(mode) {
   MON_AUTO.queue = 0;
   MON_AUTO.running = false;
   MON_AUTO.roundCount = { Pallet1: 0, Pallet2: 0 };
-  MON_AUTO.palletCycleIndex = 0;
+  // MON_AUTO.palletCycleIndex = 0;
   setTimeout(() => loadPage("monitor"), 0);
 }
 
@@ -2892,7 +3495,7 @@ async function wmRunSingleFunction(key, btn) {
   btn.disabled = false;
   if (!verdict.ok) {
     wmLog(`!!! ${fn.label} failed: ${verdict.message}`, "error");
-    if (verdict.alarm) showToast(`Alarm: ${fn.label} — ${verdict.message}`);
+    if (verdict.alarm) showToast(`Alarm: ${steps[i].label} — ${alarmShortText(verdict.message, 100)}`);
   }
 }
 
@@ -2953,15 +3556,18 @@ function wmRenderStartButtonsEnabled() {
 }
 
 function wmUpdatePalletLocationUI() {
-  const valueEl = document.getElementById("wm-pallet-location-value");
-  if (valueEl) {
-    valueEl.textContent = WM_PALLET_STATE.operatorRoomPallet === "Pallet1" ? "Pallet 1" : "Pallet 2";
-  }
+  const operator = WM_PALLET_STATE.operatorRoomPallet;
+  const machine = operator === "Pallet1" ? "Pallet2" : "Pallet1";
+  const label = (p) => (p === "Pallet1" ? "Pallet 1" : "Pallet 2");
+
+  const opEl = document.getElementById("wm-pallet-location-value");
+  if (opEl) opEl.textContent = label(operator);
+  const machEl = document.getElementById("wm-machine-location-value");
+  if (machEl) machEl.textContent = label(machine);
+
   wmRenderStartButtonsEnabled();
-  // Keep the sequence preview in sync with whichever pallet is reachable
-  // right now, and with its currently selected model's checks.
   if (!WM.manualRunning) {
-    const job = getSelectedJob(WM_PALLET_STATE.operatorRoomPallet);
+    const job = getSelectedJob(operator);
     wmRenderStartSeqList(wmComputeStepsForJob(job), -1, -1);
   }
 }
@@ -3005,7 +3611,7 @@ async function wmRunStartSequenceForPallet(pallet) {
     return;
   }
 
-  // NEW — operators cannot start mass production without a target set.
+  // Operators cannot start mass production without a target set.
   if (CURRENT_USER && CURRENT_USER.role === "operator") {
     const missingGoal = monPalletsMissingGoal([pallet]);
     if (missingGoal.length > 0) {
@@ -3020,11 +3626,24 @@ async function wmRunStartSequenceForPallet(pallet) {
   wmSetStartButtonsState("running", pallet);
   wmRenderStartSeqList(steps, -1, -1);
 
-  if (job) await monReportCount(pallet, job); // log the completed part to production_log
+  // Reset check results + captured 2D-code data for THIS run, so the
+  // code2d_result derived when the part is logged can't be based on a
+  // previous run's leftovers (same reset the auto cycle does).
+  monInitCheckStatusForJob(pallet, job);
+
   wmLog(`>>> Start Marking (${pallet}) — ${job.model} / Job ${padJob(job.job_no)}`);
 
+  // Set once WX,StartMarking has completed OK, i.e. a part was physically
+  // marked. The production_log row is written only in that case.
+  let markingDone = false;
+
   for (let i = 0; i < steps.length; i++) {
-    if (!WM.manualRunning) return; // stopped externally (e.g. page navigation)
+    if (!WM.manualRunning) {
+      // Stopped externally (e.g. navigated away mid-sequence). If the part
+      // was already marked, don't lose its count.
+      if (markingDone) await monReportCount(pallet, job);
+      return;
+    }
     wmRenderStartSeqList(steps, i, i - 1);
 
     if (steps[i].skipped) {
@@ -3040,18 +3659,30 @@ async function wmRunStartSequenceForPallet(pallet) {
     } catch (err) {
       verdict = { ok: false, alarm: true, message: String(err) };
     }
+
     if (!verdict.ok) {
       monApplyStepResult(pallet, steps[i], false);
-      WM.manualRunning = false;
-      WM.runningPallet = null;
       wmRenderStartSeqList(steps, i, i - 1, verdict.alarm ? "alarm" : "blocked");
       wmLog(`!!! ${steps[i].label} failed: ${verdict.message}`, "error");
-      wmSetStartButtonsState("idle");
       if (verdict.alarm) showToast(`Alarm: ${steps[i].label} — ${verdict.message}`);
+
+      // Failed AFTER marking (e.g. 2D grade fail): still log the part, with
+      // its code2d_result. Failed BEFORE marking: nothing is logged.
+      // Buttons stay locked until the log call returns so a second start
+      // can't overlap it.
+      if (markingDone) await monReportCount(pallet, job);
+
+      WM.manualRunning = false;
+      WM.runningPallet = null;
+      wmSetStartButtonsState("idle");
       return;
     }
+
     monApplyStepResult(pallet, steps[i], true);
+    if (steps[i].id === "start_marking") markingDone = true;
   }
+
+  if (markingDone) await monReportCount(pallet, job); // log the completed part to production_log
 
   WM.manualRunning = false;
   WM.runningPallet = null;
@@ -3059,133 +3690,259 @@ async function wmRunStartSequenceForPallet(pallet) {
   wmLog(`--- Start Marking sequence complete (${pallet}) ---`, "ok");
   wmSetStartButtonsState("idle");
 }
+
+/* ============================================================
+   LIVE ALARM STORE (stand-in until /api/alarms exists)
+   Shape: { id, tag, source, severity, description, occurred_at, last_at,
+            instructions, attempts, live:true,
+            kind: 'ack'     -> cleared by operator acknowledgement (e.g. GRADE_F)
+                  'recheck' -> tied to a real condition; Alarm Center's
+                               "Reset & Check Again" re-tests it (AC_RECHECKERS)
+                               and it also auto-clears when a later read
+                               shows the condition is gone,
+            pallet, context, dedupeKey, occurrences }
+   ============================================================ */
+const LIVE_ALARM_KEY = "nlm_live_alarms";
+const LIVE_ALARM_HISTORY_MAX = 100;
+
+function alarmLoadStore() {
+  try {
+    const s = JSON.parse(localStorage.getItem(LIVE_ALARM_KEY) || "null");
+    if (s && Array.isArray(s.current) && Array.isArray(s.history)) return s;
+  } catch (err) {}
+  return { current: [], history: [] };
+}
+
+function alarmSaveStore(store) {
+  store.history = store.history.slice(0, LIVE_ALARM_HISTORY_MAX);
+  localStorage.setItem(LIVE_ALARM_KEY, JSON.stringify(store));
+  alarmNotifyChanged();
+}
+
+function alarmUpdateNavBadge() {
+  const badge = document.getElementById("nav-alarm-badge");
+  if (!badge) return;
+  const n = alarmLoadStore().current.length;
+  badge.textContent = n;
+  badge.style.display = n ? "" : "none";
+}
+
+function alarmNotifyChanged() {
+  alarmUpdateNavBadge();
+  window.dispatchEvent(new CustomEvent("nlm:alarms-changed"));
+}
+
+/* ---- Fault catalog: one entry per real equipment fault.
+   Keys are the alarm tags (kept identical to the old mock tags so any
+   history you already have still lines up). ---- */
+const ALARM_FAULTS = {
+  ERR_READY_1: {
+    source: "MD-X2520A",
+    severity: "error",
+    instructions: [
+      "Check the marker's front panel display for the specific error code.",
+      "Clear the error on the unit itself (an Admin/Engineer can also send WX,ErrorClear from Add New Model > Command browser).",
+      "Confirm the laser safety shutter and enclosure are fully closed.",
+      "Click \"Reset & Check Again\" once the error is cleared on the unit.",
+    ],
+  },
+  IO_DISCONNECT: {
+    source: "Modbus I/O",
+    severity: "error",
+    instructions: [
+      "Check power and the Ethernet cable on the ETH-MODBUS-IO16R module(s) at the IPC panel.",
+      "Confirm the I/O bridge (io_service.py, port 5001) is running on the IPC and IO_SERVICE_URL in backend/node/.env points at it.",
+      "Ping Station 1 and Station 2 from the IPC to confirm they answer on the network.",
+      "Do not attempt a pallet change or door move until this clears.",
+      "Click \"Reset & Check Again\" once the link is back.",
+    ],
+  },
+  PALLET_CONFLICT: {
+    source: "Modbus I/O",
+    severity: "error",
+    instructions: [
+      "Do NOT run Change Pallet / Call Pallet while this alarm is active.",
+      "Look at both pallets: confirm which room each one is physically in.",
+      "Check the position sensors for the pallet(s) named in the description (LS0/LS1 — a stuck, misaligned or miswired sensor is the usual cause).",
+      "If a pallet stopped mid-travel, get an Engineer to recover the cylinder from its driver before continuing.",
+      "Click \"Reset & Check Again\" once the sensors agree.",
+    ],
+  },
+  LASER_S006: {
+    source: "MD-X2520A",
+    severity: "error",
+    instructions: [
+      "The marker rejected the command with S006 (Priority Error): another controller almost certainly has control of it.",
+      "Close Program Marking Builder Plus / exit \"Control\" mode on the laptop connected over USB-LAN (or release the marker from any other controlling tool).",
+      "Confirm nobody is operating the marker from its own panel or another PC.",
+      "Click \"Reset & Check Again\" — the job is re-selected to confirm the marker accepts commands again.",
+    ],
+  },
+  LASER_S087: {
+    source: "MD-X2520A",
+    severity: "error",
+    instructions: [
+      "The 2D code could not be read during Check2DCode5 (S087). Remove the part and inspect the mark.",
+      "If the same part was marked twice in the same place, the second mark can destroy the first code. Use a fresh part.",
+      "Check the part sits under the camera in the Machine Room, and lens cleanliness/lighting.",
+      "If it repeats on good parts, call an Engineer to re-tune this job's Check2DCode5 values (A-Q).",
+      "Click \"Acknowledge & Clear\" once the part has been handled.",
+    ],
+  },
+  LASER_NG: {
+    source: "MD-X2520A",
+    severity: "error",
+    instructions: [
+      "The marker rejected a command (see the description for the error code and message).",
+      "Look up the code in the MD-X2000/2500 command reference and correct the cause on the unit or in the job settings.",
+      "Click \"Acknowledge & Clear\" once it is handled.",
+    ],
+  },
+  LASER_DISCONNECT: {
+    source: "MD-X2520A",
+    severity: "error",
+    instructions: [
+      "Check the marker is powered on and the front-panel display is lit.",
+      "Check the Ethernet/USB-LAN cable between the IPC and the marker.",
+      "Confirm the IP address and port match the marker (Add New Model > MD-X2520A panel) — currently 10.207.1.202:50002 by default.",
+      "Confirm the Python equipment service (laser_marker_service.py, port 5000) is still running on the IPC.",
+      "Click \"Reset & Check Again\" once the marker responds to RX,Ready.",
+    ],
+  },
+  PALLET_ALARM: {
+    source: "Modbus I/O",
+    severity: "error",
+    instructions: [
+      "A pallet alarm (DI02 Pallet 1 / DI05 Pallet 2) came on while the pallet cylinder was moving — the command coil was already turned off automatically.",
+      "Physically inspect the pallet cylinder (IAI EC-S7H-500-3-WA #2 = Pallet 1, #3 = Pallet 2) for an obstruction, E-stop, or servo fault.",
+      "Check that cylinder's own driver/controller for a fault code and clear it there first.",
+      "Once the physical cause is cleared, use Alarm Reset for that pallet before retrying.",
+      "Click \"Reset & Check Again\" once the alarm is cleared.",
+    ],
+  },
+};
+// Raises (or, if the same dedupeKey is already active, bumps) an alarm.
+//   quietRepeat: when the alarm is already active, do nothing at all
+//                (no bump, no toast, no system-log row). Use for pollers.
+//   toast:       show a toast when raised (default true)
+function alarmRaise(opts) {
+  const {
+    tag, source, severity = "error", description,
+    instructions = [], pallet = null, context = null,
+    dedupeKey = `${tag}:${pallet || ""}`,
+    toast = true, kind = "ack", quietRepeat = false,
+  } = opts;
+
+  const store = alarmLoadStore();
+  const nowIso = new Date().toISOString();
+  let alarm = store.current.find((a) => a.dedupeKey === dedupeKey);
+
+  if (alarm && quietRepeat) return alarm;
+
+  if (alarm) {
+    alarm.occurrences = (alarm.occurrences || 1) + 1;
+    alarm.last_at = nowIso;
+    alarm.description = description;
+    alarm.context = context;
+  } else {
+    alarm = {
+      id: Date.now(), tag, source, severity, description,
+      occurred_at: nowIso, last_at: nowIso,
+      instructions, attempts: 0,
+      live: true, kind,
+      pallet, context, dedupeKey, occurrences: 1,
+    };
+    store.current.unshift(alarm);
+  }
+  alarmSaveStore(store);
+
+  logClientEvent("alarm.raised", `${tag}${pallet ? ` (${pallet})` : ""}: ${description}`, {
+    tag, pallet, occurrences: alarm.occurrences, context,
+  });
+  if (toast) showToast(`Alarm ${tag}: ${description}`, "error", 4000);
+  return alarm;
+}
+
+// Convenience wrapper for the catalog faults above.
+// opts: { description, pallet?, context?, toast?, quietRepeat? }
+function alarmRaiseFault(tag, opts = {}) {
+  const def = ALARM_FAULTS[tag];
+  if (!def) {
+    console.error(`alarmRaiseFault: unknown fault tag "${tag}"`);
+    return null;
+  }
+  return alarmRaise({
+    tag,
+    source: def.source,
+    severity: def.severity,
+    instructions: def.instructions,
+    kind: "recheck",
+    ...opts,
+  });
+}
+
+// Moves an active alarm to history. Returns the history entry (or null).
+function alarmClear(id, resolution, opts = {}) {
+  const store = alarmLoadStore();
+  const idx = store.current.findIndex((a) => a.id === id);
+  if (idx === -1) return null;
+  const [alarm] = store.current.splice(idx, 1);
+  const who = opts.auto
+    ? "auto-recovered"
+    : CURRENT_USER ? `${CURRENT_USER.name} (${CURRENT_USER.employee_id})` : "unknown";
+  const entry = {
+    ...alarm,
+    resolved_at: new Date().toISOString(),
+    resolution: `${resolution} — by ${who}`,
+  };
+  store.history.unshift(entry);
+  alarmSaveStore(store);
+  logClientEvent("alarm.cleared", `${alarm.tag}${alarm.pallet ? ` (${alarm.pallet})` : ""} cleared`, {
+    tag: alarm.tag, pallet: alarm.pallet, auto: !!opts.auto,
+  });
+  return entry;
+}
+
+// Auto-clear: called whenever a healthy read proves the fault is gone.
+// Cheap no-op (one localStorage read) when nothing matching is active.
+function alarmResolveByTag(tag, resolution) {
+  const matches = alarmLoadStore().current.filter((a) => a.tag === tag && a.live);
+  matches.forEach((a) => alarmClear(a.id, resolution, { auto: true }));
+  if (matches.length) showToast(`${tag} cleared — ${resolution}.`, "success", 2500);
+  return matches.length;
+}
+
+// Persists a failed "Reset & Check Again" attempt on a live alarm.
+function alarmBumpAttempts(id) {
+  const store = alarmLoadStore();
+  const a = store.current.find((x) => x.id === id);
+  if (!a) return;
+  a.attempts = (a.attempts || 0) + 1;
+  alarmSaveStore(store);
+}
+
 /* ============================================================
    FOR ALARM CENTER PAGE
    ============================================================
-   NOTE: The equipment backend isn't wired up yet (hardware still
-   arriving), so this page runs entirely on mock data below.
-   When the backend is ready, replace acFetchAlarms()'s body with:
-     const [curRes, histRes] = await Promise.all([
-       apiFetch('/api/alarms/current'),
-       apiFetch('/api/alarms/history'),
-     ]);
-     AC.current = await curRes.json();
-     AC.history = await histRes.json();
-   and acResetAlarm() with a real call to
-     POST /api/alarms/:id/reset  -> { cleared: bool, alarm? }
-   Nothing else on this page needs to change.
+   Runs on the live alarm store (alarmRaise / alarmClear above).
+   - kind:'ack'     alarms (e.g. GRADE_F) clear on operator acknowledgement.
+   - kind:'recheck' alarms (laser error, I/O disconnect, pallet conflict)
+     are re-tested for real by AC_RECHECKERS[tag] when the operator clicks
+     "Reset & Check Again", and also auto-clear when a later read
+     (sequence or poller) shows the condition is gone.
+   The store is per-browser localStorage. When /api/alarms exists, swap
+   acFetchAlarms() and alarmSaveStore() — nothing else here needs to change.
    ============================================================ */
 
+// pass
 const AC_SOURCE_ICONS = {
   "MD-X2520A": "fa-solid fa-bullseye",
   "IAI Elecylinder": "fa-solid fa-arrows-left-right",
   "MySQL": "fa-solid fa-database",
   "Modbus I/O": "fa-solid fa-microchip",
+  "2D Code": "fa-solid fa-qrcode",
   "Node API": "fa-solid fa-server",
 };
-
-// Each mock alarm carries `clearsAfterAttempts` purely so the "Reset &
-// Check Again" flow has something realistic to demo without hardware:
-// it simulates the alarm clearing after that many reset attempts.
-const AC_MOCK_CURRENT = [
-  {
-    id: 1,
-    tag: "ERR_READY_1",
-    source: "MD-X2520A",
-    severity: "error",
-    description: "Laser marker reports RX,Ready=1 (active error on the unit).",
-    occurred_at: "2026-08-28T08:12:00",
-    instructions: [
-      "Check the marker's front panel display for the specific error code.",
-      "Clear the error on the unit itself (or send WX,ErrorClear from Equipment > Raw Command).",
-      "Confirm the laser safety shutter and enclosure are fully closed.",
-      "Click \"Reset & Check Again\" below once the error is cleared on the unit.",
-    ],
-    clearsAfterAttempts: 1,
-    attempts: 0,
-  },
-  {
-    id: 2,
-    tag: "IO_DISCONNECT",
-    source: "Modbus I/O",
-    severity: "error",
-    description: "ETH-MODBUS-IO16R module (door / pallet cylinder I/O) is not responding on the network.",
-    occurred_at: "2026-08-28T08:05:30",
-    instructions: [
-      "Check the module's power and Ethernet cable at the IPC panel.",
-      "Ping the module's IP from the IPC to confirm it's on the network.",
-      "Power-cycle the module if the link light is off.",
-      "Click \"Reset & Check Again\" once the module is back online.",
-    ],
-    clearsAfterAttempts: 2,
-    attempts: 0,
-  },
-  {
-    id: 3,
-    tag: "CYL_TIMEOUT",
-    source: "IAI Elecylinder",
-    severity: "warn",
-    description: "Cylinder EC-GS4 (pallet exchange) did not reach target position within timeout.",
-    occurred_at: "2026-08-28T07:58:10",
-    instructions: [
-      "Check for a physical obstruction along the cylinder's travel path.",
-      "Verify 24V supply to the elecylinder driver.",
-      "Home the axis from the driver's front panel if available.",
-      "Click \"Reset & Check Again\" to re-check the position.",
-    ],
-    clearsAfterAttempts: 1,
-    attempts: 0,
-  },
-  {
-    id: 4,
-    tag: "DB_CONN_LOST",
-    source: "MySQL",
-    severity: "warn",
-    description: "Node API gateway lost its connection pool to the MySQL database.",
-    occurred_at: "2026-08-28T07:40:00",
-    instructions: [
-      "Check that the MySQL service is running on the host in backend/node/.env.",
-      "Check network connectivity between the Node gateway and the DB host.",
-      "Restart the Node API gateway (npm run dev / npm start) if MySQL is confirmed up.",
-      "Click \"Reset & Check Again\" to re-test the connection.",
-    ],
-    clearsAfterAttempts: 1,
-    attempts: 0,
-  },
-];
-
-const AC_MOCK_HISTORY = [
-  {
-    id: 101,
-    tag: "ERR_READY_1",
-    source: "MD-X2520A",
-    severity: "error",
-    description: "Laser marker reports RX,Ready=1 (active error on the unit).",
-    occurred_at: "2026-08-27T14:02:00",
-    resolved_at: "2026-08-27T14:11:00",
-    resolution: "Enclosure interlock sensor was misaligned; realigned and error cleared.",
-  },
-  {
-    id: 102,
-    tag: "CYL_TIMEOUT",
-    source: "IAI Elecylinder",
-    severity: "warn",
-    description: "Cylinder EC-GS4 (pallet exchange) did not reach target position within timeout.",
-    occurred_at: "2026-08-26T09:15:00",
-    resolved_at: "2026-08-26T09:22:00",
-    resolution: "Loose bracket was catching on the rail; retightened, cylinder homed successfully.",
-  },
-  {
-    id: 103,
-    tag: "IO_DISCONNECT",
-    source: "Modbus I/O",
-    severity: "error",
-    description: "ETH-MODBUS-IO16R module (door / pallet cylinder I/O) is not responding on the network.",
-    occurred_at: "2026-08-25T11:30:00",
-    resolved_at: "2026-08-25T11:34:00",
-    resolution: "Ethernet cable had come loose during panel maintenance; reseated.",
-  },
-];
 
 const AC = {
   tab: "current",
@@ -3194,6 +3951,117 @@ const AC = {
   selectedId: null,
   resetting: false,
 };
+
+// Each re-checker returns { cleared:boolean, message:string }.
+const AC_RECHECKERS = {
+  ERR_READY_1: async () => {
+    const raw = await eqSendRaw(getEquipmentConnection(), "RX,Ready");
+    if (!raw.ok) return { cleared: false, message: `Could not reach the laser: ${raw.message}` };
+    const status = (raw.response.split(",")[2] || "").trim();
+    if (status === "1") return { cleared: false, message: "Laser still reports an active error (RX,Ready=1)." };
+    return { cleared: true, message: `RX,Ready=${status || "?"} — laser no longer reports an error` };
+  },
+
+  IO_DISCONNECT: async () => {
+    const st = await ioFetchStatus();
+    if (!st.ok) return { cleared: false, message: `I/O bridge still not responding: ${st.error}` };
+    return { cleared: true, message: "I/O status read succeeded" };
+  },
+
+  PALLET_CONFLICT: async () => {
+    const st = await ioFetchStatus();
+    if (!st.ok) return { cleared: false, message: `Could not read pallet sensors: ${st.error}` };
+    const reason = ioPalletConflictReason(st.data);
+    if (reason) return { cleared: false, message: `Sensors still contradict each other: ${reason}.` };
+    return { cleared: true, message: "Pallet position sensors agree" };
+  },
+
+  LASER_S006: async (alarm) => {
+    const jobNo = alarm.context && alarm.context.job_no;
+    const cmd = jobNo !== null && jobNo !== undefined ? `WX,JobNo=${padJob(jobNo)}` : "RX,Ready";
+    const raw = await eqSendRaw(getEquipmentConnection(), cmd, { skipInspect: true });
+    if (!raw.ok) return { cleared: false, message: `Could not reach the laser: ${raw.message}` };
+    const ng = eqParseNg(raw.response);
+    if (ng) return { cleared: false, message: `Marker still rejects commands: ${ng.code} ${ng.message}`.trim() };
+    return { cleared: true, message: "Marker accepted the command again" };
+  },
+
+  LASER_DISCONNECT: async () => {
+    const raw = await eqSendRaw(getEquipmentConnection(), "RX,Ready", { skipInspect: true });
+    if (!raw.ok) return { cleared: false, message: raw.message };
+    return { cleared: true, message: "The marker responded to RX,Ready again." };
+  },
+  PALLET_ALARM: async () => {
+    const st = await ioFetchStatus();
+    if (!st.ok) return { cleared: false, message: `Could not read pallet sensors: ${st.error}` };
+    if (st.data.alarm_pallet1 || st.data.alarm_pallet2) {
+      const which = [st.data.alarm_pallet1 ? "Pallet 1" : null, st.data.alarm_pallet2 ? "Pallet 2" : null]
+        .filter(Boolean).join(", ");
+      return { cleared: false, message: `${which} alarm is still active.` };
+    }
+    return { cleared: true, message: "No pallet alarm is active." };
+  },
+};
+
+async function acFetchAlarms() {
+  const live = alarmLoadStore();
+  AC.current = live.current.map((a) => ({ ...a }));
+  AC.history = live.history.map((a) => ({ ...a }));
+}
+
+async function acRefreshAll() {
+  await acFetchAlarms();
+  acRenderCounts();
+  acRenderTable();
+  acRenderDetail();
+  const stamp = document.getElementById("ac-last-updated");
+  if (stamp) stamp.textContent = `Updated ${new Date().toLocaleTimeString()}`;
+}
+
+async function acResetAlarm(id) {
+  const alarm = AC.current.find((a) => a.id === id);
+  if (!alarm || AC.resetting) return;
+
+  const checker = AC_RECHECKERS[alarm.tag];
+  if (!checker) {
+    showToast(`No re-check exists for ${alarm.tag}.`, "info");
+    return;
+  }
+
+  AC.resetting = true;
+  acRenderDetail();
+
+  let result;
+  try {
+    result = await checker(alarm);
+  } catch (err) {
+    result = { cleared: false, message: `Re-check failed: ${err.message}` };
+  }
+  AC.resetting = false;
+
+  if (result.cleared) {
+    alarmClear(id, result.message || "Re-check confirmed the fault is gone");
+    AC.selectedId = null;
+    await acRefreshAll();
+    showToast(`${alarm.tag} cleared and moved to history.`, "success");
+    return;
+  }
+
+  alarmBumpAttempts(id);
+  await acRefreshAll();
+  const box = document.getElementById("ac-reset-result");
+  if (box) {
+    box.innerHTML = `<div class="alert alert-error" style="margin-top:10px;">${escapeHtml(result.message || "Alarm is still present. Complete the steps above and try again.")}</div>`;
+  }
+  showToast(`${alarm.tag} is still active.`, "error");
+}
+
+// Live refresh: faults can be raised/cleared by sequences or pollers while
+// this page is open.
+function acOnAlarmsChanged() {
+  if (AC.resetting) return;
+  acRefreshAll();
+}
 
 function acSeverityLabel(sev) {
   return { error: "Error", warn: "Warning", info: "Info" }[sev] || sev;
@@ -3212,10 +4080,31 @@ function acDuration(startIso, endIso) {
   return `${Math.floor(mins / 60)}h ${mins % 60}m`;
 }
 
-async function acFetchAlarms() {
-  // Placeholder data source — see NOTE at top of this section.
-  AC.current = AC_MOCK_CURRENT.map((a) => ({ ...a }));
-  AC.history = AC_MOCK_HISTORY.map((a) => ({ ...a }));
+function acContextText(c) {
+  if (!c) return "";
+  const parts = [];
+  if (c.model) parts.push(c.model);
+  if (c.job_no !== undefined && c.job_no !== null) parts.push(`Job ${padJob(c.job_no)}`);
+  if (c.lot_no) parts.push(`Lot ${c.lot_no}`);
+  if (c.grade) parts.push(`Grade ${c.grade}${c.threshold ? ` (min ${c.threshold})` : ""}`);
+  return parts.join(" · ");
+}
+
+// pass
+function acAcknowledgeAlarm(id) {
+  const alarm = AC.current.find((a) => a.id === id);
+  if (!alarm) return;
+  if (!confirm(`Acknowledge ${alarm.tag}? Confirm the affected part has been removed / handled.`)) return;
+
+  const entry = alarmClear(id, "Acknowledged after part was handled");
+  if (!entry) { showToast("That alarm was already cleared.", "info"); }
+  AC.current = AC.current.filter((a) => a.id !== id);
+  if (entry) AC.history = [entry, ...AC.history];
+  AC.selectedId = null;
+  acRenderCounts();
+  acRenderTable();
+  acRenderDetail();
+  showToast(`${alarm.tag} acknowledged and moved to history.`, "success");
 }
 
 function acRenderCounts() {
@@ -3223,11 +4112,13 @@ function acRenderCounts() {
   document.getElementById("ac-count-history").textContent = AC.history.length;
 }
 
+// pass
 function acSourceBadge(source) {
   const icon = AC_SOURCE_ICONS[source] || "fa-solid fa-plug";
   return `<span class="ac-source-badge"><i class="${icon}"></i> ${escapeHtml(source)}</span>`;
 }
 
+// pass
 function acRenderTable() {
   const head = document.getElementById("ac-table-head");
   const body = document.getElementById("ac-table-body");
@@ -3282,6 +4173,7 @@ function acFindSelected() {
   return list.find((a) => a.id === AC.selectedId) || null;
 }
 
+// pass
 function acRenderDetail() {
   const empty = document.getElementById("ac-detail-empty");
   const bodyEl = document.getElementById("ac-detail-body");
@@ -3296,13 +4188,14 @@ function acRenderDetail() {
   bodyEl.style.display = "block";
 
   const isCurrent = AC.tab === "current";
+  const isAck = isCurrent && alarm.kind === "ack";
 
   const instructionsHtml = isCurrent
     ? `
       <div class="ac-instructions">
         <div class="ac-instructions-label">What to do</div>
         <ol class="ac-step-list">
-          ${alarm.instructions.map((step) => `<li>${escapeHtml(step)}</li>`).join("")}
+          ${(alarm.instructions || []).map((step) => `<li>${escapeHtml(step)}</li>`).join("")}
         </ol>
       </div>`
     : `
@@ -3311,8 +4204,15 @@ function acRenderDetail() {
         <p class="ac-resolution-text">${escapeHtml(alarm.resolution || "—")}</p>
       </div>`;
 
-  const footerHtml = isCurrent
-    ? `
+  let footerHtml;
+  if (isAck) {
+    footerHtml = `
+      <div class="ac-detail-footer">
+        <button class="btn btn-primary" id="ac-ack-btn"><i class="fa-solid fa-check"></i> Acknowledge &amp; Clear</button>
+        <span class="ac-attempts-note">${alarm.occurrences > 1 ? `Occurred ${alarm.occurrences} times` : "No hardware condition to re-check — clears on acknowledgement."}</span>
+      </div>`;
+  } else if (isCurrent) {
+    footerHtml = `
       <div class="ac-detail-footer">
         <button class="btn btn-primary" id="ac-reset-btn" ${AC.resetting ? "disabled" : ""}>
           <i class="fa-solid fa-rotate${AC.resetting ? " fa-spin" : ""}"></i>
@@ -3320,11 +4220,13 @@ function acRenderDetail() {
         </button>
         <span class="ac-attempts-note">Attempts so far: ${alarm.attempts}</span>
       </div>
-      <div id="ac-reset-result"></div>`
-    : `
+      <div id="ac-reset-result"></div>`;
+  } else {
+    footerHtml = `
       <div class="ac-detail-footer">
         <span class="ac-attempts-note">Resolved after ${acDuration(alarm.occurred_at, alarm.resolved_at)}</span>
       </div>`;
+  }
 
   bodyEl.innerHTML = `
     <div class="ac-detail-top">
@@ -3335,6 +4237,8 @@ function acRenderDetail() {
     <table class="data-table ac-detail-table">
       <tbody>
         <tr><td>Description</td><td colspan="2">${escapeHtml(alarm.description)}</td></tr>
+        ${alarm.pallet ? `<tr><td>Pallet</td><td colspan="2">${escapeHtml(alarm.pallet)}</td></tr>` : ""}
+        ${alarm.context ? `<tr><td>Part</td><td colspan="2" class="mono">${escapeHtml(acContextText(alarm.context))}</td></tr>` : ""}
         <tr><td>Occurred</td><td colspan="2" class="mono">${acFormatDate(alarm.occurred_at)}</td></tr>
         ${!isCurrent ? `<tr><td>Resolved</td><td colspan="2" class="mono">${acFormatDate(alarm.resolved_at)}</td></tr>` : ""}
       </tbody>
@@ -3343,7 +4247,9 @@ function acRenderDetail() {
     ${footerHtml}
   `;
 
-  if (isCurrent) {
+  if (isAck) {
+    document.getElementById("ac-ack-btn").addEventListener("click", () => acAcknowledgeAlarm(alarm.id));
+  } else if (isCurrent) {
     document.getElementById("ac-reset-btn").addEventListener("click", () => acResetAlarm(alarm.id));
   }
 }
@@ -3354,60 +4260,10 @@ function acSelect(id) {
   acRenderDetail();
 }
 
-async function acResetAlarm(id) {
-  const alarm = AC.current.find((a) => a.id === id);
-  if (!alarm || AC.resetting) return;
-
-  AC.resetting = true;
-  acRenderDetail();
-
-  // Placeholder: replace with a real POST /api/alarms/:id/reset call that
-  // re-checks the underlying condition and returns { cleared: bool }.
-  await new Promise((resolve) => setTimeout(resolve, 900));
-
-  alarm.attempts += 1;
-  const cleared = alarm.attempts >= alarm.clearsAfterAttempts;
-  AC.resetting = false;
-
-  const resultBox = document.getElementById("ac-reset-result");
-
-  if (cleared) {
-    AC.current = AC.current.filter((a) => a.id !== id);
-    AC.history = [
-      {
-        id: 1000 + id,
-        tag: alarm.tag,
-        source: alarm.source,
-        severity: alarm.severity,
-        description: alarm.description,
-        occurred_at: alarm.occurred_at,
-        resolved_at: new Date().toISOString(),
-        resolution: "Cleared after operator followed the listed recovery steps and reset.",
-      },
-      ...AC.history,
-    ];
-    AC.selectedId = null;
-    acRenderCounts();
-    acRenderTable();
-    acRenderDetail();
-    showToast(`${alarm.tag} cleared and moved to history.`, "success");
-  } else {
-    acRenderTable();
-    acRenderDetail();
-    if (resultBox) {
-      // acRenderDetail rebuilds the DOM, so re-fetch the fresh node.
-    }
-    const freshBox = document.getElementById("ac-reset-result");
-    if (freshBox) {
-      freshBox.innerHTML = `<div class="alert alert-error" style="margin-top:10px;">Alarm is still present. Please complete the steps above and try again.</div>`;
-    }
-    showToast(`${alarm.tag} is still active.`, "error");
-  }
-}
-
 PAGE_INIT.alarm_center = function () {
   AC.tab = "current";
   AC.selectedId = null;
+  AC.resetting = false;
 
   document.querySelectorAll(".ac-tab").forEach((btn) => {
     btn.addEventListener("click", () => {
@@ -3420,21 +4276,13 @@ PAGE_INIT.alarm_center = function () {
     });
   });
 
-  document.getElementById("ac-refresh-btn").addEventListener("click", async () => {
-    await acFetchAlarms();
-    acRenderCounts();
-    acRenderTable();
-    acRenderDetail();
-    document.getElementById("ac-last-updated").textContent = `Updated ${new Date().toLocaleTimeString()}`;
-  });
+  document.getElementById("ac-refresh-btn").addEventListener("click", acRefreshAll);
+  window.addEventListener("nlm:alarms-changed", acOnAlarmsChanged);
+  acRefreshAll();
+};
 
-  (async () => {
-    await acFetchAlarms();
-    acRenderCounts();
-    acRenderTable();
-    acRenderDetail();
-    document.getElementById("ac-last-updated").textContent = `Updated ${new Date().toLocaleTimeString()}`;
-  })();
+PAGE_TEARDOWN.alarm_center = function () {
+  window.removeEventListener("nlm:alarms-changed", acOnAlarmsChanged);
 };
 
 /* ============================================================
@@ -3462,6 +4310,10 @@ function isAdmin() {
    ============================================================ */
 const MS_MAX_CONDITIONS = 20;
 const START2D_LABELS = ["A","B","C","D","E","F","G","H","I","J","K","L","M","N","O","P","Q"];
+// Default Check2DCode5 params (A-Q) used when a model has none saved yet.
+const START2D_DEFAULTS = ["3","0","0","0","0","000","2","0.8","1.0","0","4","4","4","4","4","2000","-5"];
+// Key params: A, F, P, Q
+const START2D_KEY_INDEXES = [0, 5, 15, 16];
 
 const MS = {
   data: { Pallet1: [], Pallet2: [] },
@@ -3658,6 +4510,7 @@ function msConditionRowHtml(index, item) {
   const name = item ? item.condition_name || "" : "";
   const value = item ? item.condition_value || "" : "";
   const block = item && item.block_no !== null && item.block_no !== undefined ? item.block_no : "";
+  const isVar = !!item && (item.is_variable === 1 || item.is_variable === true || item.is_variable === "1");
   return `
     <div class="ms-condition-row" data-index="${index}">
       <div class="field">
@@ -3673,6 +4526,10 @@ function msConditionRowHtml(index, item) {
         <label>BLK No.(0-255)</label>
         <input type="number" min="0" max="255" class="ms-cond-block" value="${block}" />
       </div>
+      <div class="field ms-cond-var-field" title="Changes on every part — values come from a CSV">
+        <label>Per-piece</label>
+        <input type="checkbox" class="ms-cond-variable"${isVar ? " checked" : ""} />
+      </div>
       <button type="button" class="btn btn-sm btn-ghost ms-cond-remove" data-index="${index}" title="Remove condition">&times;</button>
     </div>`;
 }
@@ -3681,10 +4538,12 @@ function msCaptureConditionsFromDom() {
   const rows = document.querySelectorAll(".ms-condition-row");
   const result = [];
   rows.forEach((row) => {
+    const varBox = row.querySelector(".ms-cond-variable");
     result.push({
       condition_name: row.querySelector(".ms-cond-name").value.trim(),
       condition_value: row.querySelector(".ms-cond-value").value.trim(),
       block_no: row.querySelector(".ms-cond-block").value.trim(),
+      is_variable: !!(varBox && varBox.checked),
     });
   });
   return result;
@@ -3706,11 +4565,23 @@ function msRebuildConditionRows() {
 
 function msBuildStart2DGrid(values) {
   const grid = document.getElementById("ms-start2d-grid");
-  grid.innerHTML = START2D_LABELS.map((label, i) => `
-    <div class="field">
+  grid.innerHTML = START2D_LABELS.map((label, i) => {
+    const key = START2D_KEY_INDEXES.includes(i);
+    return `
+    <div class="field${key ? " ms-start2d-key" : ""}"${key ? ' title="Key parameter"' : ""}>
       <label>${label}</label>
       <input type="text" class="ms-start2d-input" data-index="${i}" value="${escapeHtml((values && values[i]) || "")}" />
-    </div>`).join("");
+    </div>`;
+  }).join("");
+}
+
+// Fills A-Q with the defaults ONLY if every box is blank. Returns true if it filled.
+function msApplyStart2DDefaultsIfEmpty() {
+  if (!msCaptureStart2DValues().every((v) => v === "")) return false;
+  document.querySelectorAll(".ms-start2d-input").forEach((inp) => {
+    inp.value = START2D_DEFAULTS[Number(inp.dataset.index)] || "";
+  });
+  return true;
 }
 
 function msCaptureStart2DValues() {
@@ -3962,6 +4833,7 @@ PAGE_INIT.model_setting = function () {
       setSelectedJob(pallet, condition);
       msRenderDetail(pallet, condition);
       wmUpdatePalletLocationUI(); // refresh Start Marking preview if this pallet is currently in the Operator Room
+      wmSyncPalletStateFromSensors();
     });
   });
 
@@ -4017,6 +4889,7 @@ PAGE_INIT.model_setting = function () {
 
   wmRenderFnGroups();
   wmUpdatePalletLocationUI(); // sets pill text, button enable/disable, initial seq preview
+  wmSyncPalletStateFromSensors();
   document.getElementById("wm-start-marking-p1-btn").addEventListener("click", () => wmRunStartSequenceForPallet("Pallet1"));
   document.getElementById("wm-start-marking-p2-btn").addEventListener("click", () => wmRunStartSequenceForPallet("Pallet2"));
 
@@ -4027,6 +4900,7 @@ PAGE_INIT.model_setting = function () {
 
 PAGE_TEARDOWN.model_setting = function () {
   WM.manualRunning = false;
+  MON.activePallet = null;
   wmStopSequence();
 };
 
@@ -4102,6 +4976,7 @@ function anmFillForm(condition) {
   msRebuildConditionRows();
 
   anmUpdateSaveBtnLabel();
+  anmQueueRender(condition || null);
 }
 
 async function anmLoadEditListFor(pallet) {
@@ -4135,10 +5010,57 @@ async function anmReloadEditList(clearSelection) {
   msLoadConditionNames();
 }
 
+// Locks the shared Pallet select to the mode's fixed pallet in edit
+// modes (Edit Model P1 -> Pallet1 only, Edit Model P2 -> Pallet2 only),
+// and restores the normal two-option picker in Add mode. In locked
+// mode it also strips the native <select> appearance (dropdown arrow,
+// pointer cursor) so it reads as a plain, non-interactive block.
+function anmUpdatePalletFieldMode() {
+  const select = document.getElementById("ms-f-pallet");
+  if (!select) return;
+
+  if (ANM.mode === "add") {
+    select.innerHTML = `
+      <option value="Pallet1">Pallet1</option>
+      <option value="Pallet2">Pallet2</option>`;
+    select.disabled = false;
+    select.style.appearance = "";
+    select.style.webkitAppearance = "";
+    select.style.mozAppearance = "";
+    select.style.backgroundImage = "";
+    select.style.cursor = "";
+  } else {
+    const fixed = ANM.mode === "editP2" ? "Pallet2" : "Pallet1";
+    select.innerHTML = `<option value="${fixed}">${fixed}</option>`;
+    select.value = fixed;
+    select.disabled = true;
+    select.style.appearance = "none";
+    select.style.webkitAppearance = "none";
+    select.style.mozAppearance = "none";
+    select.style.backgroundImage = "none";
+    select.style.cursor = "default";
+  }
+}
+
 function anmSetMode(mode) {
   ANM.mode = mode;
   document.querySelectorAll(".anm-mode-btn").forEach((b) => b.classList.toggle("active", b.dataset.mode === mode));
-  document.getElementById("anm-edit-select-wrap").style.display = mode === "add" ? "none" : "";
+  document.getElementById("anm-edit-select-wrap").style.display =
+    (mode === "editP1" || mode === "editP2") ? "" : "none";
+
+  anmUpdatePalletFieldMode(); // lock/unlock Pallet field for this mode
+
+  const joblistWrap = document.getElementById("anm-joblist-wrap");
+
+  // NEW — Job No List: hide the form entirely, show the read-only table.
+  if (mode === "joblist") {
+    document.getElementById("anm-form-wrap").style.display = "none";
+    document.getElementById("anm-edit-empty").style.display = "none";
+    if (joblistWrap) joblistWrap.style.display = "";
+    anmLoadJobList();
+    return;
+  }
+  if (joblistWrap) joblistWrap.style.display = "none";
 
   if (mode === "add") {
     anmFillForm(null);
@@ -4148,10 +5070,519 @@ function anmSetMode(mode) {
   }
 }
 
+// ---- Job No List: read-only table over every model_condition row ----
+const ANM_CHECK_ICON_YES = '<i class="fa-solid fa-check" style="color:var(--ok);"></i>';
+const ANM_CHECK_ICON_NO = '<i class="fa-solid fa-xmark" style="color:var(--err);"></i>';
+
+function anmJoblistCheckIcon(value) {
+  return value ? ANM_CHECK_ICON_YES : ANM_CHECK_ICON_NO;
+}
+
+// "000/VR721578P, 001/H, 002/G" — BLK (3-digit) / CharacterString value,
+// in the same sort_order the marking sequence uses.
+function anmJoblistConditionSummary(conditions) {
+  const items = conditions || [];
+  if (!items.length) return "—";
+  return items
+    .slice()
+    .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0))
+    .map((it) => `${padBlk(it.block_no)}/${it.condition_value}`)
+    .join(", ");
+}
+
+function anmJoblistFormatDate(iso) {
+  if (!iso) return "—";
+  return new Date(iso).toLocaleString([], {
+    year: "numeric", month: "short", day: "2-digit",
+    hour: "2-digit", minute: "2-digit",
+  });
+}
+
+async function anmLoadJobList() {
+  const tbody = document.getElementById("anm-jl-table-body");
+  if (tbody) tbody.innerHTML = `<tr><td colspan="9" class="eq-queue-empty">Loading…</td></tr>`;
+  try {
+    const res = await apiFetch("/api/models"); // no ?pallet= -> every model_condition row, both pallets
+    if (!res.ok) throw new Error("failed");
+    ANM.jobListRows = await res.json();
+  } catch (err) {
+    ANM.jobListRows = [];
+    if (tbody) tbody.innerHTML = `<tr><td colspan="9" class="eq-queue-empty">Could not load job list.</td></tr>`;
+    return;
+  }
+  anmRenderJobList();
+}
+
+function anmRenderJobList() {
+  const tbody = document.getElementById("anm-jl-table-body");
+  if (!tbody) return;
+
+  const palletFilter = document.getElementById("anm-jl-pallet-filter")?.value || "";
+  const q = (document.getElementById("anm-jl-search-input")?.value || "").trim().toLowerCase();
+
+  let rows = ANM.jobListRows || [];
+  if (palletFilter) rows = rows.filter((r) => r.pallet_no === palletFilter);
+  if (q) {
+    rows = rows.filter((r) =>
+      String(r.model || "").toLowerCase().includes(q) ||
+      String(r.job_no ?? "").includes(q) ||
+      String(r.lot_no || "").toLowerCase().includes(q)
+    );
+  }
+
+  if (rows.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="9" class="eq-queue-empty">No models found.</td></tr>`;
+    return;
+  }
+
+  tbody.innerHTML = rows
+    .map((r) => `
+      <tr>
+        <td class="mono">${anmJoblistFormatDate(r.updated_at)}</td>
+        <td>${escapeHtml(r.model)}</td>
+        <td class="mono">${padJob(r.job_no)}</td>
+        <td>${escapeHtml(r.pallet_no)}</td>
+        <td style="text-align:center;">${anmJoblistCheckIcon(r.check_start2dcode)}</td>
+        <td style="text-align:center;">${anmJoblistCheckIcon(r.check_read2dcode)}</td>
+        <td style="text-align:center;">${anmJoblistCheckIcon(r.check_grade2dcode)}</td>
+        <td class="mono">${escapeHtml(r.control_grade) || "—"}</td>
+        <td class="mono">${escapeHtml(anmJoblistConditionSummary(r.conditions))}</td>
+      </tr>`)
+    .join("");
+}
+
+/* ============================================================
+   ANM_QUEUE:
+   Card lives in #anm-queue-card (see PATCH_add_new_model.html).
+   It always works on the SAVED model (MS.editingId), because the
+   queue belongs to model_condition_id and the server derives the
+   expected CSV columns from the saved is_variable flags.
+   Flow: choose file -> parse -> server dry-run (validate + preview)
+         -> "Import & replace queue" -> server replaces the queue.
+   ============================================================ */
+const ANM_QUEUE = {
+  modelId: null,
+  model: null,
+  lotNo: null,
+  seq: 0,       // guards against stale async responses when the user switches models
+  parsed: null, // { columns, rows } from the chosen file
+  dry: null,    // last dry-run response
+  info: null,
+};
+ 
+// Small RFC-4180-style CSV parser: quoted fields, "" escapes, CRLF/LF,
+// UTF-8 BOM, comma or semicolon delimiter (auto-detected from the header
+// line; some Excel locales save with semicolons). Skips fully blank lines.
+function anmParseCsv(text) {
+  if (text.charCodeAt(0) === 0xfeff) text = text.slice(1);
+  const firstLine = text.split(/\r?\n/, 1)[0] || "";
+  const delim = firstLine.includes(",") ? "," : firstLine.includes(";") ? ";" : ",";
+ 
+  const rows = [];
+  let row = [];
+  let field = "";
+  let inQuotes = false;
+ 
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (inQuotes) {
+      if (ch === '"') {
+        if (text[i + 1] === '"') { field += '"'; i++; }
+        else inQuotes = false;
+      } else {
+        field += ch;
+      }
+    } else if (ch === '"') {
+      inQuotes = true;
+    } else if (ch === delim) {
+      row.push(field);
+      field = "";
+    } else if (ch === "\n" || ch === "\r") {
+      if (ch === "\r" && text[i + 1] === "\n") i++;
+      row.push(field);
+      field = "";
+      rows.push(row);
+      row = [];
+    } else {
+      field += ch;
+    }
+  }
+  if (field !== "" || row.length) {
+    row.push(field);
+    rows.push(row);
+  }
+  return rows.filter((r) => r.some((c) => c.trim() !== ""));
+}
+ 
+function anmQueueValuesText(values, names) {
+  return names.map((n) => `${n}=${values && values[n] !== undefined ? values[n] : ""}`).join(", ");
+}
+ 
+function anmQueueStatusHtml(info) {
+  const c = info.counts;
+  if (!c.total) {
+    return `<div class="anm-q-status"><span class="anm-q-none">No values loaded for this lot yet.</span></div>`;
+  }
+  const chip = (label, n, cls) => `<span class="anm-q-chip ${cls}">${label} <strong>${n}</strong></span>`;
+  const next = (info.next || []).length
+    ? `<div class="anm-q-next">Next up: ${info.next
+        .map((n) => `<span class="mono">#${n.seq_no} ${escapeHtml(anmQueueValuesText(n.values, info.variable_names))}</span>`)
+        .join("<br>")}</div>`
+    : "";
+  const sharedNote = info.shared_by && info.shared_by.length > 1
+    ? `<div class="field-hint" style="margin-top:6px;">Shared by: ${info.shared_by
+        .map((s) => `${escapeHtml(s.pallet_no)} (Job ${padJob(s.job_no)})`)
+        .join(", ")}</div>`
+    : "";
+  return `
+    <div class="anm-q-status">
+      <div class="anm-q-counts">
+        ${chip("Total", c.total, "")}
+        ${chip("Unmarked", c.pending, "pending")}
+        ${chip("Marked", c.marked, "marked")}
+        ${c.reserved ? chip("In progress", c.reserved, "reserved") : ""}
+        ${c.failed ? chip("Failed", c.failed, "failed") : ""}
+      </div>
+      <div class="anm-q-lot">Loaded for Lot <span class="mono">${escapeHtml(info.lot_no || "—")}</span></div>
+      ${next}
+      ${sharedNote}
+    </div>`;
+}
+ 
+function anmQueueErrorHtml(data) {
+  const list = data.errors && data.errors.length ? data.errors : [];
+  const more = data.error_count && data.error_count > list.length
+    ? `<li>…and ${data.error_count - list.length} more.</li>` : "";
+  return `
+    <div class="alert alert-error">
+      <strong>${escapeHtml(data.error || "Could not validate the CSV.")}</strong>
+      ${list.length ? `<ul class="anm-q-errors">${list.map((e) => `<li>${escapeHtml(e)}</li>`).join("")}${more}</ul>` : ""}
+    </div>`;
+}
+ 
+function anmQueuePreviewHtml(dry) {
+  const names = dry.variable_names;
+  const warn = (dry.warnings || [])
+    .map((w) => `<div class="alert alert-info" style="margin:8px 0 0;">${escapeHtml(w)}</div>`)
+    .join("");
+  const rep = dry.will_replace || { total: 0 };
+  const replaceNote = rep.total
+    ? `Replaces the current queue (${rep.pending} unmarked, ${rep.marked} marked).`
+    : "No existing queue to replace.";
+  return `
+    <div class="alert alert-success" style="margin:0 0 8px;">
+      <strong>${dry.total}</strong> row(s) OK for Lot <span class="mono">${escapeHtml(dry.lot_no)}</span>. ${escapeHtml(replaceNote)}
+    </div>
+    <div class="anm-joblist-table-wrap">
+      <table class="data-table anm-q-preview-table">
+        <thead><tr><th>#</th>${names.map((n) => `<th>${escapeHtml(n)}</th>`).join("")}</tr></thead>
+        <tbody>
+          ${dry.preview.map((o, i) => `<tr><td class="mono">${i + 1}</td>${names.map((n) => `<td class="mono">${escapeHtml(o[n])}</td>`).join("")}</tr>`).join("")}
+        </tbody>
+      </table>
+    </div>
+    <div class="field-hint">Showing the first ${dry.preview.length} of ${dry.total} rows.</div>
+    ${warn}`;
+}
+ 
+function anmQueueDownloadTemplate(names) {
+  const header = names.map(plCsvCell).join(",");
+  const example = names.map((n) => plCsvCell(`${n}-001`)).join(",");
+  const blob = new Blob(["\uFEFF" + header + "\r\n" + example + "\r\n"], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "per_piece_template.csv";
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+ 
+async function anmQueueHandleFile(file) {
+  const alertBox = document.getElementById("anm-q-alert");
+  const previewBox = document.getElementById("anm-q-preview");
+  const importBtn = document.getElementById("anm-q-import-btn");
+  if (!alertBox || !previewBox || !importBtn) return;
+
+  ANM_QUEUE.parsed = null;
+  ANM_QUEUE.dry = null;
+  importBtn.disabled = true;
+  alertBox.innerHTML = "";
+  previewBox.innerHTML = "";
+  if (!file) return;
+
+  const { model, lotNo } = ANM_QUEUE;
+  if (!model || !lotNo) return;
+
+  let table;
+  try {
+    table = anmParseCsv(await file.text());
+  } catch (err) {
+    alertBox.innerHTML = `<div class="alert alert-error">Could not read that file.</div>`;
+    return;
+  }
+  if (table.length < 2) {
+    alertBox.innerHTML = `<div class="alert alert-error">The CSV needs a header row and at least one data row.</div>`;
+    return;
+  }
+
+  const columns = table[0].map((c) => c.trim());
+  const rows = table.slice(1);
+
+  try {
+    const res = await apiFetch(`/api/piece-queue/import`, {
+      method: "POST",
+      body: JSON.stringify({ model, lot_no: lotNo, columns, rows, dry_run: true }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (model !== ANM_QUEUE.model || lotNo !== ANM_QUEUE.lotNo) return; // user switched model meanwhile
+    if (!res.ok) {
+      alertBox.innerHTML = anmQueueErrorHtml(data);
+      return;
+    }
+    ANM_QUEUE.parsed = { columns, rows };
+    ANM_QUEUE.dry = data;
+    previewBox.innerHTML = anmQueuePreviewHtml(data);
+    importBtn.disabled = false;
+  } catch (err) {
+    alertBox.innerHTML = `<div class="alert alert-error">Could not reach the server.</div>`;
+  }
+}
+ 
+async function anmQueueImport() {
+  const { model, lotNo, modelId, parsed, dry } = ANM_QUEUE;
+  if (!model || !lotNo || !parsed || !dry) return;
+
+  const rep = dry.will_replace || { total: 0, pending: 0, marked: 0 };
+  const msg = rep.total
+    ? `Replace the current queue (${rep.pending} unmarked, ${rep.marked} marked) with ${dry.total} new row(s) for Lot "${dry.lot_no}"?`
+    : `Load ${dry.total} row(s) for Lot "${dry.lot_no}"?`;
+  if (!confirm(msg)) return;
+
+  const importBtn = document.getElementById("anm-q-import-btn");
+  if (importBtn) importBtn.disabled = true;
+  try {
+    const res = await apiFetch(`/api/piece-queue/import`, {
+      method: "POST",
+      body: JSON.stringify({ model, lot_no: lotNo, columns: parsed.columns, rows: parsed.rows }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const box = document.getElementById("anm-q-alert");
+      if (box) box.innerHTML = anmQueueErrorHtml(data);
+      if (importBtn) importBtn.disabled = false;
+      return;
+    }
+    showToast(`Imported ${data.imported} row(s).`, "success");
+    await anmQueueRender({ id: modelId, model, lot_no: lotNo });
+  } catch (err) {
+    showToast("Could not reach the server.");
+    if (importBtn) importBtn.disabled = false;
+  }
+}
+
+async function anmQueueClear() {
+  const { model, lotNo, modelId } = ANM_QUEUE;
+  if (!model || !lotNo) return;
+  const info = ANM_QUEUE.info;
+  const unmarked = info && info.counts ? info.counts.pending : 0;
+  if (!confirm(`Clear the per-piece queue?${unmarked ? ` ${unmarked} unmarked row(s) will be lost.` : ""} Production history is not affected.`)) return;
+  try {
+    const res = await apiFetch(
+      `/api/piece-queue?model=${encodeURIComponent(model)}&lot_no=${encodeURIComponent(lotNo)}`,
+      { method: "DELETE" }
+    );
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) { showToast(data.error || "Could not clear the queue."); return; }
+    showToast("Queue cleared.", "success");
+    await anmQueueRender({ id: modelId, model, lot_no: lotNo });
+  } catch (err) {
+    showToast("Could not reach the server.");
+  }
+}
+
+// (Re)builds the whole card for the given saved model_condition row
+// (null = unsaved / Add mode). Needs model+lot_no because the queue
+// is keyed by (model, lot_no), shared across every pallet/job on that lot.
+async function anmQueueRender(condition) {
+  const card = document.getElementById("anm-queue-card");
+  if (!card) return;
+
+  const modelId = condition ? condition.id : null;
+  const model = condition ? condition.model : null;
+  const lotNo = condition ? condition.lot_no : null;
+
+  ANM_QUEUE.modelId = modelId;
+  ANM_QUEUE.model = model;
+  ANM_QUEUE.lotNo = lotNo;
+  ANM_QUEUE.parsed = null;
+  ANM_QUEUE.dry = null;
+  ANM_QUEUE.info = null;
+  const mySeq = ++ANM_QUEUE.seq;
+  const title = `<div class="card-title">Per-piece values (CSV)</div>`;
+
+  if (!modelId || !model || !lotNo) {
+    card.innerHTML = `${title}
+      <p class="field-hint">Tick <strong>Per-piece</strong> on the conditions that change on every part and save the model.
+      Then open it in Edit mode to import a CSV.</p>`;
+    return;
+  }
+
+  card.innerHTML = `${title}<div class="eq-queue-empty">Loading…</div>`;
+
+  let info;
+  try {
+    const res = await apiFetch(`/api/piece-queue?model=${encodeURIComponent(model)}&lot_no=${encodeURIComponent(lotNo)}`);
+    info = await res.json();
+    if (!res.ok) throw new Error(info.error || "failed");
+  } catch (err) {
+    if (mySeq !== ANM_QUEUE.seq) return;
+    card.innerHTML = `${title}<div class="alert alert-error">Could not load the per-piece queue.</div>`;
+    return;
+  }
+  if (mySeq !== ANM_QUEUE.seq) return;
+  ANM_QUEUE.info = info;
+
+  if (!info.variable_names.length) {
+    card.innerHTML = `${title}
+      <p class="field-hint">No per-piece conditions on this model. Tick <strong>Per-piece</strong> on a condition above
+      and click Save Changes to enable CSV import.</p>`;
+    return;
+  }
+
+  card.innerHTML = `${title}
+    <p class="field-hint">
+      Per-piece conditions: ${info.variable_names.map((n) => `<strong>${escapeHtml(n)}</strong>`).join(", ")}.
+      The CSV needs one column per name (any order) and one row per part, in marking order.
+      Values: printable ASCII, no commas. If a column is a plain number with leading zeros, format it as Text in Excel first.
+    </p>
+    ${anmQueueStatusHtml(info)}
+    <div class="anm-q-actions">
+      <button type="button" class="btn btn-sm" id="anm-q-template-btn"><i class="fa-solid fa-download"></i> Template</button>
+      <input type="file" id="anm-q-file" accept=".csv,text/csv" />
+      <button type="button" class="btn btn-sm btn-danger" id="anm-q-clear-btn" style="margin-left:auto;"${info.counts.total ? "" : " disabled"}>Clear queue</button>
+    </div>
+    <div id="anm-q-alert"></div>
+    <div id="anm-q-preview"></div>
+    <div style="margin-top:10px;">
+      <button type="button" class="btn btn-primary" id="anm-q-import-btn" disabled>Import &amp; replace queue</button>
+    </div>`;
+
+  document.getElementById("anm-q-template-btn").addEventListener("click", () => anmQueueDownloadTemplate(info.variable_names));
+  document.getElementById("anm-q-file").addEventListener("change", (e) => anmQueueHandleFile(e.target.files[0]));
+  document.getElementById("anm-q-import-btn").addEventListener("click", anmQueueImport);
+  document.getElementById("anm-q-clear-btn").addEventListener("click", anmQueueClear);
+}
+
+/* ============================================================
+   FOR ADD NEW MODEL PAGE — IO STATUS PANEL (doors & pallets)
+   Read-only view of GET /api/io/status — reflects the physical
+   layout directly: side door (D4SL-N2FFA-D4, spring-return),
+   front door (IAI EC-R6H-250-3-WA), Pallet 1/2 (IAI EC-S7H-500-3-WA
+   #2/#3). Safe to poll against the real IO service OR
+   test/machine_simulator.py — no laser marker required.
+   ============================================================ */
+function ioStatusBadgeHtml(label, ok, trueText, falseText) {
+  const cls = ok ? "good" : "bad";
+  const text = ok ? trueText : falseText;
+  return `
+    <div class="io-status-item">
+      <span class="io-status-label">${label}</span>
+      <span class="io-badge io-badge-${cls}">${text}</span>
+    </div>`;
+}
+
+function ioNeutralBadgeHtml(label, text, tone) {
+  return `
+    <div class="io-status-item">
+      <span class="io-status-label">${label}</span>
+      <span class="io-badge io-badge-${tone}">${text}</span>
+    </div>`;
+}
+
+// Resolves a pallet's room from its two DI bits. Both true = a real
+// wiring/read fault (DI00 & DI03, or DI01 & DI04, must never both be
+// ON per the wiring diagram) — surfaced loudly rather than picking one.
+function ioPalletRoomText(inMachine, inOperator) {
+  if (inMachine && inOperator) return { text: "CONFLICT — both rooms!", tone: "bad" };
+  if (inMachine) return { text: "Machine Room", tone: "neutral" };
+  if (inOperator) return { text: "Operator Room", tone: "good" };
+  return { text: "Unknown / in transit", tone: "warn" };
+}
+
+function ioRenderStatus(data) {
+  const grid = document.getElementById("io-status-grid");
+  const pill = document.getElementById("io-status-pill");
+  if (!grid) return;
+
+  if (!data || data.ok === false) {
+    if (pill) {
+      pill.className = "status-pill error";
+      pill.innerHTML = '<span class="dot"></span> Error';
+    }
+    grid.innerHTML = `<div class="alert alert-error" style="margin:0;">${escapeHtml((data && data.error) || "Could not read I/O status.")}</div>`;
+    return;
+  }
+
+  if (pill) {
+    pill.className = "status-pill ready";
+    pill.innerHTML = '<span class="dot"></span> Connected';
+  }
+
+  const p1 = ioPalletRoomText(data.pallet1_in_machine_room, data.pallet1_in_operator_room);
+  const p2 = ioPalletRoomText(data.pallet2_in_machine_room, data.pallet2_in_operator_room);
+
+  grid.innerHTML = `
+    <div class="io-status-section">
+      <div class="io-status-section-title">Side Door <span class="io-status-hint">(D4SL-N2FFA-D4, spring-return)</span></div>
+      ${ioStatusBadgeHtml("Status", data.side_door_safe, "Closed / Safe", data.side_door_open ? "OPEN" : "Not confirmed safe")}
+      ${ioStatusBadgeHtml("Safety Relay 1", data.safety_relay1_status, "OK", "Fault")}
+      ${ioStatusBadgeHtml("Safety Relay 2", data.safety_relay2_status, "OK", "Fault")}
+    </div>
+
+    <div class="io-status-section">
+      <div class="io-status-section-title">Front Door <span class="io-status-hint">(IAI EC-R6H-250-3-WA)</span></div>
+      ${ioStatusBadgeHtml("Status", data.frontdoor_closed, "Closed", data.frontdoor_open ? "Open" : "Moving / unconfirmed")}
+      ${ioStatusBadgeHtml("Alarm", !data.alarm_frontdoor, "None", "ACTIVE")}
+    </div>
+
+    <div class="io-status-section">
+      <div class="io-status-section-title">Pallet 1 <span class="io-status-hint">(EC-S7H-500-3-WA #2)</span></div>
+      ${ioNeutralBadgeHtml("Position", p1.text, p1.tone)}
+      ${ioStatusBadgeHtml("Alarm", !data.alarm_pallet1, "None", "ACTIVE")}
+    </div>
+
+    <div class="io-status-section">
+      <div class="io-status-section-title">Pallet 2 <span class="io-status-hint">(EC-S7H-500-3-WA #3)</span></div>
+      ${ioNeutralBadgeHtml("Position", data.pallet2_clearing ? "Clearing (mid-swap)" : p2.text, data.pallet2_clearing ? "warn" : p2.tone)}
+      ${ioStatusBadgeHtml("Alarm", !data.alarm_pallet2, "None", "ACTIVE")}
+    </div>
+
+    <div class="io-status-section">
+      <div class="io-status-section-title">Laser Interlock Signals</div>
+      ${ioStatusBadgeHtml("Laser Alarm", !data.alarm_lasermark, "None", "ACTIVE")}
+      ${ioStatusBadgeHtml("Laser Warning", !data.warning_lasermark, "None", "ACTIVE")}
+      ${ioNeutralBadgeHtml("2-Hand Start", data.two_hand ? "Pressed" : "Idle", data.two_hand ? "good" : "neutral")}
+    </div>
+
+    ${data.shutdown_ipc_requested ? `
+    <div class="io-status-section" style="grid-column: 1 / -1;">
+      <div class="alert alert-error" style="margin:0;">⚠ IPC shutdown requested by safety circuit (Station 2 DI04).</div>
+    </div>` : ""}
+  `;
+}
+
+async function ioPollStatus() {
+  const st = await ioFetchStatus({ poll: true });
+  ioRenderStatus(st.ok ? st.data : { ok: false, error: st.error });
+}
+
 PAGE_INIT.add_new_model = function () {
   // ---- Column 1 (model form) setup — unchanged from before ----
   ANM.mode = "add";
   ANM.list = [];
+  ANM.jobListRows = [];
   msLoadConditionNames();
 
   document.querySelectorAll(".anm-mode-btn").forEach((btn) => {
@@ -4164,6 +5595,15 @@ PAGE_INIT.add_new_model = function () {
     anmFillForm(condition || null);
     anmShowForm(true);
   });
+
+  // NEW — Job No List: filter/search/refresh
+  const jlPalletFilter = document.getElementById("anm-jl-pallet-filter");
+  if (jlPalletFilter) jlPalletFilter.addEventListener("change", anmRenderJobList);
+  const jlSearchInput = document.getElementById("anm-jl-search-input");
+  if (jlSearchInput) jlSearchInput.addEventListener("input", anmRenderJobList);
+  const jlRefreshBtn = document.getElementById("anm-jl-refresh-btn");
+  if (jlRefreshBtn) jlRefreshBtn.addEventListener("click", anmLoadJobList);  
+
   document.getElementById("ms-f-photo").addEventListener("change", () => {
     const file = document.getElementById("ms-f-photo").files[0];
     if (!file) return;
@@ -4175,6 +5615,13 @@ PAGE_INIT.add_new_model = function () {
     };
     reader.readAsDataURL(file);
   });
+  document.getElementById("ms-f-start2d").addEventListener("change", (e) => {
+    if (!e.target.checked) return;
+    if (msApplyStart2DDefaultsIfEmpty()) {
+      showToast("No Check2DCode5 saved yet — default values filled. Review A, F, P, Q.", "info", 3500);
+    }
+  });
+
   document.getElementById("ms-add-condition-btn").addEventListener("click", () => {
     if (MS.conditions.length >= MS_MAX_CONDITIONS) return;
     MS.conditions = msCaptureConditionsFromDom();
@@ -4241,13 +5688,17 @@ PAGE_INIT.add_new_model = function () {
 
   eqPollStatus();
   EQ.pollTimer = setInterval(eqPollStatus, 1500);
+
+  ioPollStatus();                                   // NEW
+  EQ.ioPollTimer = setInterval(ioPollStatus, 1500);  // NEW
 };
 
 PAGE_TEARDOWN.add_new_model = function () {
   if (EQ.pollTimer) clearInterval(EQ.pollTimer);
   EQ.pollTimer = null;
+  if (EQ.ioPollTimer) clearInterval(EQ.ioPollTimer);  // NEW
+  EQ.ioPollTimer = null;                              // NEW
 };
-
 /* ============================================================
    FOR EQUIPMENT PAGE
    ============================================================ */
@@ -4707,6 +6158,7 @@ function mpRenderStats(stats) {
       <div class="mp-stat-label">${label}</div>
       <div class="mp-stat-mass">${stats.mass[key]}<span>mass</span></div>
       <div class="mp-stat-setting">${stats.setting[key]} setting</div>
+      ${stats.rework && stats.rework[key] ? `<div class="mp-stat-setting" style="color:var(--err);">${stats.rework[key]} rework</div>` : ""}
     </div>`
     )
     .join("");
@@ -4779,7 +6231,7 @@ function mpRenderRecentRows(rows) {
       <td class="mono">${padJob(r.job_no)}</td>
       <td class="mono">${escapeHtml(r.lot_no || "—")}</td>
       <td>${escapeHtml(r.pallet_no || "—")}</td>
-      <td><span class="tag ${r.type === "mass" ? "approved" : "pending"}">${r.type === "mass" ? "Mass" : "Setting"}</span></td>
+      <td>${plTypeTagHtml(r.type)}</td>
     </tr>`
     )
     .join("");
@@ -5118,12 +6570,21 @@ function plCode2dBadgeHtml(code) {
   return `<span class="pl-code2d-badge pl-code2d-${cls}">${escapeHtml(label)}</span>`;
 }
 
-const PL_SUMMARY_COLSPAN = 11;
-const PL_RAW_COLSPAN = 9;
-
-function plColspan() {
-  return PL.view === "summary" ? PL_SUMMARY_COLSPAN : PL_RAW_COLSPAN;
+// Small pill for an individual code2d_detail field (Camera, Start Reader,
+// etc.) — reuses the same good/bad/skip/pending classifiers Monitor uses
+// so a row here looks the same as it did live on the Monitor page.
+function plDetailFieldHtml(value, classifier) {
+  if (value === undefined || value === null || value === "") {
+    return `<span class="pl-code2d-badge pl-code2d-none">—</span>`;
+  }
+  const cls = classifier(value);
+  const clsMap = { good: "pass", bad: "fail", skip: "skipped", pending: "none" };
+  return `<span class="pl-code2d-badge pl-code2d-${clsMap[cls] || "none"}">${escapeHtml(value)}</span>`;
 }
+
+const PL_SUMMARY_COLSPAN = 13;
+const PL_RAW_COLSPAN = 16;
+
 
 function plRenderHead() {
   const head = document.getElementById("pl-table-head");
@@ -5136,8 +6597,10 @@ function plRenderHead() {
          <th>Condition</th>
          <th>Setting By</th>
          <th>Mass Production By</th>
+         <th>Rework By</th>
          <th>Count Setting</th>
          <th>Count Mass</th>
+         <th>Count Rework</th>
          <th>Total Count</th>
          <th>Start</th>
          <th>End</th>
@@ -5151,8 +6614,24 @@ function plRenderHead() {
          <th>Type</th>
          <th>By</th>
          <th>2D Code Result</th>
+         <th>Camera</th>
+         <th>Start Reader</th>
+         <th>Code Result</th>
+         <th>Total Grade</th>
+         <th>Grade Check</th>
+         <th>Matching Lv.</th>
+         <th>Read Data</th>
          <th>Condition</th>
        </tr>`;
+}
+function plColspan() {
+  return PL.view === "summary" ? PL_SUMMARY_COLSPAN : PL_RAW_COLSPAN;
+}
+
+function plTypeTagHtml(type) {
+  const cls = type === "mass" ? "approved" : type === "rework" ? "rejected" : "pending";
+  const label = type === "mass" ? "Mass" : type === "rework" ? "Rework" : "Setting";
+  return `<span class="tag ${cls}">${label}</span>`;
 }
 
 function plRenderRows() {
@@ -5173,25 +6652,38 @@ function plRenderRows() {
           <td>${escapeHtml(r.condition_summary)}</td>
           <td>${escapeHtml(r.setting_users)}</td>
           <td>${escapeHtml(r.mass_users)}</td>
+          <td>${escapeHtml(r.rework_users)}</td>
           <td class="mono">${r.count_setting}</td>
           <td class="mono">${r.count_mass}</td>
+          <td class="mono">${r.count_rework}</td>
           <td class="mono"><strong>${r.total_count}</strong></td>
           <td class="mono">${plFormatDate(r.start_at)}</td>
           <td class="mono">${plFormatDate(r.end_at)}</td>
         </tr>`).join("")
-    : PL.rows.map((r) => `
+    : PL.rows.map((r) => {
+        const d = r.code2d_detail || {};
+        return `
         <tr>
           <td class="mono">${plFormatDate(r.marked_at)}</td>
           <td>${escapeHtml(r.model)}</td>
           <td class="mono">${padJob(r.job_no)}</td>
           <td class="mono">${escapeHtml(r.lot_no || "—")}</td>
           <td>${escapeHtml(r.pallet_no || "—")}</td>
-          <td><span class="tag ${r.type === "mass" ? "approved" : "pending"}">${r.type === "mass" ? "Mass" : "Setting"}</span></td>
+          <td>${plTypeTagHtml(r.type)}</td>
           <td>${escapeHtml(r.user_name)}${r.employee_id ? ` <span class="mono" style="color:var(--ink-faint)">(${escapeHtml(r.employee_id)})</span>` : ""}</td>
           <td>${plCode2dBadgeHtml(r.code2d_result)}</td>
+          <td>${plDetailFieldHtml(d.camera, monStatusClass)}</td>
+          <td>${plDetailFieldHtml(d.start_reader, monStatusClass)}</td>
+          <td>${plDetailFieldHtml(d.code_result, monStatusClass)}</td>
+          <td>${plDetailFieldHtml(d.total_grade, monGradeStatusClass)}</td>
+          <td>${plDetailFieldHtml(d.grade_check, monStatusClass)}</td>
+          <td class="mono">${d.matching_lv ? escapeHtml(d.matching_lv) : "—"}</td>
+          <td class="mono">${d.read_data ? escapeHtml(d.read_data) : "—"}</td>
           <td>${escapeHtml(r.condition_summary)}</td>
-        </tr>`).join("");
+        </tr>`;
+      }).join("");
 }
+
 
 function plRenderPager() {
   const info = document.getElementById("pl-page-info");
@@ -5269,11 +6761,12 @@ function plCsvCell(value) {
   return str;
 }
 
+
 function plBuildSummaryCsv(rows) {
   const headers = [
     "Part Name", "Job No.", "Lot No.", "Condition",
-    "Setting By", "Mass Production By",
-    "Count Setting", "Count Mass", "Total Count",
+    "Setting By", "Mass Production By", "Rework By",
+    "Count Setting", "Count Mass", "Count Rework", "Total Count",
     "Start", "End",
   ];
   const lines = [headers.map(plCsvCell).join(",")];
@@ -5285,8 +6778,10 @@ function plBuildSummaryCsv(rows) {
       plCsvCell(r.condition_summary),
       plCsvCell(r.setting_users),
       plCsvCell(r.mass_users),
+      plCsvCell(r.rework_users),
       plCsvCell(r.count_setting),
       plCsvCell(r.count_mass),
+      plCsvCell(r.count_rework),
       plCsvCell(r.total_count),
       plCsvCell(plFormatDate(r.start_at)),
       plCsvCell(plFormatDate(r.end_at)),
@@ -5298,26 +6793,35 @@ function plBuildSummaryCsv(rows) {
 function plBuildRawCsv(rows) {
   const headers = [
     "When", "Part Name", "Job No.", "Lot No.", "Pallet",
-    "Type", "By", "Employee ID", "2D Code Result", "Condition",
+    "Type", "By", "Employee ID", "2D Code Result",
+    "Camera", "Start Reader", "Code Result", "Total Grade", "Grade Check",
+    "Matching Lv.", "Read Data", "Condition",
   ];
   const lines = [headers.map(plCsvCell).join(",")];
   rows.forEach((r) => {
+    const d = r.code2d_detail || {};
     lines.push([
       plCsvCell(plFormatDate(r.marked_at)),
       plCsvCell(r.model),
       plCsvCell(padJob(r.job_no)),
       plCsvCell(r.lot_no || ""),
       plCsvCell(r.pallet_no || ""),
-      plCsvCell(r.type === "mass" ? "Mass" : "Setting"),
+      plCsvCell(r.type === "mass" ? "Mass" : r.type === "rework" ? "Rework" : "Setting"),
       plCsvCell(r.user_name),
       plCsvCell(r.employee_id || ""),
       plCsvCell(PL_CODE2D_LABELS[r.code2d_result] || (r.code2d_result || "")),
+      plCsvCell(d.camera || ""),
+      plCsvCell(d.start_reader || ""),
+      plCsvCell(d.code_result || ""),
+      plCsvCell(d.total_grade || ""),
+      plCsvCell(d.grade_check || ""),
+      plCsvCell(d.matching_lv || ""),
+      plCsvCell(d.read_data || ""),
       plCsvCell(r.condition_summary),
     ].join(","));
   });
   return lines.join("\r\n");
 }
-
 function plDownloadCsvContent(content, filenamePart) {
   const csvContent = "\uFEFF" + content; // BOM so Excel opens UTF-8 (Thai text) correctly
   const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });

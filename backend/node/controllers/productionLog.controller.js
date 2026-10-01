@@ -109,8 +109,10 @@ async function getSummary(req, res) {
           ANY_VALUE(conditions) AS conditions,
           GROUP_CONCAT(DISTINCT CASE WHEN type = 'setting' THEN user_name END SEPARATOR ', ') AS setting_users,
           GROUP_CONCAT(DISTINCT CASE WHEN type = 'mass' THEN user_name END SEPARATOR ', ') AS mass_users,
+          GROUP_CONCAT(DISTINCT CASE WHEN type = 'rework' THEN user_name END SEPARATOR ', ') AS rework_users,
           SUM(CASE WHEN type = 'setting' THEN 1 ELSE 0 END) AS count_setting,
           SUM(CASE WHEN type = 'mass' THEN 1 ELSE 0 END) AS count_mass,
+          SUM(CASE WHEN type = 'rework' THEN 1 ELSE 0 END) AS count_rework,
           COUNT(*) AS total_count,
           MIN(marked_at) AS start_at,
           MAX(marked_at) AS end_at
@@ -132,8 +134,10 @@ async function getSummary(req, res) {
         condition_summary: conditionsSummary(conditions),
         setting_users: r.setting_users || '—',
         mass_users: r.mass_users || '—',
+        rework_users: r.rework_users || '—',
         count_setting: Number(r.count_setting) || 0,
         count_mass: Number(r.count_mass) || 0,
+        count_rework: Number(r.count_rework) || 0,
         total_count: Number(r.total_count) || 0,
         start_at: r.start_at,
         end_at: r.end_at,
@@ -168,7 +172,7 @@ async function getRaw(req, res) {
       `SELECT
           id, model, job_no, lot_no, pallet_no, type,
           user_name, employee_id, user_role,
-          conditions, code2d_result, marked_at
+          conditions, code2d_result, code2d_detail, marked_at
         FROM production_log
         WHERE marked_at >= ? AND marked_at < ?
         ORDER BY marked_at DESC
@@ -191,6 +195,7 @@ async function getRaw(req, res) {
         conditions,
         condition_summary: conditionsSummary(conditions),
         code2d_result: r.code2d_result || null,
+        code2d_detail: parseCode2DDetail(r.code2d_detail),
         marked_at: r.marked_at,
       };
     });
@@ -202,4 +207,12 @@ async function getRaw(req, res) {
   }
 }
 
+function parseCode2DDetail(raw) {
+  if (!raw) return null;
+  try {
+    return typeof raw === 'string' ? JSON.parse(raw) : raw;
+  } catch (e) {
+    return null;
+  }
+}
 module.exports = { getSummary, getRaw };
