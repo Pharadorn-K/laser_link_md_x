@@ -1,3 +1,5 @@
+.\venv\Scripts\Activate.ps1
+
 ## Architecture
 
 Browser (SPA, vanilla JS)
