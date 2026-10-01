@@ -4,5 +4,7 @@
     "**/__pycache__": true,
     "**/.venv": true
   },
-  "editor.formatOnSave": true
+  "editor.formatOnSave": true,
+  "python.defaultInterpreterPath": "D:\\GitHub\\laser_link_md_x\\venv\\Scripts\\pip3.14.exe",
+  "python.terminal.activateEnvironment": true
 }
